@@ -1,0 +1,81 @@
+# ─── GENERAL ────────────────────────────────────────────────────────────────────
+project:
+  name: ibit-gamma-tracker
+  version: "0.1.0"
+  log_level: INFO           # DEBUG | INFO | WARNING | ERROR
+  log_file: logs/tracker.log
+
+# ─── DATABASE ───────────────────────────────────────────────────────────────────
+database:
+  path: data/structured_notes.db
+
+# ─── SEC EDGAR ──────────────────────────────────────────────────────────────────
+edgar:
+  base_url: https://efts.sec.gov/LATEST/search-index
+  user_agent: "ibit-gamma-tracker/1.0 (contact@example.com)"
+  rate_limit_rps: 8          # max 10/s → usiamo 8 per sicurezza
+  max_retries: 3
+  retry_delay_s: 1.0
+  page_size: 100
+  search_terms:
+    - "IBIT"
+    - "iShares Bitcoin Trust"
+  forms:
+    - "424B2"
+    - "424B3"
+  start_date: "2024-01-01"
+  known_issuers:
+    - "JPMorgan"
+    - "Morgan Stanley"
+    - "Goldman Sachs"
+    - "Barclays"
+    - "Citigroup"
+    - "Bank of America"
+    - "UBS"
+    - "Credit Suisse"
+    - "Wells Fargo"
+    - "HSBC"
+    - "BNP Paribas"
+    - "Societe Generale"
+
+# ─── DERIBIT ────────────────────────────────────────────────────────────────────
+deribit:
+  base_url: https://www.deribit.com/api/v2/public
+  rate_limit_rps: 15         # max 20/s → usiamo 15
+  max_retries: 3
+  retry_delay_s: 0.5
+  contract_size: 1.0         # 1 BTC per contratto opzione BTC su Deribit
+  gex_threshold_usd: 1_000_000  # threshold per classificare regime "neutral"
+
+# ─── FLOWS ──────────────────────────────────────────────────────────────────────
+flows:
+  farside_url: "https://farside.co.uk/bitcoin-etf-flow-all-data/"
+  btc_ticker: "BTC-USD"
+  ibit_ticker: "IBIT"
+  lookback_days: 365
+
+# ─── ANALYTICS ──────────────────────────────────────────────────────────────────
+analytics:
+  granger_max_lags: 10
+  correlation_windows: [30, 60, 90]
+  event_window_days: 5       # [-5, +5] per event study
+  barrier_proximity_pct: 2.0 # "near barrier" se spot entro 2%
+
+# ─── BACKTEST ───────────────────────────────────────────────────────────────────
+backtest:
+  long_gex_threshold: 0
+  long_flow_threshold_usd_m: 100
+  short_gex_threshold: 0
+  short_flow_threshold_usd_m: -200
+  barrier_exclusion_pct: 5.0
+
+# ─── DASHBOARD ──────────────────────────────────────────────────────────────────
+dashboard:
+  refresh_interval_s: 900    # 15 minuti
+  theme:
+    background: "#1a1a2e"
+    text: "#ffffff"
+    grid: "#2a2a3e"
+    positive: "#00ff88"
+    negative: "#ff4444"
+    neutral: "#4488ff"

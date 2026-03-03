@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "ibit-gamma-tracker"
+version = "0.1.0"
+description = "Toolkit per analizzare l'impatto del dealer hedging su prodotti strutturati IBIT"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "strebba" }]
+
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "yfinance>=0.2.40",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "statsmodels>=0.14",
+    "plotly>=5.22",
+    "streamlit>=1.35",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "tenacity>=8.3",
+    "aiohttp>=3.9",
+    "rich>=13.7",
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+]
+
+[project.scripts]
+edgar-search = "src.edgar.search:main"
+gex-calc    = "src.gex.gex_calculator:main"
+etf-flows   = "src.flows.scraper:main"
+dashboard   = "src.dashboard.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts   = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
