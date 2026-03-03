@@ -28,6 +28,12 @@ _settings = get_settings()
 _theme = _settings["dashboard"]["theme"]
 _REFRESH = _settings["dashboard"]["refresh_interval_s"]
 
+# Convenience aliases for new theme keys (with safe fallbacks)
+_SURFACE    = _theme.get("surface",    "#161b22")
+_BORDER     = _theme.get("border",     "#30363d")
+_TEXT_MUTED = _theme.get("text_muted", "#8b949e")
+_ACCENT     = _theme.get("accent",     "#a371f7")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page config
@@ -40,23 +46,159 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# CSS dark theme minimale
+# ── Design system: professional financial dark theme ──────────────────────────
 st.markdown(f"""
 <style>
-    .stApp {{ background-color: {_theme["background"]}; }}
-    .metric-card {{
-        background: {_theme["grid"]};
-        border-radius: 8px;
-        padding: 12px 16px;
-        margin: 4px 0;
-    }}
-    .regime-badge {{
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 12px;
-        font-weight: bold;
-        font-size: 14px;
-    }}
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  /* ── Base ── */
+  .stApp {{
+      background-color: {_theme["background"]};
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }}
+  .main .block-container {{
+      padding-top: 1.5rem;
+      padding-bottom: 2rem;
+      max-width: 1400px;
+  }}
+
+  /* ── Sidebar ── */
+  section[data-testid="stSidebar"] {{
+      background-color: {_SURFACE};
+      border-right: 1px solid {_BORDER};
+  }}
+  section[data-testid="stSidebar"] .stButton button {{
+      background: {_theme["background"]};
+      color: {_theme["text"]};
+      border: 1px solid {_BORDER};
+      border-radius: 8px;
+      font-family: 'Inter', sans-serif;
+      font-weight: 500;
+      transition: all 0.2s;
+  }}
+  section[data-testid="stSidebar"] .stButton button:hover {{
+      border-color: {_theme["neutral"]};
+      color: {_theme["neutral"]};
+      background: {_SURFACE};
+  }}
+
+  /* ── KPI Metric Cards ── */
+  [data-testid="metric-container"] {{
+      background: {_SURFACE};
+      border: 1px solid {_BORDER};
+      border-radius: 12px;
+      padding: 16px 20px !important;
+      transition: border-color 0.2s;
+  }}
+  [data-testid="metric-container"]:hover {{
+      border-color: {_theme["neutral"]};
+  }}
+  [data-testid="stMetricLabel"] > div {{
+      font-size: 10px !important;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: {_TEXT_MUTED} !important;
+      font-weight: 600;
+      font-family: 'Inter', sans-serif;
+  }}
+  [data-testid="stMetricValue"] {{
+      font-family: 'JetBrains Mono', monospace !important;
+      font-size: 22px !important;
+      font-weight: 600;
+      color: {_theme["text"]} !important;
+  }}
+  [data-testid="stMetricDelta"] svg {{ display: none; }}
+  [data-testid="stMetricDelta"] > div {{
+      font-family: 'JetBrains Mono', monospace !important;
+      font-size: 12px !important;
+  }}
+
+  /* ── Tab Navigation ── */
+  .stTabs [data-baseweb="tab-list"] {{
+      background-color: {_SURFACE};
+      border-radius: 10px;
+      padding: 4px;
+      border: 1px solid {_BORDER};
+      gap: 2px;
+  }}
+  .stTabs [data-baseweb="tab"] {{
+      background: transparent;
+      border-radius: 7px;
+      border: none;
+      color: {_TEXT_MUTED};
+      font-weight: 500;
+      font-size: 14px;
+      padding: 8px 18px;
+      transition: all 0.15s;
+      font-family: 'Inter', sans-serif;
+  }}
+  .stTabs [aria-selected="true"] {{
+      background: {_BORDER} !important;
+      color: {_theme["text"]} !important;
+  }}
+  .stTabs [data-baseweb="tab"]:hover {{
+      color: {_theme["text"]} !important;
+      background: rgba(48,54,61,0.5) !important;
+  }}
+  .stTabs [data-baseweb="tab-highlight"] {{ display: none; }}
+
+  /* ── Headings ── */
+  h1 {{
+      font-size: 1.75rem !important;
+      font-weight: 700 !important;
+      letter-spacing: -0.02em !important;
+      color: {_theme["text"]} !important;
+      font-family: 'Inter', sans-serif !important;
+  }}
+  h2, h3 {{
+      font-size: 0.72rem !important;
+      font-weight: 600 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.07em !important;
+      color: {_TEXT_MUTED} !important;
+      font-family: 'Inter', sans-serif !important;
+  }}
+
+  /* ── Dividers ── */
+  hr {{ border-color: {_BORDER} !important; margin: 1.25rem 0 !important; }}
+
+  /* ── DataFrames ── */
+  [data-testid="stDataFrame"] {{
+      border: 1px solid {_BORDER};
+      border-radius: 10px;
+      overflow: hidden;
+  }}
+
+  /* ── Alert / Info boxes ── */
+  .stAlert {{ border-radius: 8px !important; }}
+
+  /* ── Regime Badge ── */
+  .regime-badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-family: 'Inter', sans-serif;
+  }}
+  .regime-dot {{
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+  }}
+
+  /* ── Captions / Footer ── */
+  .stCaptionContainer p {{
+      color: {_TEXT_MUTED} !important;
+      font-size: 0.78rem !important;
+      font-family: 'Inter', sans-serif !important;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -177,13 +319,28 @@ def run_event_study(barriers: list[dict], merged_df: pd.DataFrame) -> list:
 def _sidebar() -> bool:
     """Renderizza sidebar e restituisce True se si vuole refresh manuale."""
     with st.sidebar:
-        st.title("⚙️ Impostazioni")
-        st.caption(f"Refresh automatico: ogni {_REFRESH // 60} min")
+        st.markdown(f"""
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:0.15rem">
+  <span style="font-size:1rem;font-weight:700;color:{_theme['text']};
+               font-family:'Inter',sans-serif">Impostazioni</span>
+</div>
+<p style="color:{_TEXT_MUTED};font-size:0.75rem;margin:0 0 0.75rem;
+          font-family:'Inter',sans-serif">
+  Refresh automatico ogni {_REFRESH // 60} min
+</p>
+""", unsafe_allow_html=True)
 
-        refresh = st.button("🔄 Aggiorna dati", use_container_width=True)
+        refresh = st.button("Aggiorna dati", use_container_width=True)
 
         st.divider()
-        st.subheader("Soglie Backtest")
+
+        st.markdown(f"""
+<p style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;
+          color:{_TEXT_MUTED};margin:0 0 0.5rem;font-family:'Inter',sans-serif">
+  Soglie Backtest
+</p>
+""", unsafe_allow_html=True)
+
         cfg = _settings.get("backtest", {})
         st.metric("Long GEX threshold", "$0")
         st.metric("Long Flow (3d)", f"+{cfg.get('long_flow_threshold_usd_m', 100)}M")
@@ -191,8 +348,14 @@ def _sidebar() -> bool:
         st.metric("Barrier exclusion", f"±{cfg.get('barrier_exclusion_pct', 5)}%")
 
         st.divider()
-        st.caption("ibit-gamma-tracker v1.0")
-        st.caption("Dati: Deribit · EDGAR · yfinance")
+
+        st.markdown(f"""
+<div style="color:{_TEXT_MUTED};font-size:0.72rem;line-height:1.7;font-family:'Inter',sans-serif">
+  <span style="color:{_theme['text']};font-weight:600">ibit-gamma-tracker</span> v1.0<br>
+  Deribit · EDGAR · yfinance
+</div>
+""", unsafe_allow_html=True)
+
     return refresh
 
 
@@ -201,9 +364,6 @@ def _sidebar() -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _render_header(snap: dict, merged_df: pd.DataFrame) -> None:
-    st.title("₿ ibit-gamma-tracker")
-    st.caption("Analisi dealer hedging su note strutturate IBIT · BTC")
-
     regime = snap.get("regime", "unknown")
     color_map = {
         "positive_gamma": _theme["positive"],
@@ -212,11 +372,30 @@ def _render_header(snap: dict, merged_df: pd.DataFrame) -> None:
     }
     regime_color = color_map.get(regime, _theme["text"])
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Title + regime badge on the same line
+    st.markdown(f"""
+<div style="display:flex;align-items:center;gap:14px;margin-bottom:0.2rem">
+  <span style="font-size:1.75rem;font-weight:700;letter-spacing:-0.02em;
+               font-family:'Inter',sans-serif;color:{_theme['text']}">
+    ₿ ibit-gamma-tracker
+  </span>
+  <span class="regime-badge"
+        style="background:{regime_color}18;color:{regime_color};
+               border:1px solid {regime_color}50">
+    <span class="regime-dot" style="background:{regime_color}"></span>
+    {regime.upper().replace("_", " ")}
+  </span>
+</div>
+<p style="color:{_TEXT_MUTED};font-size:0.875rem;margin:0 0 1.25rem;
+          font-family:'Inter',sans-serif;line-height:1.4">
+  Analisi dealer hedging su note strutturate IBIT · BTC
+</p>
+""", unsafe_allow_html=True)
 
     spot = snap.get("spot_price", 0)
     gex_m = snap.get("total_net_gex", 0) / 1e6
 
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("BTC Spot", f"${spot:,.0f}")
     col2.metric("GEX Totale", f"{gex_m:+.1f}M$")
     col3.metric(
@@ -236,15 +415,7 @@ def _render_header(snap: dict, merged_df: pd.DataFrame) -> None:
     else:
         col5.metric("Gamma Flip", f"${snap.get('gamma_flip_price', 0):,.0f}")
 
-    # Regime badge
-    st.markdown(
-        f'<span class="regime-badge" style="background:{regime_color}20;'
-        f'color:{regime_color};border:1px solid {regime_color}">'
-        f'Regime: {regime.upper().replace("_", " ")}</span>',
-        unsafe_allow_html=True,
-    )
-
-    # Alert
+    # Alerts
     alerts = snap.get("alerts", [])
     if alerts:
         for alert in alerts:

@@ -13,31 +13,56 @@ from plotly.subplots import make_subplots
 
 from src.config import get_settings
 
-_theme = get_settings()["dashboard"]["theme"]
-_BG   = _theme["background"]
-_TEXT = _theme["text"]
-_GRID = _theme["grid"]
-_POS  = _theme["positive"]
-_NEG  = _theme["negative"]
-_NEU  = _theme["neutral"]
+_theme   = get_settings()["dashboard"]["theme"]
+_BG      = _theme["background"]
+_TEXT    = _theme["text"]
+_GRID    = _theme["grid"]
+_POS     = _theme["positive"]
+_NEG     = _theme["negative"]
+_NEU     = _theme["neutral"]
+_SURFACE = _theme.get("surface",    "#161b22")
+_BORDER  = _theme.get("border",     "#30363d")
+_MUTED   = _theme.get("text_muted", "#8b949e")
+_ACCENT  = _theme.get("accent",     "#a371f7")
 
 _LAYOUT_BASE = dict(
     paper_bgcolor=_BG,
     plot_bgcolor=_BG,
-    font=dict(color=_TEXT, size=12),
-    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor=_GRID),
-    margin=dict(l=50, r=20, t=50, b=40),
+    font=dict(color=_TEXT, size=13, family="Inter, -apple-system, sans-serif"),
+    legend=dict(
+        bgcolor=_SURFACE,
+        bordercolor=_BORDER,
+        borderwidth=1,
+        font=dict(size=12),
+    ),
+    margin=dict(l=60, r=70, t=55, b=45),
+    hoverlabel=dict(
+        bgcolor=_SURFACE,
+        bordercolor=_BORDER,
+        font=dict(color=_TEXT, size=12, family="JetBrains Mono, monospace"),
+    ),
+    modebar=dict(bgcolor="rgba(0,0,0,0)", color=_MUTED, activecolor=_NEU),
 )
 
 
 def _axis_style(**kwargs) -> dict:
     return dict(
         gridcolor=_GRID,
-        zerolinecolor=_GRID,
-        tickfont=dict(color=_TEXT),
-        title_font=dict(color=_TEXT),
+        gridwidth=1,
+        zerolinecolor=_BORDER,
+        zerolinewidth=1,
+        linecolor=_BORDER,
+        tickfont=dict(color=_MUTED, size=11),
+        title_font=dict(color=_TEXT, size=12),
         **kwargs,
     )
+
+
+def _style_subplot_titles(fig: go.Figure) -> None:
+    """Apply consistent small-caps styling to subplot annotation titles."""
+    for ann in fig.layout.annotations:
+        ann.font = dict(color=_MUTED, size=11,
+                        family="Inter, -apple-system, sans-serif")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -68,6 +93,7 @@ def gex_profile(gex_by_strike: list[dict], spot: float) -> go.Figure:
         x=strikes,
         y=net_gex,
         marker_color=colors,
+        marker_opacity=0.85,
         name="Net GEX (M$)",
         hovertemplate="Strike: $%{x:,.0f}<br>GEX: %{y:.2f}M$<extra></extra>",
     ))
@@ -77,6 +103,7 @@ def gex_profile(gex_by_strike: list[dict], spot: float) -> go.Figure:
         line_color=_NEU,
         annotation_text=f"Spot ${spot:,.0f}",
         annotation_font_color=_NEU,
+        annotation_font_size=11,
     )
     fig.update_layout(
         title="Gamma Exposure per Strike",
@@ -195,13 +222,14 @@ def flows_chart(merged_df: pd.DataFrame) -> go.Figure:
     fig.add_hline(y=0, row=3, col=1, line_dash="dot", line_color=_GRID)
 
     fig.update_layout(
-        height=600,
+        height=650,
         showlegend=False,
         **_LAYOUT_BASE,
     )
     for i in range(1, 4):
         fig.update_xaxes(**_axis_style(), row=i, col=1)
         fig.update_yaxes(**_axis_style(), row=i, col=1)
+    _style_subplot_titles(fig)
 
     return fig
 
@@ -233,12 +261,17 @@ def granger_heatmap(granger_df: pd.DataFrame) -> go.Figure:
         z=z,
         x=x,
         y=y,
-        colorscale=[[0, _POS], [0.05, "#ffcc00"], [1.0, _NEG]],
+        colorscale=[[0, _POS], [0.33, "#d29922"], [1.0, _NEG]],
         zmin=0, zmax=0.15,
-        colorbar=dict(title="p-value", tickfont=dict(color=_TEXT)),
+        colorbar=dict(
+            title=dict(text="p-value", font=dict(color=_MUTED, size=11)),
+            tickfont=dict(color=_MUTED, size=11),
+            thickness=12,
+        ),
         hovertemplate="Lag %{x} — %{y}<br>p=%{z:.4f}<extra></extra>",
         text=[[f"{v:.3f}" for v in row] for row in z],
         texttemplate="%{text}",
+        textfont=dict(size=11),
     ))
     fig.add_shape(
         type="line", x0=-0.5, x1=len(x)-0.5, y0=-0.5, y1=-0.5,
@@ -296,15 +329,16 @@ def regime_bars(regime_result) -> go.Figure:
             hovertemplate=f"{title}: %{{y:.3f}}<extra></extra>",
         ), row=1, col=col_idx)
 
+    sig_label = "  ·  *** SIGNIFICATIVO" if regime_result.significant else ""
     fig.update_layout(
-        title=f"Regime Analysis — p-value: {regime_result.p_value:.4f}"
-              + (" *** SIGNIFICATIVO" if regime_result.significant else ""),
-        height=350,
+        title=f"Regime Analysis — p-value: {regime_result.p_value:.4f}{sig_label}",
+        height=360,
         **_LAYOUT_BASE,
     )
     for i in range(1, 4):
         fig.update_xaxes(**_axis_style(), row=1, col=i)
         fig.update_yaxes(**_axis_style(), row=1, col=i)
+    _style_subplot_titles(fig)
 
     return fig
 
@@ -348,11 +382,13 @@ def backtest_equity(backtest_results: dict) -> go.Figure:
 
     fig.update_layout(
         height=600,
+        legend_title_text="Strategia",
         **_LAYOUT_BASE,
     )
     for i in range(1, 3):
         fig.update_xaxes(**_axis_style(), row=i, col=1)
         fig.update_yaxes(**_axis_style(), row=i, col=1)
+    _style_subplot_titles(fig)
 
     return fig
 
@@ -370,7 +406,7 @@ def event_study_car(event_results: list) -> Optional[go.Figure]:
         return None
 
     fig = go.Figure()
-    colors = [_POS, _NEG, _NEU, "#ff8800", "#cc44ff"]
+    colors = [_POS, _NEG, _NEU, _ACCENT, "#d29922"]
     w = event_results[0].car_by_day and max(abs(k) for k in event_results[0].car_by_day.keys()) or 5
     days = list(range(-w, w + 1))
 
@@ -402,8 +438,13 @@ def event_study_car(event_results: list) -> Optional[go.Figure]:
             showlegend=False,
         ))
 
-    fig.add_hline(y=0, line_dash="dash", line_color=_GRID)
-    fig.add_vline(x=0, line_dash="dot", line_color=_TEXT, annotation_text="Event")
+    fig.add_hline(y=0, line_dash="dash", line_color=_BORDER)
+    fig.add_vline(
+        x=0, line_dash="dot", line_color=_MUTED,
+        annotation_text="Event",
+        annotation_font_color=_MUTED,
+        annotation_font_size=11,
+    )
     fig.update_layout(
         title="Cumulative Abnormal Returns intorno ai Barrier Levels",
         xaxis=_axis_style(title="Giorni dall'evento"),
