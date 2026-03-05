@@ -8,5 +8,7 @@ build/
 .venv/
 venv/
 data/*.db
+data/*.html
+data/*.csv
 logs/*.log
 .DS_Store

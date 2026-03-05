@@ -53,6 +53,8 @@ flows:
   btc_ticker: "BTC-USD"
   ibit_ticker: "IBIT"
   lookback_days: 365
+  sosovalue_api_key: ""        # registrarsi su sosovalue.com (free tier)
+  edgar_nport_cik: "0001980994"  # IBIT CIK su SEC EDGAR
 
 # ─── ANALYTICS ──────────────────────────────────────────────────────────────────
 analytics:

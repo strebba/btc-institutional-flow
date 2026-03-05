@@ -9,18 +9,29 @@ from __future__ import annotations
 import re
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup, Tag
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+try:
+    from curl_cffi import requests  # impersona Chrome TLS — bypassa Cloudflare
+    _CURL_CFFI_AVAILABLE = True
+except ImportError:
+    import requests  # type: ignore[no-redef]
+    _CURL_CFFI_AVAILABLE = False
 
 from src.config import get_settings, setup_logging
 from src.flows.models import AggregateFlows, EtfFlowData
 
 _log = setup_logging("flows.scraper")
+
+# Cache su disco: ultimo fetch Farside valido
+_CACHE_DIR  = Path(__file__).resolve().parent.parent.parent / "data"
+_CACHE_FILE = _CACHE_DIR / "farside_cache.html"
 
 # ETF ordinati come appaiono nella tabella Farside (colonne)
 FARSIDE_TICKERS = [
@@ -100,19 +111,32 @@ class FarsideScraper:
 
     def __init__(self, cfg: dict | None = None) -> None:
         self._cfg = cfg or get_settings()["flows"]
-        self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                               "AppleWebKit/537.36 (KHTML, like Gecko) "
-                               "Chrome/120.0.0.0 Safari/537.36",
-            "Accept":          "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer":         "https://www.google.com/",
-        })
+        if _CURL_CFFI_AVAILABLE:
+            # curl_cffi non ha Session con headers globali nello stesso modo,
+            # passiamo i parametri per-chiamata in _fetch_html
+            self._session = None
+            _log.debug("curl_cffi disponibile: fingerprint Chrome attivo per Farside")
+        else:
+            _log.warning(
+                "curl_cffi non disponibile — install: pip install curl_cffi. "
+                "Cloudflare potrebbe bloccare il fetch Farside."
+            )
+            self._session = requests.Session()
+            self._session.headers.update({
+                "User-Agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                   "Chrome/120.0.0.0 Safari/537.36",
+                "Accept":          "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer":         "https://www.google.com/",
+            })
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
     def _fetch_html(self, url: str) -> str:
-        """Scarica HTML con retry.
+        """Scarica HTML con retry, usando curl_cffi se disponibile.
+
+        curl_cffi impersona il fingerprint TLS/HTTP2 di Chrome, bypassando
+        Cloudflare Bot Fight Mode (che blocca requests standard).
 
         Args:
             url: URL da scaricare.
@@ -121,7 +145,10 @@ class FarsideScraper:
             str: testo HTML.
         """
         _log.info("Fetching: %s", url)
-        resp = self._session.get(url, timeout=30)
+        if _CURL_CFFI_AVAILABLE:
+            resp = requests.get(url, impersonate="chrome120", timeout=30)
+        else:
+            resp = self._session.get(url, timeout=30)
         resp.raise_for_status()
         return resp.text
 
@@ -231,87 +258,159 @@ class FarsideScraper:
         return results
 
     def fetch(self) -> list[EtfFlowData]:
-        """Scarica e parsa i flussi da Farside, con fallback su SoSoValue.
+        """Scarica i flussi con waterfall: Farside → cache disco → SoSoValue → EDGAR N-PORT → yfinance.
 
         Returns:
             list[EtfFlowData]: tutti i flussi disponibili.
         """
+        # 1. Farside live (fonte primaria)
         try:
             html = self._fetch_html(self.FARSIDE_URL)
             flows = self._parse_table(html)
             if flows:
+                self._write_cache(html)   # salva per usi futuri
                 return flows
-            _log.warning("Farside: tabella vuota, provo SoSoValue")
+            _log.warning("Farside: tabella vuota")
         except Exception as e:
-            _log.warning("Farside non raggiungibile (%s), provo SoSoValue", e)
+            _log.warning("Farside non raggiungibile (%s)", e)
 
-        # Fallback: prova a costruire dati da SoSoValue (struttura diversa, best-effort)
+        # 1b. Farside cache su disco (ultimo fetch valido)
         try:
-            return self._fetch_sosovalue()
-        except Exception as e2:
-            _log.error("Anche SoSoValue fallito: %s", e2)
-            return []
+            cached_html = self._read_cache()
+            if cached_html:
+                flows = self._parse_table(cached_html)
+                if flows:
+                    _log.info("Farside: usando cache disco (%s)", _CACHE_FILE)
+                    return flows
+        except Exception as e:
+            _log.warning("Cache Farside non leggibile: %s", e)
 
-    def _fetch_sosovalue(self) -> list[EtfFlowData]:
-        """Fallback: stima flussi da volume IBIT yfinance.
+        # 2. SoSoValue API (richiede API key gratuita)
+        try:
+            from src.flows.sosovalue import SoSoValueClient
+            flows = SoSoValueClient(self._cfg).fetch()
+            if flows:
+                return flows
+        except Exception as e:
+            _log.warning("SoSoValue: %s", e)
 
-        Quando né Farside né CSV sono disponibili, stima il flusso netto IBIT
-        come proxy basato su:  flow ≈ (net_volume_fraction × volume_usd)
-        dove la direzione è inferita dal segno del daily return.
+        # 3. EDGAR N-PORT (dati mensili ufficiali SEC, interpolati a daily)
+        try:
+            from src.flows.edgar_nport import EdgarNportClient
+            flows = EdgarNportClient().fetch_monthly_flows()
+            if flows:
+                return flows
+        except Exception as e:
+            _log.warning("EDGAR N-PORT: %s", e)
 
-        Non è precisa quanto i dati Farside ma permette di usare il sistema
-        end-to-end. I flussi reali possono essere caricati via CSV.
+        # 4. yfinance tracking-error estimate (bassa qualità, ultimo resort)
+        _log.warning(
+            "Usando stima yfinance (bassa qualità) — "
+            "inserire sosovalue_api_key in config/settings.yaml per dati reali"
+        )
+        return self._fetch_yfinance_fallback()
+
+    def _fetch_yfinance_fallback(self) -> list[EtfFlowData]:
+        """Fallback: stima flussi IBIT da tracking error rispetto a BTC.
+
+        Usa il premium/discount di IBIT vs BTC come segnale direzionale di
+        creazione/redemption di quote:
+          - IBIT sovraperforma BTC → pressione acquisto → inflow
+          - IBIT sottoperforma BTC → pressione vendita → outflow
+
+        ``flow ≈ (ibit_ret - btc_ret) × (close × 50_000_000) × 0.5``
+
+        Se il download di BTC-USD fallisce, ritorna lista vuota
+        piuttosto che produrre dati spurii.
 
         Returns:
-            list[EtfFlowData].
+            list[EtfFlowData] con source="yfinance_estimate_v2".
         """
-        _log.info("Fallback: stima flussi IBIT da yfinance...")
+        _log.info("Fallback: stima flussi IBIT da tracking error yfinance...")
         try:
             import yfinance as yf
-            import numpy as np
             from datetime import timedelta
 
             end   = date.today()
             start = end - timedelta(days=self._cfg.get("lookback_days", 400))
+            start_str = start.isoformat()
+            end_str   = (end + timedelta(days=1)).isoformat()
 
-            ibit = yf.download("IBIT", start=start.isoformat(),
-                               end=(end + timedelta(days=1)).isoformat(),
-                               progress=False, auto_adjust=True)
-            if ibit.empty:
+            ibit_df = yf.download("IBIT",    start=start_str, end=end_str,
+                                  progress=False, auto_adjust=True)
+            btc_df  = yf.download("BTC-USD", start=start_str, end=end_str,
+                                  progress=False, auto_adjust=True)
+
+            if ibit_df.empty or btc_df.empty:
+                _log.warning("yfinance: dati IBIT o BTC vuoti — nessun fallback disponibile")
                 return []
 
             # Appiattisci colonne multi-index (es. ("Close", "IBIT") → "Close")
-            if isinstance(ibit.columns, pd.MultiIndex):
-                ibit.columns = [c[0] for c in ibit.columns]
+            if isinstance(ibit_df.columns, pd.MultiIndex):
+                ibit_df.columns = [c[0] for c in ibit_df.columns]
+            if isinstance(btc_df.columns, pd.MultiIndex):
+                btc_df.columns = [c[0] for c in btc_df.columns]
 
-            # Stima: flow ≈ sign(return) × volume_usd × 0.08
-            # (calibrato empiricamente per avere ordine di grandezza corretto)
-            close_col  = "Close"
-            volume_col = "Volume"
-            ibit["_prev_close"] = ibit[close_col].shift(1)
+            ibit_ret = ibit_df["Close"].pct_change()
+            btc_ret  = btc_df["Close"].reindex(ibit_df.index).pct_change()
+
+            shares_outstanding = 50_000_000  # stima quote IBIT in circolazione
 
             flows: list[EtfFlowData] = []
-            for idx, row in ibit.iterrows():
+            for idx in ibit_df.index[1:]:
                 try:
-                    close  = float(row[close_col])
-                    volume = float(row[volume_col])
-                    prev   = float(row["_prev_close"])
-                    ret    = (close - prev) / prev if pd.notna(prev) and prev > 0 else 0.0
-                    flow   = np.sign(ret) * volume * close * 0.08
+                    close = float(ibit_df.loc[idx, "Close"])
+                    ir    = float(ibit_ret.loc[idx])
+                    br_raw = btc_ret.loc[idx] if idx in btc_ret.index else None
+                    if br_raw is None or not pd.notna(ir) or not pd.notna(br_raw):
+                        continue
+                    br = float(br_raw)
+
+                    premium   = ir - br                      # tracking error
+                    aum_proxy = close * shares_outstanding
+                    flow      = premium * aum_proxy * 0.5   # 50% del premium → flusso netto
+
                     flows.append(EtfFlowData(
                         date=idx.date(),
                         ticker="IBIT",
                         flow_usd=flow,
-                        source="yfinance_estimate",
+                        source="yfinance_estimate_v2",
                     ))
                 except Exception:
                     continue
 
-            _log.info("Stima flussi IBIT da yfinance: %d giorni", len(flows))
+            _log.info("Stima flussi IBIT da tracking error: %d giorni", len(flows))
             return flows
         except Exception as e:
             _log.error("Stima yfinance fallita: %s", e)
             return []
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Cache su disco
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _write_cache(self, html: str) -> None:
+        """Salva l'HTML Farside su disco come cache."""
+        try:
+            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            _CACHE_FILE.write_text(html, encoding="utf-8")
+            _log.debug("Cache Farside aggiornata: %s", _CACHE_FILE)
+        except Exception as e:
+            _log.warning("Impossibile scrivere cache Farside: %s", e)
+
+    def _read_cache(self) -> str | None:
+        """Legge la cache HTML Farside da disco, se esiste e non è troppo vecchia.
+
+        Returns:
+            str HTML se la cache è valida (< 36 ore), None altrimenti.
+        """
+        if not _CACHE_FILE.exists():
+            return None
+        age_hours = (time.time() - _CACHE_FILE.stat().st_mtime) / 3600
+        if age_hours > 36:
+            _log.warning("Cache Farside troppo vecchia (%.0f ore) — skip", age_hours)
+            return None
+        return _CACHE_FILE.read_text(encoding="utf-8")
 
     # ──────────────────────────────────────────────────────────────────────────
     # CSV loader
