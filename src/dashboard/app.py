@@ -49,12 +49,12 @@ st.set_page_config(
 # ── Design system: professional financial dark theme ──────────────────────────
 st.markdown(f"""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
   /* ── Base ── */
   .stApp {{
       background-color: {_theme["background"]};
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: 'Proxima Nova', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
   }}
   .main .block-container {{
       padding-top: 1.5rem;
@@ -70,16 +70,17 @@ st.markdown(f"""
   section[data-testid="stSidebar"] .stButton button {{
       background: {_theme["background"]};
       color: {_theme["text"]};
-      border: 1px solid {_BORDER};
+      border: 1px solid {_theme["positive"]};
       border-radius: 8px;
-      font-family: 'Inter', sans-serif;
+      font-family: 'Proxima Nova', 'Roboto', sans-serif;
       font-weight: 500;
       transition: all 0.2s;
   }}
   section[data-testid="stSidebar"] .stButton button:hover {{
-      border-color: {_theme["neutral"]};
-      color: {_theme["neutral"]};
+      border-color: {_theme["positive"]};
+      color: {_theme["positive"]};
       background: {_SURFACE};
+      box-shadow: 0 0 10px {_theme["positive"]}40;
   }}
 
   /* ── KPI Metric Cards ── */
@@ -88,10 +89,11 @@ st.markdown(f"""
       border: 1px solid {_BORDER};
       border-radius: 12px;
       padding: 16px 20px !important;
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, box-shadow 0.2s;
   }}
   [data-testid="metric-container"]:hover {{
-      border-color: {_theme["neutral"]};
+      border-color: {_theme["positive"]};
+      box-shadow: 0 0 12px {_theme["positive"]}25;
   }}
   [data-testid="stMetricLabel"] > div {{
       font-size: 10px !important;
@@ -99,7 +101,7 @@ st.markdown(f"""
       letter-spacing: 0.08em;
       color: {_TEXT_MUTED} !important;
       font-weight: 600;
-      font-family: 'Inter', sans-serif;
+      font-family: 'Proxima Nova', 'Roboto', sans-serif;
   }}
   [data-testid="stMetricValue"] {{
       font-family: 'JetBrains Mono', monospace !important;
@@ -130,15 +132,16 @@ st.markdown(f"""
       font-size: 14px;
       padding: 8px 18px;
       transition: all 0.15s;
-      font-family: 'Inter', sans-serif;
+      font-family: 'Proxima Nova', 'Roboto', sans-serif;
   }}
   .stTabs [aria-selected="true"] {{
       background: {_BORDER} !important;
-      color: {_theme["text"]} !important;
+      color: {_theme["positive"]} !important;
+      text-shadow: 0 0 8px {_theme["positive"]}80;
   }}
   .stTabs [data-baseweb="tab"]:hover {{
       color: {_theme["text"]} !important;
-      background: rgba(48,54,61,0.5) !important;
+      background: rgba(0,255,157,0.06) !important;
   }}
   .stTabs [data-baseweb="tab-highlight"] {{ display: none; }}
 
@@ -148,15 +151,15 @@ st.markdown(f"""
       font-weight: 700 !important;
       letter-spacing: -0.02em !important;
       color: {_theme["text"]} !important;
-      font-family: 'Inter', sans-serif !important;
+      font-family: 'Proxima Nova', 'Roboto', sans-serif !important;
   }}
   h2, h3 {{
       font-size: 0.72rem !important;
-      font-weight: 600 !important;
+      font-weight: 700 !important;
       text-transform: uppercase !important;
       letter-spacing: 0.07em !important;
       color: {_TEXT_MUTED} !important;
-      font-family: 'Inter', sans-serif !important;
+      font-family: 'Proxima Nova', 'Roboto', sans-serif !important;
   }}
 
   /* ── Dividers ── */
@@ -179,11 +182,11 @@ st.markdown(f"""
       gap: 6px;
       padding: 5px 14px;
       border-radius: 20px;
-      font-weight: 600;
+      font-weight: 700;
       font-size: 11px;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      font-family: 'Inter', sans-serif;
+      font-family: 'Proxima Nova', 'Roboto', sans-serif;
   }}
   .regime-dot {{
       width: 6px;
@@ -197,7 +200,7 @@ st.markdown(f"""
   .stCaptionContainer p {{
       color: {_TEXT_MUTED} !important;
       font-size: 0.78rem !important;
-      font-family: 'Inter', sans-serif !important;
+      font-family: 'Roboto', sans-serif !important;
   }}
 </style>
 """, unsafe_allow_html=True)
@@ -322,10 +325,10 @@ def _sidebar() -> bool:
         st.markdown(f"""
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:0.15rem">
   <span style="font-size:1rem;font-weight:700;color:{_theme['text']};
-               font-family:'Inter',sans-serif">Impostazioni</span>
+               font-family:'Proxima Nova','Roboto',sans-serif">Impostazioni</span>
 </div>
 <p style="color:{_TEXT_MUTED};font-size:0.75rem;margin:0 0 0.75rem;
-          font-family:'Inter',sans-serif">
+          font-family:'Roboto',sans-serif">
   Refresh automatico ogni {_REFRESH // 60} min
 </p>
 """, unsafe_allow_html=True)
@@ -335,8 +338,8 @@ def _sidebar() -> bool:
         st.divider()
 
         st.markdown(f"""
-<p style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;
-          color:{_TEXT_MUTED};margin:0 0 0.5rem;font-family:'Inter',sans-serif">
+<p style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;
+          color:{_TEXT_MUTED};margin:0 0 0.5rem;font-family:'Proxima Nova','Roboto',sans-serif">
   Soglie Backtest
 </p>
 """, unsafe_allow_html=True)
@@ -350,8 +353,9 @@ def _sidebar() -> bool:
         st.divider()
 
         st.markdown(f"""
-<div style="color:{_TEXT_MUTED};font-size:0.72rem;line-height:1.7;font-family:'Inter',sans-serif">
-  <span style="color:{_theme['text']};font-weight:600">ibit-gamma-tracker</span> v1.0<br>
+<div style="color:{_TEXT_MUTED};font-size:0.72rem;line-height:1.7;font-family:'Roboto',sans-serif">
+  <span style="color:{_theme['positive']};font-weight:700;
+               text-shadow:0 0 8px {_theme['positive']}80">ibit-gamma-tracker</span> v1.0<br>
   Deribit · EDGAR · yfinance
 </div>
 """, unsafe_allow_html=True)
@@ -376,18 +380,20 @@ def _render_header(snap: dict, merged_df: pd.DataFrame) -> None:
     st.markdown(f"""
 <div style="display:flex;align-items:center;gap:14px;margin-bottom:0.2rem">
   <span style="font-size:1.75rem;font-weight:700;letter-spacing:-0.02em;
-               font-family:'Inter',sans-serif;color:{_theme['text']}">
+               font-family:'Proxima Nova','Roboto',sans-serif;color:{_theme['text']}">
     ₿ ibit-gamma-tracker
   </span>
   <span class="regime-badge"
         style="background:{regime_color}18;color:{regime_color};
-               border:1px solid {regime_color}50">
-    <span class="regime-dot" style="background:{regime_color}"></span>
+               border:1px solid {regime_color}60;
+               box-shadow:0 0 10px {regime_color}40">
+    <span class="regime-dot" style="background:{regime_color};
+          box-shadow:0 0 6px {regime_color}"></span>
     {regime.upper().replace("_", " ")}
   </span>
 </div>
 <p style="color:{_TEXT_MUTED};font-size:0.875rem;margin:0 0 1.25rem;
-          font-family:'Inter',sans-serif;line-height:1.4">
+          font-family:'Roboto',sans-serif;line-height:1.4">
   Analisi dealer hedging su note strutturate IBIT · BTC
 </p>
 """, unsafe_allow_html=True)

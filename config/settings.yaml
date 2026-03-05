@@ -73,13 +73,13 @@ backtest:
 dashboard:
   refresh_interval_s: 900    # 15 minuti
   theme:
-    background: "#0d1117"    # deep neutral black (no purple tint)
-    surface:    "#161b22"    # card/sidebar surface
-    border:     "#30363d"    # subtle borders
-    text:       "#e6edf3"    # off-white (less harsh than pure white)
-    text_muted: "#8b949e"    # secondary labels / captions
-    grid:       "#21262d"    # chart gridlines
-    positive:   "#3fb950"    # professional green (no neon)
-    negative:   "#f85149"    # professional red
-    neutral:    "#58a6ff"    # professional blue
-    accent:     "#a371f7"    # purple accent for GEX
+    background: "#000000"    # Wagmi Lab — pure black
+    surface:    "#0d0d0d"    # card/sidebar surface (near-black)
+    border:     "#1a1a1a"    # subtle dark borders
+    text:       "#FFFFFF"    # Wagmi Lab — pure white
+    text_muted: "#888888"    # secondary labels / captions
+    grid:       "#111111"    # chart gridlines
+    positive:   "#00FF9D"    # Wagmi Lab — neon green (main accent)
+    negative:   "#FF0033"    # Wagmi Lab — red
+    neutral:    "#FFFFFF"    # white — spot/BTC lines
+    accent:     "#FF6600"    # Wagmi Lab — orange accent

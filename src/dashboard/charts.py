@@ -28,12 +28,12 @@ _ACCENT  = _theme.get("accent",     "#a371f7")
 _LAYOUT_BASE = dict(
     paper_bgcolor=_BG,
     plot_bgcolor=_BG,
-    font=dict(color=_TEXT, size=13, family="Inter, -apple-system, sans-serif"),
+    font=dict(color=_TEXT, size=13, family="'Proxima Nova', Roboto, sans-serif"),
     legend=dict(
         bgcolor=_SURFACE,
         bordercolor=_BORDER,
         borderwidth=1,
-        font=dict(size=12),
+        font=dict(size=12, family="Roboto, sans-serif"),
     ),
     margin=dict(l=60, r=70, t=55, b=45),
     hoverlabel=dict(
@@ -41,7 +41,7 @@ _LAYOUT_BASE = dict(
         bordercolor=_BORDER,
         font=dict(color=_TEXT, size=12, family="JetBrains Mono, monospace"),
     ),
-    modebar=dict(bgcolor="rgba(0,0,0,0)", color=_MUTED, activecolor=_NEU),
+    modebar=dict(bgcolor="rgba(0,0,0,0)", color=_MUTED, activecolor=_POS),
 )
 
 
@@ -62,7 +62,7 @@ def _style_subplot_titles(fig: go.Figure) -> None:
     """Apply consistent small-caps styling to subplot annotation titles."""
     for ann in fig.layout.annotations:
         ann.font = dict(color=_MUTED, size=11,
-                        family="Inter, -apple-system, sans-serif")
+                        family="'Proxima Nova', Roboto, sans-serif")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -261,7 +261,7 @@ def granger_heatmap(granger_df: pd.DataFrame) -> go.Figure:
         z=z,
         x=x,
         y=y,
-        colorscale=[[0, _POS], [0.33, "#d29922"], [1.0, _NEG]],
+        colorscale=[[0, _POS], [0.33, "#FF6600"], [1.0, _NEG]],
         zmin=0, zmax=0.15,
         colorbar=dict(
             title=dict(text="p-value", font=dict(color=_MUTED, size=11)),
