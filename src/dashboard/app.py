@@ -238,10 +238,50 @@ def load_gex() -> tuple[dict, list[dict]]:
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
 def load_barriers() -> list[dict]:
-    """Carica barriere attive dal DB EDGAR."""
+    """Carica barriere attive dal DB EDGAR, arricchite con level_price_btc calcolato.
+
+    compute_btc_prices() nel DB richiede un run manuale dello script EDGAR.
+    Qui calcoliamo il prezzo BTC al volo dal ratio IBIT/BTC corrente:
+      btc = level_price_ibit / ibit_btc_ratio
+    o, se manca level_price_ibit ma abbiamo initial_level + level_pct:
+      btc = (initial_level × level_pct/100) / ibit_btc_ratio
+    """
     from src.edgar.structured_notes_db import StructuredNotesDB
-    db = StructuredNotesDB()
-    return db.get_active_barriers()
+    from src.flows.price_fetcher import PriceFetcher
+
+    db       = StructuredNotesDB()
+    barriers = db.get_active_barriers()
+
+    # Ottieni ratio IBIT/BTC corrente per la conversione
+    try:
+        ratio = PriceFetcher().get_ibit_btc_ratio() or 0.0
+    except Exception:
+        ratio = 0.0
+
+    enriched: list[dict] = []
+    for b in barriers:
+        b = dict(b)  # copia mutabile
+
+        if not (b.get("level_price_btc") or 0):
+            ibit_price = b.get("level_price_ibit") or 0.0
+            # Fallback: calcola da initial_level × level_pct
+            if not ibit_price:
+                init  = b.get("initial_level") or 0.0
+                pct   = b.get("level_pct") or 0.0
+                if init > 0 and pct > 0:
+                    ibit_price = init * pct / 100.0
+            if ibit_price > 0 and ratio > 0:
+                b["level_price_btc"] = ibit_price / ratio
+                b["level_price_ibit"] = b.get("level_price_ibit") or ibit_price
+
+        # Salta barriere per cui non riusciamo a ricavare un prezzo BTC
+        if (b.get("level_price_btc") or 0) > 0:
+            enriched.append(b)
+        else:
+            _log.debug("Barrier id=%s senza prezzo BTC calcolabile — skipped", b.get("id"))
+
+    _log.info("Barriere caricate: %d totali, %d con BTC price", len(barriers), len(enriched))
+    return enriched
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
