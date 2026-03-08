@@ -260,6 +260,7 @@ class GexCalculator:
         return {
             "timestamp":               snapshot.timestamp.isoformat(),
             "spot_price":              snapshot.spot_price,
+            "total_net_gex":           snapshot.total_net_gex,           # raw USD
             "total_net_gex_m":         round(snapshot.total_net_gex / 1e6, 2),
             "gamma_flip_price":        snapshot.gamma_flip_price,
             "put_wall":                snapshot.put_wall,
@@ -271,4 +272,5 @@ class GexCalculator:
             "distance_to_put_wall_pct":  snapshot.distance_to_put_wall_pct,
             "distance_to_call_wall_pct": snapshot.distance_to_call_wall_pct,
             "num_strikes":             len(snapshot.gex_by_strike),
+            "n_instruments":           len(snapshot.gex_by_strike),      # alias
         }

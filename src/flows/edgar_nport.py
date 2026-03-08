@@ -347,7 +347,11 @@ class EdgarNportClient:
 
 
 def _avg(a: float | None, b: float | None) -> float:
-    """Media di due valori, gestisce None."""
+    """Media di due valori, gestisce None.
+
+    Se entrambi i valori sono disponibili restituisce la media aritmetica.
+    Se uno solo è disponibile restituisce quel valore (media di un singolo punto).
+    """
     if a is not None and b is not None:
         return (a + b) / 2
-    return (a or 0.0) + (b or 0.0)
+    return a if a is not None else (b or 0.0)

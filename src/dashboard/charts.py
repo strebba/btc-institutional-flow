@@ -66,6 +66,90 @@ def _style_subplot_titles(fig: go.Figure) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Barrier Map Chart
+# ──────────────────────────────────────────────────────────────────────────────
+
+def barrier_map(barriers: list[dict], spot_price: float) -> go.Figure:
+    """Mappa visuale dei barrier levels rispetto al prezzo spot BTC.
+
+    Ogni barriera è una linea orizzontale colorata per tipo.
+    Lo spessore è proporzionale al nozionale (log-scale).
+
+    Args:
+        barriers: lista di dict da StructuredNotesDB.get_active_barriers().
+        spot_price: prezzo spot BTC corrente.
+
+    Returns:
+        Figure Plotly.
+    """
+    if not barriers:
+        fig = go.Figure()
+        fig.update_layout(title="Barrier Map — Nessuna barriera nel DB", **_LAYOUT_BASE)
+        return fig
+
+    color_map = {
+        "knock_in":  _NEG,
+        "autocall":  _POS,
+        "buffer":    _NEU,
+        "knock_out": _ACCENT,
+    }
+
+    fig = go.Figure()
+
+    for b in barriers:
+        level = b.get("level_price_btc") or 0.0
+        if level <= 0:
+            continue
+        btype    = b.get("barrier_type", "unknown")
+        issuer   = b.get("issuer", "N/A")
+        notional = b.get("notional_usd") or 0.0
+        maturity = b.get("maturity_date", "—")
+        dist_pct = (level - spot_price) / spot_price * 100 if spot_price else 0.0
+        color    = color_map.get(btype, _TEXT)
+        # Line width proportional to notional size (1–4 px)
+        width = max(1.5, min(4.0, 1.5 + notional / 50e6))
+
+        fig.add_trace(go.Scatter(
+            x=[0, 1],
+            y=[level, level],
+            mode="lines",
+            line=dict(color=color, width=width, dash="dot" if btype == "buffer" else "solid"),
+            name=f"{btype} — {issuer}",
+            legendgroup=btype,
+            showlegend=True,
+            customdata=[[issuer, btype, dist_pct, notional, maturity]],
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Tipo: %{customdata[1]}<br>"
+                "Livello BTC: $%{y:,.0f}<br>"
+                "Distanza da spot: %{customdata[2]:+.1f}%<br>"
+                "Nozionale: $%{customdata[3]:,.0f}<br>"
+                "Scadenza: %{customdata[4]}<br>"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Spot price
+    if spot_price > 0:
+        fig.add_trace(go.Scatter(
+            x=[0, 1],
+            y=[spot_price, spot_price],
+            mode="lines",
+            line=dict(color=_TEXT, width=2.5),
+            name=f"Spot ${spot_price:,.0f}",
+        ))
+
+    fig.update_layout(
+        title="Mappa dei Livelli Critici — Note Strutturate IBIT",
+        xaxis=dict(visible=False, range=[0, 1]),
+        yaxis=_axis_style(title="Prezzo BTC ($)", tickformat="$,.0f"),
+        height=480,
+        **_LAYOUT_BASE,
+    )
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GEX Charts
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -123,11 +207,11 @@ def gex_walls(snapshot_dict: dict) -> go.Figure:
     Returns:
         Figure Plotly.
     """
-    gex_m = snapshot_dict.get("total_net_gex", 0) / 1e6
-    spot  = snapshot_dict.get("spot_price", 0)
-    put_w = snapshot_dict.get("put_wall", 0)
-    call_w= snapshot_dict.get("call_wall", 0)
-    flip  = snapshot_dict.get("gamma_flip_price", 0)
+    gex_m  = (snapshot_dict.get("total_net_gex") or 0) / 1e6
+    spot   = snapshot_dict.get("spot_price") or 0
+    put_w  = snapshot_dict.get("put_wall") or 0
+    call_w = snapshot_dict.get("call_wall") or 0
+    flip   = snapshot_dict.get("gamma_flip_price") or 0
 
     fig = go.Figure()
 

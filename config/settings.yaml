@@ -62,6 +62,7 @@ analytics:
   correlation_windows: [30, 60, 90]
   event_window_days: 5       # [-5, +5] per event study
   barrier_proximity_pct: 2.0 # "near barrier" se spot entro 2%
+  ibit_btc_ratio: 0.0006     # approx BTC per share IBIT (aggiornare se cambia)
 
 # ─── BACKTEST ───────────────────────────────────────────────────────────────────
 backtest:

@@ -73,7 +73,7 @@ class DeribitClient:
 
         self._throttle()
         url  = f"{self.BASE_URL}{endpoint}"
-        resp = self._session.get(url, params=params, timeout=15)
+        resp = self._session.get(url, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
 

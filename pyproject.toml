@@ -7,12 +7,13 @@ name = "ibit-gamma-tracker"
 version = "0.1.0"
 description = "Toolkit per analizzare l'impatto del dealer hedging su prodotti strutturati IBIT"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "strebba" }]
 
 dependencies = [
     "requests>=2.31",
+    "curl_cffi>=0.5.9",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "yfinance>=0.2.40",

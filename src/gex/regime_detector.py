@@ -70,14 +70,6 @@ class RegimeDetector:
         else:
             regime = "neutral"
 
-        # Percentile storico
-        percentile = None
-        if self._history:
-            hist_gex   = [s.total_net_gex for s in self._history]
-            percentile = float(np.percentile(
-                hist_gex, 50
-            ))  # confronto con mediana storica
-
         # Calcolo percentile effettivo rispetto allo storico
         gex_percentile = None
         if len(self._history) >= 5:

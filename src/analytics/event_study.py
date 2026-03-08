@@ -64,6 +64,7 @@ class EventStudy:
         self._cfg = cfg or settings["analytics"]
         self._window = self._cfg.get("event_window_days", 5)
         self._proximity_pct = self._cfg.get("barrier_proximity_pct", 2.0)
+        self._ibit_btc_ratio = self._cfg.get("ibit_btc_ratio", 0.0006)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Abnormal returns
@@ -205,8 +206,8 @@ class EventStudy:
                 if price_btc <= 0:
                     # Stima da IBIT se disponibile
                     price_ibit = barrier.get("level_price_ibit") or 0.0
-                    # ratio medio approssimativo (0.0006 ≈ 1 IBIT ≈ 0.0006 BTC)
-                    price_btc = price_ibit / 0.0006 if price_ibit > 0 else 0.0
+                    # ratio configurabile in settings.yaml → analytics.ibit_btc_ratio
+                    price_btc = price_ibit / self._ibit_btc_ratio if price_ibit > 0 else 0.0
 
                 if price_btc <= 0:
                     continue
