@@ -14,8 +14,13 @@ import traceback
 from datetime import datetime
 from typing import Any
 
+import json
+import os
+
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="BTC Institutional Flow API",
@@ -23,9 +28,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Origini consentite: in produzione imposta CORS_ORIGINS come variabile d'ambiente
+# Es: CORS_ORIGINS="https://tua-ptf-dashboard.com,https://www.tua-ptf-dashboard.com"
+_raw_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:8501,https://seashell-app-h7hc4.ondigitalocean.app",
+)
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET"],
     allow_headers=["*"],
 )
@@ -33,8 +46,23 @@ app.add_middleware(
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _ok(data: Any) -> dict:
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat(), "data": data}
+class _NumpyEncoder(json.JSONEncoder):
+    """Serializza tipi numpy (int64, float32, bool_, ecc.) in tipi Python nativi."""
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return None if np.isnan(obj) else float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
+def _ok(data: Any) -> JSONResponse:
+    payload = {"status": "ok", "timestamp": datetime.utcnow().isoformat(), "data": data}
+    return JSONResponse(content=json.loads(json.dumps(payload, cls=_NumpyEncoder)))
 
 
 def _error(msg: str, code: int = 500) -> HTTPException:
@@ -150,13 +178,22 @@ def get_flows() -> dict:
                 for r in results
             ]
 
-        # Serie storica IBIT (ultimi 365 gg)
+        # Serie storica IBIT (ultimi 365 gg) con prezzo BTC
         history: list[dict] = []
         ibit_col = "IBIT" if "IBIT" in df_pivot.columns else None
         if ibit_col:
             recent = df_pivot[ibit_col].dropna().tail(365)
+            # Aggiungi btc_close dal merged dataframe (se disponibile)
+            btc_prices: dict = {}
+            if not merged.empty and "btc_close" in merged.columns:
+                for idx, val in merged["btc_close"].dropna().items():
+                    btc_prices[str(idx.date())] = float(val)
             history = [
-                {"date": str(d.date()), "ibit_flow_usd": float(v)}
+                {
+                    "date": str(d.date()),
+                    "ibit_flow_usd": float(v),
+                    "btc_close": btc_prices.get(str(d.date())),
+                }
                 for d, v in recent.items()
             ]
 
@@ -193,9 +230,16 @@ def get_barriers() -> dict:
     """
     try:
         from src.edgar.structured_notes_db import StructuredNotesDB
+        from src.gex.deribit_client import DeribitClient
 
         db       = StructuredNotesDB()
         barriers = db.get_active_barriers()
+
+        # Spot price per calcolo prossimità
+        try:
+            spot_price = DeribitClient().get_spot_price()
+        except Exception:
+            spot_price = None
 
         # Serializza (sqlite3.Row → dict già fatto da get_active_barriers)
         out = []
@@ -205,8 +249,9 @@ def get_barriers() -> dict:
             out.append({k: v for k, v in row.items()})
 
         return _ok({
-            "count":    len(out),
-            "barriers": out,
+            "count":      len(out),
+            "barriers":   out,
+            "spot_price": spot_price,
         })
 
     except Exception as exc:
