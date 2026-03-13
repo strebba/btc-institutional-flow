@@ -273,8 +273,20 @@ def get_barriers() -> dict:
     try:
         from src.edgar.structured_notes_db import StructuredNotesDB
         from src.gex.deribit_client import DeribitClient
+        from src.flows.price_fetcher import PriceFetcher
 
-        db       = StructuredNotesDB()
+        db = StructuredNotesDB()
+
+        # Calcola dinamicamente level_price_btc per le barriere che non ce l'hanno
+        try:
+            prices = PriceFetcher().get_all_prices()
+            latest = prices[["btc_close", "ibit_close"]].dropna().iloc[-1]
+            if latest["ibit_close"] > 0 and latest["btc_close"] > 0:
+                ratio = latest["ibit_close"] / latest["btc_close"]
+                db.compute_btc_prices(ibit_btc_ratio=ratio)
+        except Exception:
+            pass  # se il fetch fallisce, usa i valori già nel DB
+
         barriers = db.get_active_barriers()
 
         # Spot price per calcolo prossimità
