@@ -7,7 +7,6 @@ dist/
 build/
 .venv/
 venv/
-data/*.db
 data/*.html
 data/*.csv
 logs/*.log
