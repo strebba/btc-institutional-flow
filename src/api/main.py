@@ -16,11 +16,34 @@ from typing import Any
 
 import json
 import os
+import time
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+# ─── In-memory TTL cache ───────────────────────────────────────────────────────
+
+_cache: dict[str, tuple[float, Any]] = {}  # key → (timestamp, payload)
+
+_TTL = {
+    "gex":      300,   # 5 min  — opzioni Deribit, ~90s fetch
+    "flows":    900,   # 15 min — Farside scrape
+    "barriers": 3600,  # 1 ora  — dati SEC EDGAR statici
+    "signals":  300,   # 5 min  — dipende da gex + flows
+}
+
+
+def _cache_get(key: str) -> Any | None:
+    entry = _cache.get(key)
+    if entry and (time.time() - entry[0]) < _TTL.get(key, 300):
+        return entry[1]
+    return None
+
+
+def _cache_set(key: str, payload: Any) -> None:
+    _cache[key] = (time.time(), payload)
 
 app = FastAPI(
     title="BTC Institutional Flow API",
@@ -85,7 +108,12 @@ def get_gex() -> dict:
 
     Scarica la chain di opzioni BTC da Deribit in tempo reale,
     calcola il Gamma Exposure e classifica il regime corrente.
+    Risposta cachata per 5 minuti (fetch Deribit ~90s).
     """
+    cached = _cache_get("gex")
+    if cached is not None:
+        return cached
+
     try:
         from src.gex.deribit_client import DeribitClient
         from src.gex.gex_calculator import GexCalculator
@@ -116,7 +144,7 @@ def get_gex() -> dict:
             if abs(gs.strike - spot) / spot < 0.40
         ]
 
-        return _ok({
+        response = _ok({
             "snapshot": gex_dict,
             "regime": {
                 "label":         state.regime,
@@ -125,6 +153,8 @@ def get_gex() -> dict:
             },
             "strike_profile": strike_profile,
         })
+        _cache_set("gex", response)
+        return response
 
     except Exception as exc:
         traceback.print_exc()
@@ -139,7 +169,12 @@ def get_flows() -> dict:
 
     Scarica i flussi da Farside Investors e i prezzi da yfinance,
     calcola correlazioni rolling (30/60/90d) e test di Granger.
+    Risposta cachata per 15 minuti.
     """
+    cached = _cache_get("flows")
+    if cached is not None:
+        return cached
+
     try:
         from src.flows.scraper import FarsideScraper
         from src.flows.price_fetcher import PriceFetcher
@@ -208,12 +243,14 @@ def get_flows() -> dict:
                     for k, v in row.items()
                 }
 
-        return _ok({
+        response = _ok({
             "summary": stats,
             "history": history,
             "rolling_correlations_latest": corr_latest,
             "granger": granger_out,
         })
+        _cache_set("flows", response)
+        return response
 
     except Exception as exc:
         traceback.print_exc()
@@ -227,7 +264,12 @@ def get_barriers() -> dict:
     """Barriere attive da SEC EDGAR (structured notes su IBIT/BTC).
 
     Restituisce i barrier levels con status='active' dal DB locale.
+    Risposta cachata per 1 ora (dati statici).
     """
+    cached = _cache_get("barriers")
+    if cached is not None:
+        return cached
+
     try:
         from src.edgar.structured_notes_db import StructuredNotesDB
         from src.gex.deribit_client import DeribitClient
@@ -248,11 +290,13 @@ def get_barriers() -> dict:
             # Converti campi non-serializzabili
             out.append({k: v for k, v in row.items()})
 
-        return _ok({
+        response = _ok({
             "count":      len(out),
             "barriers":   out,
             "spot_price": spot_price,
         })
+        _cache_set("barriers", response)
+        return response
 
     except Exception as exc:
         traceback.print_exc()
@@ -267,7 +311,12 @@ def get_signals() -> dict:
 
     Combina GEX regime, IBIT 3-day flow e prossimità barriere
     per generare un segnale operativo e metrics di backtest.
+    Risposta cachata per 5 minuti.
     """
+    cached = _cache_get("signals")
+    if cached is not None:
+        return cached
+
     try:
         from src.gex.deribit_client import DeribitClient
         from src.gex.gex_calculator import GexCalculator
@@ -361,7 +410,7 @@ def get_signals() -> dict:
                     "days_flat":         m.days_flat,
                 }
 
-        return _ok({
+        response = _ok({
             "signal":         signal,
             "signal_reason":  signal_reason,
             "inputs": {
@@ -373,6 +422,8 @@ def get_signals() -> dict:
             },
             "backtest": backtest_metrics,
         })
+        _cache_set("signals", response)
+        return response
 
     except Exception as exc:
         traceback.print_exc()
