@@ -102,10 +102,23 @@ class StructuredNotesDB:
             conn.close()
 
     def _init_schema(self) -> None:
-        """Crea le tabelle e gli indici se non esistono."""
+        """Crea le tabelle, gli indici e applica le migrazioni incrementali."""
         with self._conn() as conn:
             conn.executescript(_DDL_NOTES + _DDL_BARRIERS + _DDL_IDX)
+            self._migrate(conn)
         _log.info("Schema inizializzato: %s", self._path)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Applica migrazioni incrementali basate su PRAGMA user_version.
+
+        Versioni:
+          0 → 1: schema iniziale (nessuna modifica necessaria, solo bump version)
+        """
+        ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        if ver < 1:
+            # v1: schema attuale — nessuna ALTER TABLE necessaria
+            conn.execute("PRAGMA user_version = 1")
+            _log.debug("DB migrato a versione 1")
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 

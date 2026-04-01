@@ -205,19 +205,30 @@ def load_prices_and_flows() -> pd.DataFrame:
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
 def load_gex() -> tuple[dict, list[dict]]:
-    """Carica snapshot GEX live da Deribit."""
+    """Carica snapshot GEX live da Deribit e salva nel DB storico."""
     from src.gex.deribit_client import DeribitClient
     from src.gex.gex_calculator import GexCalculator
+    from src.gex.gex_db import GexDB
     from src.gex.regime_detector import RegimeDetector
 
     client   = DeribitClient()
     calc     = GexCalculator()
+    db       = GexDB()
     detector = RegimeDetector()
+
+    # Pre-popola storico per percentile GEX corretto
+    detector.load_history_from_db(db.get_latest_n(90))
 
     spot    = client.get_spot_price()
     options = client.fetch_all_options("BTC")
     snap    = calc.calculate_gex(options, spot)
     state   = detector.detect(snap)
+
+    # Persiste snapshot nel DB
+    try:
+        db.insert_snapshot(snap, state.regime)
+    except Exception as _e:
+        _log.warning("GEX DB insert fallito: %s", _e)
 
     snap_dict = calc.gex_to_dict(snap)
     snap_dict["regime"]         = state.regime
@@ -319,10 +330,16 @@ def run_regime(merged_df: pd.DataFrame, gex_today: float):
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
 def run_backtest(merged_df: pd.DataFrame, barriers: list[dict]):
-    """Esegue il backtest."""
+    """Esegue il backtest con serie GEX storica dal DB."""
     from src.analytics.backtest import Backtest
+    from src.gex.gex_db import GexDB
+    gex_series = GexDB().get_series(days=365)
     bt = Backtest()
-    return bt, bt.run(merged_df, active_barriers=barriers if barriers else None)
+    return bt, bt.run(
+        merged_df,
+        gex_series=gex_series if not gex_series.empty else None,
+        active_barriers=barriers if barriers else None,
+    )
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)

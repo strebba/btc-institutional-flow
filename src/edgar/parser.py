@@ -29,10 +29,36 @@ _RE_NOTIONAL = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern aggiuntivi per nozionale — coprono formati come "$1,500,000 aggregate..."
+# e "Total: $5.2 million" usati da alcuni emittenti
+_RE_NOTIONAL_ALT2 = re.compile(
+    r"\$([\d,]+(?:\.\d+)?)\s+(?:aggregate\s+principal|notional|face\s+value|"
+    r"principal\s+amount)",
+    re.IGNORECASE,
+)
+
+_RE_NOTIONAL_PLAIN_M = re.compile(
+    r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:million|M)\b",
+    re.IGNORECASE,
+)
+
 _RE_INITIAL_LEVEL = re.compile(
     r"(?:initial\s+(?:value|level|price)|starting\s+(?:value|level)|"
     r"reference\s+(?:price|value|level)|initial\s+share\s+price)"
     r"\s*(?:of\s+the\s+underlying\s*)?:?\s*\$?([\d,]+\.?\d*)",
+    re.IGNORECASE,
+)
+
+# Pattern aggiuntivi per initial_level usati da Morgan Stanley e formati recenti JPMorgan
+_RE_INITIAL_LEVEL_ALT = re.compile(
+    r"(?:"
+    r"closing\s+(?:share\s+)?price\s+(?:of\s+(?:the\s+)?(?:underlying|IBIT)\s+)?:?\s*\$?([\d,]+\.?\d*)"
+    r"|"
+    r"valuation\s+date\s+(?:closing\s+)?(?:price|value)\s*:?\s*\$?([\d,]+\.?\d*)"
+    r"|"
+    r"(?:price|value)\s+of\s+(?:the\s+)?(?:underlying|IBIT|share)\s+on\s+the\s+"
+    r"(?:pricing|trade)\s+date\s*:?\s*\$?([\d,]+\.?\d*)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -133,22 +159,45 @@ def _parse_date(s: str) -> Optional[date]:
 def _parse_notional(text: str) -> Optional[float]:
     """Estrae il nozionale in USD dalla stringa.
 
+    Tenta i pattern in ordine di specificità:
+    1. _RE_NOTIONAL     — "aggregate principal amount ... $5M"
+    2. _RE_NOTIONAL_ALT — "$5,000,000 aggregate principal"  (già esistente)
+    3. _RE_NOTIONAL_ALT2 — "$5,000,000 notional/face value"
+    4. _RE_NOTIONAL_PLAIN_M — "$5.2 million" (generico, usato per ultimo)
+
     Args:
         text: testo grezzo.
 
     Returns:
         float | None: nozionale in USD o None.
     """
+    # Pattern 1 — con suffisso milioni/miliardi
     m = _RE_NOTIONAL.search(text)
-    if not m:
-        return None
-    val = float(m.group(1).replace(",", ""))
-    suffix = (m.group(2) or "").lower()
-    if suffix in ("million", "m"):
-        val *= 1_000_000
-    elif suffix in ("billion", "b"):
-        val *= 1_000_000_000
-    return val
+    if m:
+        val = float(m.group(1).replace(",", ""))
+        suffix = (m.group(2) or "").lower()
+        if suffix in ("million", "m"):
+            val *= 1_000_000
+        elif suffix in ("billion", "b"):
+            val *= 1_000_000_000
+        return val
+
+    # Pattern 2 — "$X,XXX aggregate principal" (già coperto da _RE_NOTIONAL_ALT)
+    m = _RE_NOTIONAL_ALT.search(text)
+    if m:
+        return float(m.group(1).replace(",", ""))
+
+    # Pattern 3 — "$X notional/face value"
+    m = _RE_NOTIONAL_ALT2.search(text)
+    if m:
+        return float(m.group(1).replace(",", ""))
+
+    # Pattern 4 — "$X million" generico (ultimo resort)
+    m = _RE_NOTIONAL_PLAIN_M.search(text)
+    if m:
+        return float(m.group(1).replace(",", "")) * 1_000_000
+
+    return None
 
 
 def _detect_product_type(text: str) -> Optional[str]:
@@ -219,6 +268,10 @@ def _extract_barrier_levels(text: str, initial_level: Optional[float]) -> list[B
 
     for m in pattern.finditer(text):
         pct     = float(m.group(1))
+        # Scarta barriere con percentuale nulla o impossibile (>200%)
+        if pct <= 0.0 or pct > 200.0:
+            _log.debug("Barriera scartata (pct=%s fuori range)", pct)
+            continue
         if pct in seen_pcts:
             continue
         seen_pcts.add(pct)
@@ -243,6 +296,10 @@ def _extract_barrier_levels(text: str, initial_level: Optional[float]) -> list[B
             btype = "knock_in" if pct < 100 else "autocall"
 
         price_ibit = (initial_level * pct / 100.0) if initial_level else None
+        # Scarta se il prezzo IBIT calcolato è zero (initial_level=0)
+        if price_ibit is not None and price_ibit <= 0.0:
+            _log.debug("Barriera scartata (price_ibit=%s <= 0)", price_ibit)
+            continue
 
         barriers.append(BarrierLevel(
             barrier_type=btype,
@@ -418,7 +475,20 @@ class ProspectusParser:
             except ValueError:
                 pass
 
-        # 2) Ricava initial level da "Barrier Amount: XX% ... which is $YY.YY"
+        # 2) Pattern alternativi: Morgan Stanley "Closing price: $XX" e varianti
+        if initial_level is None:
+            m_alt = _RE_INITIAL_LEVEL_ALT.search(text)
+            if m_alt:
+                raw = next((g for g in m_alt.groups() if g), None)
+                if raw:
+                    try:
+                        val = float(raw.replace(",", ""))
+                        if 1.0 < val < 500.0:
+                            initial_level = val
+                    except ValueError:
+                        pass
+
+        # 3) Ricava initial level da "Barrier Amount: XX% ... which is $YY.YY"
         if initial_level is None:
             m_abs = _RE_BARRIER_ABS.search(text)
             if m_abs:

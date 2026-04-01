@@ -41,6 +41,19 @@ class RegimeDetector:
         self._alert_cfg = alert_cfg or settings["analytics"]
         self._history: list[GexSnapshot] = []  # storico in memoria
 
+    def load_history_from_db(self, snapshots: list[GexSnapshot]) -> None:
+        """Pre-popola lo storico in memoria con snapshot letti dal DB.
+
+        Da chiamare all'avvio (API, dashboard, cron) per garantire che
+        gex_percentile e gamma-flip alert siano calcolati su dati reali
+        e non solo sulla sessione corrente.
+
+        Args:
+            snapshots: lista ordinata per data crescente (da GexDB.get_latest_n).
+        """
+        self._history = list(snapshots)
+        _log.info("RegimeDetector: storico pre-popolato con %d snapshot", len(self._history))
+
     def add_snapshot(self, snapshot: GexSnapshot) -> None:
         """Aggiunge uno snapshot allo storico in memoria.
 

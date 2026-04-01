@@ -72,6 +72,13 @@ backtest:
   short_flow_threshold_usd_m: -200
   barrier_exclusion_pct: 5.0
 
+# ─── COINGLASS ──────────────────────────────────────────────────────────────────
+coinglass:
+  api_key: ""            # override con env var COINGLASS_API_KEY (non committare la chiave)
+  base_url: "https://open-api-v4.coinglass.com"
+  timeout_s: 15
+  rate_limit_rps: 1      # 80 req/min startup tier → 1/s per sicurezza
+
 # ─── DASHBOARD ──────────────────────────────────────────────────────────────────
 dashboard:
   refresh_interval_s: 900    # 15 minuti

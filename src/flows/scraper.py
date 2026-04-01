@@ -258,11 +258,21 @@ class FarsideScraper:
         return results
 
     def fetch(self) -> list[EtfFlowData]:
-        """Scarica i flussi con waterfall: Farside → cache disco → SoSoValue → EDGAR N-PORT → yfinance.
+        """Scarica i flussi con waterfall: CoinGlass → Farside → cache disco → SoSoValue → EDGAR N-PORT → yfinance.
 
         Returns:
             list[EtfFlowData]: tutti i flussi disponibili.
         """
+        # 0. CoinGlass API (JSON strutturato, affidabile, tutto lo storico)
+        try:
+            from src.flows.coinglass_client import CoinGlassClient
+            flows = CoinGlassClient(self._cfg).fetch_etf_flows()
+            if flows:
+                _log.info("CoinGlass: %d record flussi ETF", len(flows))
+                return flows
+        except Exception as e:
+            _log.warning("CoinGlass non disponibile (%s) — fallback Farside", e)
+
         # 1. Farside live (fonte primaria)
         try:
             html = self._fetch_html(self.FARSIDE_URL)

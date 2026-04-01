@@ -9,5 +9,7 @@ build/
 venv/
 data/*.html
 data/*.csv
+data/*.db-shm
+data/*.db-wal
 logs/*.log
 .DS_Store

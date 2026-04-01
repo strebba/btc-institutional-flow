@@ -21,7 +21,7 @@ import time
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 # ─── In-memory TTL cache ───────────────────────────────────────────────────────
 
@@ -70,7 +70,7 @@ app.add_middleware(
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 class _NumpyEncoder(json.JSONEncoder):
-    """Serializza tipi numpy (int64, float32, bool_, ecc.) in tipi Python nativi."""
+    """Serializza tipi numpy e float NaN/Inf in tipi Python JSON-compatibili."""
     def default(self, obj: Any) -> Any:
         if isinstance(obj, np.bool_):
             return bool(obj)
@@ -81,6 +81,23 @@ class _NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return super().default(obj)
+
+    def iterencode(self, obj: Any, _one_shot: bool = False):
+        # Converte float NaN/Inf nativi Python in None prima della serializzazione
+        obj = _sanitize(obj)
+        return super().iterencode(obj, _one_shot)
+
+
+def _sanitize(obj: Any) -> Any:
+    """Converte ricorsivamente float NaN/Inf in None per JSON compliance."""
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
 
 
 def _ok(data: Any) -> JSONResponse:
@@ -93,6 +110,11 @@ def _error(msg: str, code: int = 500) -> HTTPException:
 
 
 # ─── /api/health ──────────────────────────────────────────────────────────────
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/docs")
+
 
 @app.get("/api/health", tags=["meta"])
 def health() -> dict:
@@ -127,8 +149,17 @@ def get_gex() -> dict:
         snapshot   = calculator.calculate_gex(options, spot)
         gex_dict   = calculator.gex_to_dict(snapshot)
 
-        detector   = RegimeDetector()
-        state      = detector.detect(snapshot)
+        from src.gex.gex_db import GexDB
+        _gex_db_gex = GexDB()
+        detector    = RegimeDetector()
+        detector.load_history_from_db(_gex_db_gex.get_latest_n(90))
+        state       = detector.detect(snapshot)
+
+        # Persiste snapshot nel DB storico
+        try:
+            _gex_db_gex.insert_snapshot(snapshot, state.regime)
+        except Exception:
+            pass
 
         # Profilo per strike (intorno a ±40% dallo spot)
         strike_profile = [
@@ -339,12 +370,24 @@ def get_signals() -> dict:
         from src.analytics.backtest import Backtest
 
         # ── GEX ────────────────────────────────────────────────────────────────
+        from src.gex.gex_db import GexDB
+        from src.gex.regime_detector import RegimeDetector
         client     = DeribitClient()
         spot       = client.get_spot_price()
         options    = client.fetch_all_options("BTC")
         calculator = GexCalculator()
         snapshot   = calculator.calculate_gex(options, spot)
         total_gex  = snapshot.total_net_gex
+
+        # Persiste snapshot nel DB storico
+        _gex_db = GexDB()
+        try:
+            _detector = RegimeDetector()
+            _detector.load_history_from_db(_gex_db.get_latest_n(90))
+            _regime = _detector.detect(snapshot).regime
+            _gex_db.insert_snapshot(snapshot, _regime)
+        except Exception as _e:
+            pass  # non bloccare il segnale se il DB fallisce
 
         # ── Flussi ─────────────────────────────────────────────────────────────
         scraper   = FarsideScraper()
@@ -405,8 +448,13 @@ def get_signals() -> dict:
         # ── Backtest ───────────────────────────────────────────────────────────
         backtest_metrics: dict = {}
         if not merged.empty and "btc_return" in merged.columns:
+            _gex_series = _gex_db.get_series(days=365)
             bt      = Backtest()
-            results = bt.run(merged, active_barriers=active_barriers)
+            results = bt.run(
+                merged,
+                gex_series=_gex_series if not _gex_series.empty else None,
+                active_barriers=active_barriers,
+            )
             for key, m in results.items():
                 backtest_metrics[key] = {
                     "strategy_name":     m.strategy_name,

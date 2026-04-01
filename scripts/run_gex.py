@@ -88,7 +88,16 @@ def main() -> None:
     state    = detector.detect(snapshot)
     console.print(detector.summary(state))
 
-    # ── 5. Top strike table ───────────────────────────────────────────────────
+    # ── 5. Salvataggio DB ─────────────────────────────────────────────────────
+    console.print("\n[bold]Step 5: Salvataggio snapshot nel DB...[/bold]")
+    try:
+        from src.gex.gex_db import GexDB
+        GexDB().insert_snapshot(snapshot, state.regime)
+        console.print(f"  [green]Snapshot salvato (regime={state.regime})[/green]")
+    except Exception as e:
+        console.print(f"  [yellow]Salvataggio DB fallito: {e}[/yellow]")
+
+    # ── 6. Top strike table ───────────────────────────────────────────────────
     console.print(f"\n[bold]Top {args.top} strike per |GEX| (intorno allo spot):[/bold]")
 
     # Filtra strike entro ±30% dallo spot
@@ -118,7 +127,7 @@ def main() -> None:
         )
     console.print(table)
 
-    # ── 6. Plot ───────────────────────────────────────────────────────────────
+    # ── 7. Plot ───────────────────────────────────────────────────────────────
     if args.plot:
         _plot_gex(snapshot, spot)
 
