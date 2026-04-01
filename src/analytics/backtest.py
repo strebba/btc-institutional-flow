@@ -1,22 +1,24 @@
-"""Backtest della strategia combinata GEX + flussi ETF.
+"""Backtest della strategia combinata GEX + flussi ETF (multi-fattore).
 
-Regola:
-  LONG  se: total_gex > 0 AND ibit_flow_3d > 100M AND nessuna barriera attiva entro 5%
-  SHORT/FLAT se: total_gex < 0 AND ibit_flow_3d < -200M
-  FLAT  altrimenti
+Supporta due modalità di generazione segnali:
+  1. SignalModel (default): scoring 0-100 su 7 fattori ponderati.
+  2. Regole legacy (fallback): GEX > 0 AND flow_3d > 100M → LONG.
 
 Metriche: Sharpe ratio, max drawdown, win rate, profit factor.
-Confronto vs buy-and-hold BTC.
+Confronto vs buy-and-hold BTC. Equity curve serializzata per frontend.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 from src.config import get_settings, setup_logging
+
+if TYPE_CHECKING:
+    from src.analytics.signal_model import SignalModel
 
 _log = setup_logging("analytics.backtest")
 
@@ -76,13 +78,18 @@ class Backtest:
         merged_df: pd.DataFrame,
         gex_series: Optional[pd.Series] = None,
         active_barriers: Optional[list[dict]] = None,
+        signal_model: Optional["SignalModel"] = None,
     ) -> pd.Series:
         """Genera i segnali di trading (+1 long, -1 short, 0 flat).
+
+        Se signal_model è fornito usa lo scoring multi-fattore (0-100).
+        Altrimenti usa le regole legacy (GEX + flow threshold).
 
         Args:
             merged_df: DataFrame con ibit_flow_3d, btc_close, btc_return.
             gex_series: serie GEX totale (DatetimeIndex), opzionale.
             active_barriers: lista barriere attive dal DB, opzionale.
+            signal_model: SignalModel per scoring multi-fattore, opzionale.
 
         Returns:
             pd.Series: segnali con DatetimeIndex.
@@ -105,13 +112,8 @@ class Backtest:
             df["ibit_flow_3d"] = df["ibit_flow"].rolling(3, min_periods=1).sum() \
                 if "ibit_flow" in df.columns else 0.0
 
-        long_gex_th   = cfg.get("long_gex_threshold",   0)
-        long_flow_th  = cfg.get("long_flow_threshold_usd_m",  100) * 1e6
-        short_gex_th  = cfg.get("short_gex_threshold",  0)
-        short_flow_th = cfg.get("short_flow_threshold_usd_m", -200) * 1e6
-        barrier_excl  = cfg.get("barrier_exclusion_pct", 5.0) / 100.0
-
-        # Costruisci set di prezzi barriera "attivi" (entro barrier_exclusion_pct)
+        # Barriere attive
+        barrier_excl = cfg.get("barrier_exclusion_pct", 5.0) / 100.0
         barrier_prices: set[float] = set()
         if active_barriers:
             for b in active_barriers:
@@ -119,36 +121,50 @@ class Backtest:
                 if p > 0:
                     barrier_prices.add(p)
 
-        signals = pd.Series(0, index=df.index, dtype=float)
+        # ── Modalità SignalModel (multi-fattore) ───────────────────────────────
+        if signal_model is not None:
+            scores = signal_model.compute_series(df)
+            signals = signal_model.signals_from_scores(scores)
+            # Override: blocca LONG se vicino a barriera
+            if barrier_prices:
+                for ts, row in df.iterrows():
+                    price = row.get("btc_close", 0.0)
+                    if price > 0:
+                        for bp in barrier_prices:
+                            if abs(price - bp) / price < barrier_excl:
+                                if signals[ts] == 1.0:
+                                    signals[ts] = 0.0
+                                break
+            _log.info(
+                "SignalModel — long=%d, risk_off=%d, flat=%d",
+                (signals == 1).sum(), (signals == -1).sum(), (signals == 0).sum(),
+            )
+            return signals
 
+        # ── Modalità legacy (fallback) ─────────────────────────────────────────
+        long_gex_th   = cfg.get("long_gex_threshold",   0)
+        long_flow_th  = cfg.get("long_flow_threshold_usd_m",  100) * 1e6
+        short_gex_th  = cfg.get("short_gex_threshold",  0)
+        short_flow_th = cfg.get("short_flow_threshold_usd_m", -200) * 1e6
+
+        signals = pd.Series(0, index=df.index, dtype=float)
         for ts, row in df.iterrows():
             gex   = row.get("_gex", 0.0)
             flow3 = row.get("ibit_flow_3d", 0.0)
             price = row.get("btc_close", 0.0)
-
-            # Controlla prossimità barriere
             near_barrier = False
             if price > 0 and barrier_prices:
                 for bp in barrier_prices:
                     if abs(price - bp) / price < barrier_excl:
                         near_barrier = True
                         break
-
-            # Segnale LONG
-            if (
-                gex > long_gex_th
-                and flow3 > long_flow_th
-                and not near_barrier
-            ):
+            if gex > long_gex_th and flow3 > long_flow_th and not near_barrier:
                 signals[ts] = 1.0
-
-            # Segnale SHORT/FLAT
             elif gex < short_gex_th and flow3 < short_flow_th:
                 signals[ts] = -1.0
-            # else: flat (0)
 
         _log.info(
-            "Segnali: long=%d, short=%d, flat=%d",
+            "Legacy — long=%d, short=%d, flat=%d",
             (signals == 1).sum(), (signals == -1).sum(), (signals == 0).sum(),
         )
         return signals
@@ -238,6 +254,7 @@ class Backtest:
         merged_df: pd.DataFrame,
         gex_series: Optional[pd.Series] = None,
         active_barriers: Optional[list[dict]] = None,
+        signal_model: Optional["SignalModel"] = None,
     ) -> dict[str, BacktestMetrics]:
         """Esegue il backtest e il benchmark buy-and-hold.
 
@@ -245,6 +262,8 @@ class Backtest:
             merged_df: DataFrame con btc_return, ibit_flow, btc_close.
             gex_series: serie GEX totale (opzionale).
             active_barriers: barriere attive dal DB (opzionale).
+            signal_model: SignalModel per scoring multi-fattore (opzionale).
+                Se None usa le regole legacy GEX+flow threshold.
 
         Returns:
             dict: "strategy" e "buy_and_hold" con i rispettivi BacktestMetrics.
@@ -255,15 +274,16 @@ class Backtest:
             return {}
 
         # Genera segnali (lag=1 per evitare look-ahead bias)
-        signals = self._generate_signals(df, gex_series, active_barriers)
-        signals_lagged = signals.shift(1).fillna(0)  # applica il segnale del giorno prima
+        signals = self._generate_signals(df, gex_series, active_barriers, signal_model)
+        signals_lagged = signals.shift(1).fillna(0)
 
         # Rendimenti strategia
-        btc_rets = df["btc_return"].dropna()
+        btc_rets   = df["btc_return"].dropna()
         strat_rets = btc_rets * signals_lagged.reindex(btc_rets.index).fillna(0)
 
-        strategy = self._compute_metrics(strat_rets, "GEX+Flows Strategy", signals_lagged)
-        bah       = self._compute_metrics(btc_rets, "Buy & Hold BTC")
+        name = "Multi-Factor Strategy" if signal_model else "GEX+Flows Strategy"
+        strategy = self._compute_metrics(strat_rets, name, signals_lagged)
+        bah      = self._compute_metrics(btc_rets, "Buy & Hold BTC")
 
         self._log_comparison(strategy, bah)
 

@@ -298,3 +298,170 @@ class CoinGlassClient:
         daily = df["oi"].resample("1D").last().dropna()
         daily.name = "futures_oi_usd"
         return daily
+
+    # ─── Long/Short Ratio ────────────────────────────────────────────────────
+
+    def fetch_long_short_ratio(self, days: int = 90) -> pd.Series:
+        """Scarica il rapporto long/short globale degli account futures BTC.
+
+        Un valore > 1.0 indica più account long che short.
+        Valore > 2.0 = folla retail crowded long = segnale contrarian bearish.
+
+        Args:
+            days: numero di giorni storici.
+
+        Returns:
+            pd.Series con DatetimeIndex (tz-naive) e valori float (ratio).
+            Serie vuota su errore.
+        """
+        try:
+            data = self._get(
+                "/api/futures/globalLongShortAccountRatio/history",
+                {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
+            )
+        except (CoinGlassError, Exception) as e:
+            _log.warning("CoinGlass long/short ratio: %s", e)
+            return pd.Series(dtype=float, name="long_short_ratio")
+
+        if not isinstance(data, list) or not data:
+            return pd.Series(dtype=float, name="long_short_ratio")
+
+        rows: list[tuple] = []
+        for item in data:
+            if isinstance(item, list) and len(item) >= 2:
+                ts_ms, ratio = item[0], item[1]
+            elif isinstance(item, dict):
+                ts_ms = item.get("t") or item.get("time") or item.get("createTime")
+                ratio = item.get("longShortRatio") or item.get("ratio") or item.get("c")
+            else:
+                continue
+            if ts_ms is None or ratio is None:
+                continue
+            try:
+                dt = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
+                rows.append((dt, float(ratio)))
+            except (TypeError, ValueError, OSError):
+                continue
+
+        if not rows:
+            return pd.Series(dtype=float, name="long_short_ratio")
+
+        df = pd.DataFrame(rows, columns=["ts", "ratio"]).set_index("ts")
+        daily = df["ratio"].resample("1D").last().dropna()
+        daily.index = daily.index.tz_localize(None)  # tz-naive per join
+        daily.name = "long_short_ratio"
+        return daily
+
+    # ─── Liquidations ────────────────────────────────────────────────────────
+
+    def fetch_liquidations(self, days: int = 90) -> pd.DataFrame:
+        """Scarica la storia delle liquidazioni futures BTC (long + short).
+
+        Utile per identificare cascade risk: liquidazioni >500M USD in 24h
+        indicano eventi di stress con potenziale momentum direzionale.
+
+        Args:
+            days: numero di giorni storici.
+
+        Returns:
+            pd.DataFrame con DatetimeIndex (tz-naive) e colonne:
+            'long_usd' (liquidazioni long), 'short_usd' (liquidazioni short),
+            'total_usd' (somma).
+            DataFrame vuoto su errore.
+        """
+        _EMPTY = pd.DataFrame(columns=["long_usd", "short_usd", "total_usd"])
+        try:
+            data = self._get(
+                "/api/futures/liquidation/history",
+                {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
+            )
+        except (CoinGlassError, Exception) as e:
+            _log.warning("CoinGlass liquidations: %s", e)
+            return _EMPTY
+
+        if not isinstance(data, list) or not data:
+            return _EMPTY
+
+        rows: list[dict] = []
+        for item in data:
+            if isinstance(item, list) and len(item) >= 3:
+                ts_ms, long_v, short_v = item[0], item[1], item[2]
+            elif isinstance(item, dict):
+                ts_ms   = item.get("t") or item.get("time")
+                long_v  = item.get("longLiquidationUsd") or item.get("buyUsd") or item.get("long") or 0.0
+                short_v = item.get("shortLiquidationUsd") or item.get("sellUsd") or item.get("short") or 0.0
+            else:
+                continue
+            if ts_ms is None:
+                continue
+            try:
+                dt = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
+                rows.append({"ts": dt, "long_usd": float(long_v), "short_usd": float(short_v)})
+            except (TypeError, ValueError, OSError):
+                continue
+
+        if not rows:
+            return _EMPTY
+
+        df = pd.DataFrame(rows).set_index("ts")
+        daily = df.resample("1D").sum()
+        daily.index = daily.index.tz_localize(None)
+        daily["total_usd"] = daily["long_usd"] + daily["short_usd"]
+        return daily.dropna(how="all")
+
+    # ─── Taker Buy/Sell Volume ────────────────────────────────────────────────
+
+    def fetch_taker_volume(self, days: int = 90) -> pd.Series:
+        """Scarica il rapporto taker buy/(buy+sell) per futures BTC.
+
+        Indica la pressione direzionale degli ordini market (aggressori):
+        > 0.55 = pressione acquisto dominante; < 0.45 = pressione vendita.
+
+        Args:
+            days: numero di giorni storici.
+
+        Returns:
+            pd.Series con DatetimeIndex (tz-naive) e valori float (ratio 0-1).
+            Serie vuota su errore.
+        """
+        try:
+            data = self._get(
+                "/api/futures/takerBuySellVolume",
+                {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
+            )
+        except (CoinGlassError, Exception) as e:
+            _log.warning("CoinGlass taker volume: %s", e)
+            return pd.Series(dtype=float, name="taker_buy_ratio")
+
+        if not isinstance(data, list) or not data:
+            return pd.Series(dtype=float, name="taker_buy_ratio")
+
+        rows: list[tuple] = []
+        for item in data:
+            if isinstance(item, dict):
+                ts_ms = item.get("t") or item.get("time")
+                buy   = next((item[k] for k in ("buyVolume", "buy", "takerBuyVolume")   if k in item and item[k] is not None), None)
+                sell  = next((item[k] for k in ("sellVolume", "sell", "takerSellVolume") if k in item and item[k] is not None), None)
+            elif isinstance(item, list) and len(item) >= 3:
+                ts_ms, buy, sell = item[0], item[1], item[2]
+            else:
+                continue
+            if ts_ms is None or buy is None or sell is None:
+                continue
+            try:
+                total = float(buy) + float(sell)
+                if total <= 0:
+                    continue
+                dt = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
+                rows.append((dt, float(buy) / total))
+            except (TypeError, ValueError, OSError):
+                continue
+
+        if not rows:
+            return pd.Series(dtype=float, name="taker_buy_ratio")
+
+        df = pd.DataFrame(rows, columns=["ts", "ratio"]).set_index("ts")
+        daily = df["ratio"].resample("1D").last().dropna()
+        daily.index = daily.index.tz_localize(None)
+        daily.name = "taker_buy_ratio"
+        return daily

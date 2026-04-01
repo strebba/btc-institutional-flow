@@ -161,3 +161,140 @@ class TestFetchFundingRate:
         client = _client()
         _mock_get(client, [])
         assert client.fetch_funding_rate_history().empty
+
+
+# ─── Long/Short Ratio ─────────────────────────────────────────────────────────
+
+class TestFetchLongShortRatio:
+    def _ts(self, n: int = 0) -> int:
+        """Timestamp ms base + n giorni."""
+        return 1741564800000 + n * 86400 * 1000
+
+    def test_returns_series_dict_format(self) -> None:
+        """Risposta dict → pd.Series non vuota."""
+        client = _client()
+        _mock_get(client, [
+            {"t": self._ts(0), "longShortRatio": 1.42},
+            {"t": self._ts(1), "longShortRatio": 1.55},
+        ])
+        result = client.fetch_long_short_ratio(days=7)
+        assert isinstance(result, pd.Series)
+        assert not result.empty
+
+    def test_series_tz_naive(self) -> None:
+        """Indice tz-naive per join con merged DataFrame."""
+        client = _client()
+        _mock_get(client, [{"t": self._ts(0), "longShortRatio": 1.5}])
+        result = client.fetch_long_short_ratio()
+        assert result.index.tz is None
+
+    def test_values_are_float(self) -> None:
+        client = _client()
+        _mock_get(client, [{"t": self._ts(0), "longShortRatio": 1.87}])
+        result = client.fetch_long_short_ratio()
+        assert abs(result.iloc[0] - 1.87) < 0.01
+
+    def test_returns_empty_on_error(self) -> None:
+        client = _client()
+        _mock_get_raise(client, CoinGlassError("err"))
+        assert client.fetch_long_short_ratio().empty
+
+    def test_empty_data_returns_empty(self) -> None:
+        client = _client()
+        _mock_get(client, [])
+        assert client.fetch_long_short_ratio().empty
+
+
+# ─── Liquidations ─────────────────────────────────────────────────────────────
+
+class TestFetchLiquidations:
+    def _ts(self, n: int = 0) -> int:
+        return 1741564800000 + n * 86400 * 1000
+
+    def test_returns_dataframe(self) -> None:
+        """Risposta valida → pd.DataFrame con colonne attese."""
+        client = _client()
+        _mock_get(client, [
+            {"t": self._ts(0), "longLiquidationUsd": 200e6, "shortLiquidationUsd": 80e6},
+            {"t": self._ts(1), "longLiquidationUsd": 150e6, "shortLiquidationUsd": 100e6},
+        ])
+        result = client.fetch_liquidations(days=7)
+        assert isinstance(result, pd.DataFrame)
+        assert "long_usd" in result.columns
+        assert "short_usd" in result.columns
+        assert "total_usd" in result.columns
+
+    def test_total_is_sum(self) -> None:
+        client = _client()
+        _mock_get(client, [
+            {"t": self._ts(0), "longLiquidationUsd": 300e6, "shortLiquidationUsd": 100e6},
+        ])
+        result = client.fetch_liquidations()
+        assert abs(result["total_usd"].iloc[-1] - 400e6) < 1.0
+
+    def test_df_index_tz_naive(self) -> None:
+        client = _client()
+        _mock_get(client, [
+            {"t": self._ts(0), "longLiquidationUsd": 100e6, "shortLiquidationUsd": 50e6},
+        ])
+        result = client.fetch_liquidations()
+        assert result.index.tz is None
+
+    def test_returns_empty_df_on_error(self) -> None:
+        client = _client()
+        _mock_get_raise(client, CoinGlassError("err"))
+        result = client.fetch_liquidations()
+        assert isinstance(result, pd.DataFrame)
+        assert result.empty
+
+    def test_empty_data_returns_empty_df(self) -> None:
+        client = _client()
+        _mock_get(client, [])
+        result = client.fetch_liquidations()
+        assert result.empty
+
+
+# ─── Taker Volume ─────────────────────────────────────────────────────────────
+
+class TestFetchTakerVolume:
+    def _ts(self, n: int = 0) -> int:
+        return 1741564800000 + n * 86400 * 1000
+
+    def test_returns_series(self) -> None:
+        client = _client()
+        _mock_get(client, [
+            {"t": self._ts(0), "buyVolume": 800e6, "sellVolume": 400e6},
+        ])
+        result = client.fetch_taker_volume(days=7)
+        assert isinstance(result, pd.Series)
+        assert not result.empty
+
+    def test_ratio_computed_correctly(self) -> None:
+        """buy/(buy+sell) = 0.8."""
+        client = _client()
+        _mock_get(client, [
+            {"t": self._ts(0), "buyVolume": 800.0, "sellVolume": 200.0},
+        ])
+        result = client.fetch_taker_volume()
+        assert abs(result.iloc[0] - 0.8) < 0.001
+
+    def test_ratio_zero_sell_edge(self) -> None:
+        """Sell=0 → ratio=1.0 (tutto buy)."""
+        client = _client()
+        _mock_get(client, [
+            {"t": self._ts(0), "buyVolume": 500.0, "sellVolume": 0.0},
+        ])
+        result = client.fetch_taker_volume()
+        # total=500, ratio=1.0
+        assert abs(result.iloc[0] - 1.0) < 0.001
+
+    def test_series_tz_naive(self) -> None:
+        client = _client()
+        _mock_get(client, [{"t": self._ts(0), "buyVolume": 500.0, "sellVolume": 300.0}])
+        result = client.fetch_taker_volume()
+        assert result.index.tz is None
+
+    def test_returns_empty_on_error(self) -> None:
+        client = _client()
+        _mock_get_raise(client, CoinGlassError("err"))
+        assert client.fetch_taker_volume().empty

@@ -6,6 +6,7 @@ Endpoints:
   GET /api/flows     - ETF flows IBIT: serie storica, correlazione, Granger
   GET /api/barriers  - Barriere attive da SEC EDGAR
   GET /api/signals   - Segnale composito LONG/CAUTION/RISK_OFF + Sharpe backtest
+  GET /api/macro     - Indicatori macro: funding rate, OI, long/short ratio, liquidazioni
   GET /docs          - Swagger UI (FastAPI built-in)
 """
 from __future__ import annotations
@@ -32,6 +33,7 @@ _TTL = {
     "flows":    900,   # 15 min — Farside scrape
     "barriers": 3600,  # 1 ora  — dati SEC EDGAR statici
     "signals":  300,   # 5 min  — dipende da gex + flows
+    "macro":    3600,  # 1 ora  — dati CoinGlass giornalieri
 }
 
 
@@ -183,6 +185,15 @@ def get_gex() -> dict:
                 "gex_percentile": state.gex_percentile,
             },
             "strike_profile": strike_profile,
+            # Campi aggiuntivi per dashboard avanzata
+            "options_metrics": {
+                "put_call_ratio":           snapshot.put_call_ratio,
+                "max_pain":                 snapshot.max_pain,
+                "distance_to_put_wall_pct": snapshot.distance_to_put_wall_pct,
+                "distance_to_call_wall_pct": snapshot.distance_to_call_wall_pct,
+                "total_call_oi":            snapshot.total_call_oi,
+                "total_put_oi":             snapshot.total_put_oi,
+            },
         })
         _cache_set("gex", response)
         return response
@@ -244,24 +255,48 @@ def get_flows() -> dict:
                 for r in results
             ]
 
-        # Serie storica IBIT (ultimi 365 gg) con prezzo BTC
-        history: list[dict] = []
-        ibit_col = "IBIT" if "IBIT" in df_pivot.columns else None
-        if ibit_col:
-            recent = df_pivot[ibit_col].dropna().tail(365)
-            # Aggiungi btc_close dal merged dataframe (se disponibile)
-            btc_prices: dict = {}
-            if not merged.empty and "btc_close" in merged.columns:
-                for idx, val in merged["btc_close"].dropna().items():
-                    btc_prices[str(idx.date())] = float(val)
-            history = [
-                {
-                    "date": str(d.date()),
-                    "ibit_flow_usd": float(v),
-                    "btc_close": btc_prices.get(str(d.date())),
+        # ── Serie storica IBIT + totale + per-ticker (ultimi 365gg) ──────────────
+        # Costruisci dizionari lookup da merged (btc_close, btc_vol_7d, ibit_btc_ratio)
+        btc_prices:    dict[str, float] = {}
+        btc_vols:      dict[str, float] = {}
+        ibit_btc_vals: dict[str, float] = {}
+        total_flow_vals: dict[str, float] = {}
+        if not merged.empty:
+            for col, target in [
+                ("btc_close",      btc_prices),
+                ("btc_vol_7d",     btc_vols),
+                ("ibit_btc_ratio", ibit_btc_vals),
+                ("total_flow",     total_flow_vals),
+            ]:
+                if col in merged.columns:
+                    for idx, val in merged[col].dropna().items():
+                        target[str(idx.date())] = float(val)
+
+        # Per-ticker from df_pivot: IBIT, FBTC, GBTC
+        _TICKERS_DETAIL = ["IBIT", "FBTC", "GBTC"]
+        ticker_series: dict[str, dict[str, float]] = {}
+        for tk in _TICKERS_DETAIL:
+            if tk in df_pivot.columns:
+                ticker_series[tk] = {
+                    str(d.date()): float(v)
+                    for d, v in df_pivot[tk].dropna().tail(365).items()
                 }
-                for d, v in recent.items()
-            ]
+
+        # Unifica tutto in history (365gg IBIT-driven)
+        history: list[dict] = []
+        ibit_series = ticker_series.get("IBIT", {})
+        all_dates = sorted(set(ibit_series) | set(total_flow_vals), reverse=False)[-365:]
+        for d in all_dates:
+            row: dict = {"date": d}
+            row["ibit_flow_usd"]   = ibit_series.get(d)
+            row["total_flow_usd"]  = total_flow_vals.get(d)
+            row["btc_close"]       = btc_prices.get(d)
+            row["btc_vol_7d"]      = btc_vols.get(d)
+            row["ibit_btc_ratio"]  = ibit_btc_vals.get(d)
+            # Flussi per-ticker extra (FBTC, GBTC)
+            for tk in ("FBTC", "GBTC"):
+                row[f"{tk.lower()}_flow_usd"] = ticker_series.get(tk, {}).get(d)
+            history.append(row)
 
         # Rolling correlations: ultima osservazione disponibile per ogni finestra
         corr_latest: dict[str, dict] = {}
@@ -352,8 +387,9 @@ def get_barriers() -> dict:
 def get_signals() -> dict:
     """Segnale composito LONG/CAUTION/RISK_OFF + backtest Sharpe.
 
-    Combina GEX regime, IBIT 3-day flow e prossimità barriere
-    per generare un segnale operativo e metrics di backtest.
+    Usa il modello multi-fattore (7 input, scoring 0-100):
+    GEX regime, ETF flow 3d, funding rate, OI change, long/short ratio,
+    put/call ratio, liquidazioni. Punteggio ≥65 = LONG, <40 = RISK_OFF.
     Risposta cachata per 5 minuti.
     """
     cached = _cache_get("signals")
@@ -368,6 +404,8 @@ def get_signals() -> dict:
         from src.flows.correlation import FlowCorrelation
         from src.edgar.structured_notes_db import StructuredNotesDB
         from src.analytics.backtest import Backtest
+        from src.analytics.signal_model import SignalModel, SignalInputs
+        from src.flows.coinglass_client import CoinGlassClient
 
         # ── GEX ────────────────────────────────────────────────────────────────
         from src.gex.gex_db import GexDB
@@ -386,8 +424,8 @@ def get_signals() -> dict:
             _detector.load_history_from_db(_gex_db.get_latest_n(90))
             _regime = _detector.detect(snapshot).regime
             _gex_db.insert_snapshot(snapshot, _regime)
-        except Exception as _e:
-            pass  # non bloccare il segnale se il DB fallisce
+        except Exception:
+            pass
 
         # ── Flussi ─────────────────────────────────────────────────────────────
         scraper   = FarsideScraper()
@@ -417,70 +455,144 @@ def get_signals() -> dict:
                     near_barrier = True
                     break
 
-        # ── Segnale composito ──────────────────────────────────────────────────
-        long_flow_threshold  =  100e6   # +100M USD flow 3d
-        short_flow_threshold = -200e6   # -200M USD flow 3d
+        # ── Macro CoinGlass (dalla cache macro se disponibile) ─────────────────
+        funding_rate_ann: float | None = None
+        oi_change_7d_pct: float | None = None
+        long_short_ratio: float | None = None
+        liquidations_long:  float | None = None
+        liquidations_short: float | None = None
 
-        if total_gex > 0 and ibit_flow_3d > long_flow_threshold and not near_barrier:
-            signal = "LONG"
-            signal_reason = (
-                f"GEX positivo ({total_gex/1e6:+.1f}M), "
-                f"IBIT flow 3d = {ibit_flow_3d/1e6:+.0f}M, "
-                f"nessuna barriera entro 5%"
-            )
-        elif total_gex < 0 and ibit_flow_3d < short_flow_threshold:
-            signal = "RISK_OFF"
-            signal_reason = (
-                f"GEX negativo ({total_gex/1e6:+.1f}M), "
-                f"IBIT flow 3d = {ibit_flow_3d/1e6:+.0f}M"
-            )
-        else:
-            signal = "CAUTION"
-            reasons = []
-            if total_gex <= 0:
-                reasons.append(f"GEX={total_gex/1e6:+.1f}M")
-            if ibit_flow_3d <= long_flow_threshold:
-                reasons.append(f"flow 3d={ibit_flow_3d/1e6:+.0f}M")
-            if near_barrier:
-                reasons.append("vicino a barriera attiva")
-            signal_reason = "Condizioni miste: " + "; ".join(reasons) if reasons else "Condizioni neutrali"
+        macro_cached = _cache_get("macro")
+        if macro_cached is not None:
+            try:
+                md = macro_cached.body  # JSONResponse
+                import json as _json
+                md = _json.loads(md)["data"]
+                funding_rate_ann  = md.get("funding_rate_annualized_pct")
+                oi_change_7d_pct  = md.get("oi_change_7d_pct")
+                long_short_ratio  = md.get("long_short_ratio_latest")
+                liquidations_long = md.get("liquidations_long_24h_usd")
+                liquidations_short = md.get("liquidations_short_24h_usd")
+            except Exception:
+                pass
+
+        if funding_rate_ann is None:
+            # Fetch diretto senza cache (per primo avvio)
+            try:
+                cg = CoinGlassClient()
+                fr_series = cg.fetch_funding_rate_history(days=14)
+                if not fr_series.empty:
+                    funding_rate_ann = float(fr_series.iloc[-1]) * 3 * 365 * 100
+            except Exception:
+                pass
+
+        if oi_change_7d_pct is None:
+            try:
+                cg = CoinGlassClient()
+                oi_series = cg.fetch_aggregated_oi_history(days=14)
+                if len(oi_series) >= 7:
+                    oi_7d_ago = float(oi_series.iloc[-8])
+                    oi_now    = float(oi_series.iloc[-1])
+                    if oi_7d_ago > 0:
+                        oi_change_7d_pct = (oi_now - oi_7d_ago) / oi_7d_ago * 100
+            except Exception:
+                pass
+
+        if long_short_ratio is None:
+            try:
+                cg = CoinGlassClient()
+                ls_series = cg.fetch_long_short_ratio(days=3)
+                if not ls_series.empty:
+                    long_short_ratio = float(ls_series.iloc[-1])
+            except Exception:
+                pass
+
+        if liquidations_long is None:
+            try:
+                cg = CoinGlassClient()
+                liq_df = cg.fetch_liquidations(days=2)
+                if not liq_df.empty:
+                    liquidations_long  = float(liq_df["long_usd"].iloc[-1])
+                    liquidations_short = float(liq_df["short_usd"].iloc[-1])
+            except Exception:
+                pass
+
+        # ── SignalModel multi-fattore ──────────────────────────────────────────
+        signal_inputs = SignalInputs(
+            gex_usd                     = total_gex,
+            etf_flow_3d_usd             = ibit_flow_3d,
+            funding_rate_annualized_pct = funding_rate_ann,
+            oi_change_7d_pct            = oi_change_7d_pct,
+            long_short_ratio            = long_short_ratio,
+            put_call_ratio              = snapshot.put_call_ratio,
+            liquidations_long_24h_usd   = liquidations_long,
+            liquidations_short_24h_usd  = liquidations_short,
+            near_active_barrier         = near_barrier,
+        )
+        model        = SignalModel()
+        signal_result = model.compute(signal_inputs)
 
         # ── Backtest ───────────────────────────────────────────────────────────
         backtest_metrics: dict = {}
+        equity_curve: list[dict] = []
         if not merged.empty and "btc_return" in merged.columns:
             _gex_series = _gex_db.get_series(days=365)
-            bt      = Backtest()
+            bt = Backtest()
             results = bt.run(
                 merged,
                 gex_series=_gex_series if not _gex_series.empty else None,
                 active_barriers=active_barriers,
+                signal_model=model,
             )
             for key, m in results.items():
                 backtest_metrics[key] = {
-                    "strategy_name":     m.strategy_name,
-                    "total_return_pct":  round(m.total_return * 100, 2),
+                    "strategy_name":        m.strategy_name,
+                    "total_return_pct":     round(m.total_return * 100, 2),
                     "annualized_return_pct": round(m.annualized_return * 100, 2),
-                    "sharpe_ratio":      round(m.sharpe_ratio, 3),
-                    "max_drawdown_pct":  round(m.max_drawdown * 100, 2),
-                    "win_rate_pct":      round(m.win_rate * 100, 2),
-                    "profit_factor":     round(m.profit_factor, 3) if m.profit_factor < 1000 else None,
-                    "n_trades":          m.n_trades,
-                    "days_long":         m.days_long,
-                    "days_short":        m.days_short,
-                    "days_flat":         m.days_flat,
+                    "sharpe_ratio":         round(m.sharpe_ratio, 3),
+                    "max_drawdown_pct":     round(m.max_drawdown * 100, 2),
+                    "win_rate_pct":         round(m.win_rate * 100, 2),
+                    "profit_factor":        round(m.profit_factor, 3) if m.profit_factor < 1000 else None,
+                    "n_trades":             m.n_trades,
+                    "days_long":            m.days_long,
+                    "days_short":           m.days_short,
+                    "days_flat":            m.days_flat,
                 }
+            # Equity curve per il frontend (strategia principale)
+            if "strategy" in results and not results["strategy"].equity_curve.empty:
+                ec = results["strategy"].equity_curve
+                bah_ec = results.get("buy_and_hold")
+                bah_vals = bah_ec.equity_curve if bah_ec else None
+                for ts, val in ec.items():
+                    row: dict = {
+                        "date":     str(ts.date()) if hasattr(ts, "date") else str(ts),
+                        "strategy": round(float(val), 4),
+                    }
+                    if bah_vals is not None and ts in bah_vals.index:
+                        row["buy_and_hold"] = round(float(bah_vals[ts]), 4)
+                    equity_curve.append(row)
 
         response = _ok({
-            "signal":         signal,
-            "signal_reason":  signal_reason,
+            "signal":         signal_result.signal,
+            "signal_reason":  signal_result.reason,
+            "score":          signal_result.score,
+            "components":     signal_result.components,
+            "weights":        signal_result.weights_used,
             "inputs": {
-                "spot_price_usd":   spot,
-                "total_gex_usd_m":  round(total_gex / 1e6, 2),
-                "ibit_flow_3d_usd_m": round(ibit_flow_3d / 1e6, 2),
-                "near_active_barrier": near_barrier,
-                "active_barriers_count": len(active_barriers),
+                "spot_price_usd":             spot,
+                "total_gex_usd_m":            round(total_gex / 1e6, 2),
+                "ibit_flow_3d_usd_m":         round(ibit_flow_3d / 1e6, 2),
+                "funding_rate_annualized_pct": funding_rate_ann,
+                "oi_change_7d_pct":           oi_change_7d_pct,
+                "long_short_ratio":           long_short_ratio,
+                "put_call_ratio":             snapshot.put_call_ratio,
+                "liquidations_long_24h_usd":  liquidations_long,
+                "liquidations_short_24h_usd": liquidations_short,
+                "near_active_barrier":        near_barrier,
+                "active_barriers_count":      len(active_barriers),
             },
-            "backtest": backtest_metrics,
+            "backtest":     backtest_metrics,
+            "equity_curve": equity_curve,
         })
         _cache_set("signals", response)
         return response
@@ -488,3 +600,141 @@ def get_signals() -> dict:
     except Exception as exc:
         traceback.print_exc()
         raise _error(f"Signals error: {exc}")
+
+
+# ─── /api/macro ───────────────────────────────────────────────────────────────
+
+@app.get("/api/macro", tags=["macro"])
+def get_macro() -> dict:
+    """Indicatori macro da CoinGlass: funding rate, OI, long/short, liquidazioni.
+
+    Restituisce i principali indicatori di sentiment e posizionamento
+    del mercato futures BTC. Risposta cachata per 1 ora (dati giornalieri).
+    """
+    cached = _cache_get("macro")
+    if cached is not None:
+        return cached
+
+    try:
+        from src.flows.coinglass_client import CoinGlassClient
+
+        cg = CoinGlassClient()
+
+        # ── Funding rate ───────────────────────────────────────────────────────
+        funding_rate_ann_pct: float | None = None
+        funding_rate_8h_pct: float | None = None
+        funding_history: list[dict] = []
+        try:
+            fr_series = cg.fetch_funding_rate_history(days=90)
+            if not fr_series.empty:
+                funding_rate_8h_pct  = round(float(fr_series.iloc[-1]) * 100, 4)
+                funding_rate_ann_pct = round(float(fr_series.iloc[-1]) * 3 * 365 * 100, 2)
+                funding_history = [
+                    {"date": str(ts.date()) if hasattr(ts, "date") else str(ts),
+                     "rate_8h_pct": round(float(v) * 100, 4)}
+                    for ts, v in fr_series.tail(90).items()
+                ]
+        except Exception as _e:
+            pass
+
+        # ── Aggregated OI ──────────────────────────────────────────────────────
+        oi_latest_usd: float | None = None
+        oi_change_7d_pct: float | None = None
+        oi_history: list[dict] = []
+        try:
+            oi_series = cg.fetch_aggregated_oi_history(days=90)
+            if not oi_series.empty:
+                oi_latest_usd = round(float(oi_series.iloc[-1]), 0)
+                if len(oi_series) >= 8:
+                    oi_7d_ago = float(oi_series.iloc[-8])
+                    if oi_7d_ago > 0:
+                        oi_change_7d_pct = round(
+                            (float(oi_series.iloc[-1]) - oi_7d_ago) / oi_7d_ago * 100, 2
+                        )
+                oi_history = [
+                    {"date": str(ts.date()) if hasattr(ts, "date") else str(ts),
+                     "oi_usd": round(float(v), 0)}
+                    for ts, v in oi_series.tail(90).items()
+                ]
+        except Exception:
+            pass
+
+        # ── Long/Short ratio ───────────────────────────────────────────────────
+        long_short_ratio_latest: float | None = None
+        ls_history: list[dict] = []
+        try:
+            ls_series = cg.fetch_long_short_ratio(days=90)
+            if not ls_series.empty:
+                long_short_ratio_latest = round(float(ls_series.iloc[-1]), 4)
+                ls_history = [
+                    {"date": str(ts.date()) if hasattr(ts, "date") else str(ts),
+                     "ratio": round(float(v), 4)}
+                    for ts, v in ls_series.tail(90).items()
+                ]
+        except Exception:
+            pass
+
+        # ── Liquidations ───────────────────────────────────────────────────────
+        liquidations_long_24h_usd: float | None = None
+        liquidations_short_24h_usd: float | None = None
+        liquidations_total_24h_usd: float | None = None
+        liq_history: list[dict] = []
+        try:
+            liq_df = cg.fetch_liquidations(days=90)
+            if not liq_df.empty:
+                liquidations_long_24h_usd  = round(float(liq_df["long_usd"].iloc[-1]), 0)
+                liquidations_short_24h_usd = round(float(liq_df["short_usd"].iloc[-1]), 0)
+                liquidations_total_24h_usd = round(float(liq_df["total_usd"].iloc[-1]), 0)
+                liq_history = [
+                    {
+                        "date":      str(ts.date()) if hasattr(ts, "date") else str(ts),
+                        "long_usd":  round(float(row["long_usd"]), 0),
+                        "short_usd": round(float(row["short_usd"]), 0),
+                        "total_usd": round(float(row["total_usd"]), 0),
+                    }
+                    for ts, row in liq_df.tail(90).iterrows()
+                ]
+        except Exception:
+            pass
+
+        # ── Taker volume ───────────────────────────────────────────────────────
+        taker_buy_ratio_latest: float | None = None
+        taker_history: list[dict] = []
+        try:
+            tk_series = cg.fetch_taker_volume(days=90)
+            if not tk_series.empty:
+                taker_buy_ratio_latest = round(float(tk_series.iloc[-1]), 4)
+                taker_history = [
+                    {"date": str(ts.date()) if hasattr(ts, "date") else str(ts),
+                     "buy_ratio": round(float(v), 4)}
+                    for ts, v in tk_series.tail(90).items()
+                ]
+        except Exception:
+            pass
+
+        response = _ok({
+            # Valori puntuali (latest)
+            "funding_rate_8h_pct":          funding_rate_8h_pct,
+            "funding_rate_annualized_pct":  funding_rate_ann_pct,
+            "futures_oi_usd":               oi_latest_usd,
+            "oi_change_7d_pct":             oi_change_7d_pct,
+            "long_short_ratio_latest":      long_short_ratio_latest,
+            "liquidations_long_24h_usd":    liquidations_long_24h_usd,
+            "liquidations_short_24h_usd":   liquidations_short_24h_usd,
+            "liquidations_total_24h_usd":   liquidations_total_24h_usd,
+            "taker_buy_ratio_latest":       taker_buy_ratio_latest,
+            # Serie storiche per grafici (90gg)
+            "history": {
+                "funding_rate": funding_history,
+                "oi":           oi_history,
+                "long_short":   ls_history,
+                "liquidations": liq_history,
+                "taker":        taker_history,
+            },
+        })
+        _cache_set("macro", response)
+        return response
+
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"Macro error: {exc}")
