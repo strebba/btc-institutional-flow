@@ -146,13 +146,18 @@ class DeribitClient:
             self._circuit_breaker.record_failure()
             raise
         except requests.HTTPError as e:
-            self._circuit_breaker.record_failure()
-            status = e.response.status_code if e.response else 0
+            # NOTE: bool(requests.Response) == response.ok, which is False for 4xx/5xx.
+            # Must use "is not None" to distinguish "no response" from "error response".
+            status = e.response.status_code if e.response is not None else 0
             if status == 429:
+                # 429 è un rate-limit applicativo, non un errore di rete:
+                # non conta come failure del circuit breaker (altrimenti il circuit
+                # si apre e dorme 5s su ogni request, rallentando il fetch).
                 retry_after = int(e.response.headers.get("Retry-After", 2))
                 _log.debug("429 on %s — sleeping %ds before retry", endpoint, retry_after)
                 time.sleep(retry_after)
             else:
+                self._circuit_breaker.record_failure()
                 _log.warning("HTTP error fetching %s: %s (status=%d)", endpoint, e, status)
             raise
 
