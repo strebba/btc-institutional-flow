@@ -11,6 +11,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import threading
 import traceback
 from datetime import datetime, timezone
 from typing import Any
@@ -34,11 +35,16 @@ _cache: dict[str, tuple[float, Any]] = {}  # key → (timestamp, payload)
 
 _TTL = {
     "gex":      300,   # 5 min  — opzioni Deribit, ~90s fetch
+    "_gex_data": 300,  # 5 min  — raw GexSnapshot objects (condivisi tra /gex e /signals)
     "flows":    900,   # 15 min — Farside scrape
     "barriers": 3600,  # 1 ora  — dati SEC EDGAR statici
     "signals":  300,   # 5 min  — dipende da gex + flows
     "macro":    3600,  # 1 ora  — dati CoinGlass giornalieri
 }
+
+# Lock che impedisce fetch Deribit concorrenti: il secondo richiedente attende
+# il primo e poi legge dalla cache invece di lanciare un nuovo fetch da 888 opzioni.
+_gex_fetch_lock = threading.Lock()
 
 
 def _cache_get(key: str) -> Any | None:
@@ -140,6 +146,54 @@ def health() -> dict:
     return _ok({"service": "btc-institutional-flow", "healthy": True})
 
 
+# ─── GEX shared fetch (dedup lock) ────────────────────────────────────────────
+
+def _get_gex_data() -> dict:
+    """Fetch GEX objects con lock anti-concorrenza.
+
+    Garantisce che un solo fetch Deribit sia in corso alla volta: il secondo
+    chiamante (es. /signals che arriva mentre /gex sta già fetchando) attende
+    il lock e poi trova i dati già in cache.
+
+    Returns:
+        dict con chiavi: snapshot, spot, state, gex_db
+    """
+    from src.gex.deribit_client import DeribitClient
+    from src.gex.gex_calculator import GexCalculator
+    from src.gex.gex_db import GexDB
+    from src.gex.regime_detector import RegimeDetector
+
+    # Fast path — nessun lock necessario
+    cached = _cache_get("_gex_data")
+    if cached is not None:
+        return cached
+
+    with _gex_fetch_lock:
+        # Double-check: un altro thread potrebbe aver popolato la cache mentre aspettavamo
+        cached = _cache_get("_gex_data")
+        if cached is not None:
+            return cached
+
+        client     = DeribitClient()
+        spot       = client.get_spot_price()
+        options    = client.fetch_all_options("BTC")
+        calculator = GexCalculator()
+        snapshot   = calculator.calculate_gex(options, spot)
+
+        gex_db   = GexDB()
+        detector = RegimeDetector()
+        detector.load_history_from_db(gex_db.get_latest_n(90))
+        state = detector.detect(snapshot)
+        try:
+            gex_db.insert_snapshot(snapshot, state.regime)
+        except Exception as _e:
+            _log.warning("GEX DB persist failed: %s", _e)
+
+        data = {"snapshot": snapshot, "spot": spot, "state": state, "gex_db": gex_db}
+        _cache_set("_gex_data", data)
+        return data
+
+
 # ─── /api/gex ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/gex", tags=["gex"])
@@ -155,39 +209,25 @@ def get_gex() -> dict:
         return cached
 
     try:
-        from src.gex.deribit_client import DeribitClient
         from src.gex.gex_calculator import GexCalculator
-        from src.gex.regime_detector import RegimeDetector
 
-        client     = DeribitClient()
-        spot       = client.get_spot_price()
-        options    = client.fetch_all_options("BTC")
+        gex_data = _get_gex_data()
+        snapshot = gex_data["snapshot"]
+        spot     = gex_data["spot"]
+        state    = gex_data["state"]
 
         calculator = GexCalculator()
-        snapshot   = calculator.calculate_gex(options, spot)
         gex_dict   = calculator.gex_to_dict(snapshot)
-
-        from src.gex.gex_db import GexDB
-        _gex_db_gex = GexDB()
-        detector    = RegimeDetector()
-        detector.load_history_from_db(_gex_db_gex.get_latest_n(90))
-        state       = detector.detect(snapshot)
-
-        # Persiste snapshot nel DB storico
-        try:
-            _gex_db_gex.insert_snapshot(snapshot, state.regime)
-        except Exception as _e:
-            _log.warning("GEX DB persist failed (snapshot non salvato): %s", _e)
 
         # Profilo per strike (intorno a ±40% dallo spot)
         strike_profile = [
             {
-                "strike":   gs.strike,
+                "strike":    gs.strike,
                 "net_gex_m": round(gs.net_gex / 1e6, 4),
                 "call_gex_m": round(gs.call_gex / 1e6, 4),
                 "put_gex_m":  round(gs.put_gex / 1e6, 4),
-                "call_oi":  gs.call_oi,
-                "put_oi":   gs.put_oi,
+                "call_oi":   gs.call_oi,
+                "put_oi":    gs.put_oi,
             }
             for gs in snapshot.gex_by_strike
             if abs(gs.strike - spot) / spot < 0.40
@@ -196,19 +236,18 @@ def get_gex() -> dict:
         response = _ok({
             "snapshot": gex_dict,
             "regime": {
-                "label":         state.regime,
-                "alerts":        state.alerts,
+                "label":          state.regime,
+                "alerts":         state.alerts,
                 "gex_percentile": state.gex_percentile,
             },
             "strike_profile": strike_profile,
-            # Campi aggiuntivi per dashboard avanzata
             "options_metrics": {
-                "put_call_ratio":           snapshot.put_call_ratio,
-                "max_pain":                 snapshot.max_pain,
-                "distance_to_put_wall_pct": snapshot.distance_to_put_wall_pct,
+                "put_call_ratio":            snapshot.put_call_ratio,
+                "max_pain":                  snapshot.max_pain,
+                "distance_to_put_wall_pct":  snapshot.distance_to_put_wall_pct,
                 "distance_to_call_wall_pct": snapshot.distance_to_call_wall_pct,
-                "total_call_oi":            snapshot.total_call_oi,
-                "total_put_oi":             snapshot.total_put_oi,
+                "total_call_oi":             snapshot.total_call_oi,
+                "total_put_oi":              snapshot.total_put_oi,
             },
         })
         _cache_set("gex", response)
@@ -413,8 +452,6 @@ def get_signals() -> dict:
         return cached
 
     try:
-        from src.gex.deribit_client import DeribitClient
-        from src.gex.gex_calculator import GexCalculator
         from src.flows.scraper import FarsideScraper
         from src.flows.price_fetcher import PriceFetcher
         from src.flows.correlation import FlowCorrelation
@@ -423,25 +460,12 @@ def get_signals() -> dict:
         from src.analytics.signal_model import SignalModel, SignalInputs
         from src.flows.coinglass_client import CoinGlassClient
 
-        # ── GEX ────────────────────────────────────────────────────────────────
-        from src.gex.gex_db import GexDB
-        from src.gex.regime_detector import RegimeDetector
-        client     = DeribitClient()
-        spot       = client.get_spot_price()
-        options    = client.fetch_all_options("BTC")
-        calculator = GexCalculator()
-        snapshot   = calculator.calculate_gex(options, spot)
-        total_gex  = snapshot.total_net_gex
-
-        # Persiste snapshot nel DB storico
-        _gex_db = GexDB()
-        try:
-            _detector = RegimeDetector()
-            _detector.load_history_from_db(_gex_db.get_latest_n(90))
-            _regime = _detector.detect(snapshot).regime
-            _gex_db.insert_snapshot(snapshot, _regime)
-        except Exception as _e:
-            _log.warning("GEX DB persist fallito in /signals: %s", _e)
+        # ── GEX — riusa il fetch già in cache (o attende il lock) ──────────────
+        gex_data  = _get_gex_data()
+        snapshot  = gex_data["snapshot"]
+        spot      = gex_data["spot"]
+        _gex_db   = gex_data["gex_db"]
+        total_gex = snapshot.total_net_gex
 
         # ── Flussi ─────────────────────────────────────────────────────────────
         scraper   = FarsideScraper()
@@ -487,11 +511,14 @@ def get_signals() -> dict:
             liquidations_long  = macro_data_cached.get("liquidations_long_24h_usd")
             liquidations_short = macro_data_cached.get("liquidations_short_24h_usd")
 
+        # Istanza singola condivisa tra tutti i fetch CoinGlass di questo endpoint
+        _cg: CoinGlassClient | None = None
+
         if funding_rate_ann is None:
             # Fetch diretto senza cache (per primo avvio)
             try:
-                cg = CoinGlassClient()
-                fr_series = cg.fetch_funding_rate_history(days=14)
+                _cg = _cg or CoinGlassClient()
+                fr_series = _cg.fetch_funding_rate_history(days=14)
                 if not fr_series.empty:
                     funding_rate_ann = float(fr_series.iloc[-1]) * 3 * 365 * 100
             except Exception as _e:
@@ -499,8 +526,8 @@ def get_signals() -> dict:
 
         if oi_change_7d_pct is None:
             try:
-                cg = CoinGlassClient()
-                oi_series = cg.fetch_aggregated_oi_history(days=14)
+                _cg = _cg or CoinGlassClient()
+                oi_series = _cg.fetch_aggregated_oi_history(days=14)
                 if len(oi_series) >= 7:
                     oi_7d_ago = float(oi_series.iloc[-8])
                     oi_now    = float(oi_series.iloc[-1])
@@ -511,8 +538,8 @@ def get_signals() -> dict:
 
         if long_short_ratio is None:
             try:
-                cg = CoinGlassClient()
-                ls_series = cg.fetch_long_short_ratio(days=3)
+                _cg = _cg or CoinGlassClient()
+                ls_series = _cg.fetch_long_short_ratio(days=3)
                 if not ls_series.empty:
                     long_short_ratio = float(ls_series.iloc[-1])
             except Exception as _e:
@@ -520,8 +547,8 @@ def get_signals() -> dict:
 
         if liquidations_long is None:
             try:
-                cg = CoinGlassClient()
-                liq_df = cg.fetch_liquidations(days=2)
+                _cg = _cg or CoinGlassClient()
+                liq_df = _cg.fetch_liquidations(days=2)
                 if not liq_df.empty:
                     liquidations_long  = float(liq_df["long_usd"].iloc[-1])
                     liquidations_short = float(liq_df["short_usd"].iloc[-1])

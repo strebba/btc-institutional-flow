@@ -11,21 +11,28 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import lru_cache
-from typing import Any, Optional
-
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import lru_cache
 from typing import Any, Optional
 
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 from src.config import get_settings, setup_logging
 
 _log = setup_logging("gex.deribit")
+
+# Module-level throttle: shared across ALL DeribitClient instances so concurrent
+# requests from different endpoints don't collectively exceed Deribit's rate limit.
+_global_throttle_lock = threading.Lock()
+_global_last_request: float = 0.0
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    """Tenacity predicate: retry on network errors and 429 rate-limit responses."""
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        return exc.response is not None and exc.response.status_code == 429
+    return False
 
 
 class CircuitBreaker:
@@ -76,8 +83,6 @@ class DeribitClient:
             }
         )
         self._min_interval = 1.0 / self._cfg["rate_limit_rps"]
-        self._last_request: float = 0.0
-        self._throttle_lock = threading.Lock()
         self._cache: dict[str, Any] = {}
         self._circuit_breaker = CircuitBreaker(failure_threshold=20, recovery_timeout=60)
 
@@ -86,18 +91,19 @@ class DeribitClient:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _throttle(self) -> None:
-        """Rispetta il rate limit configurato (thread-safe)."""
-        with self._throttle_lock:
-            elapsed = time.monotonic() - self._last_request
+        """Rispetta il rate limit configurato (thread-safe, globale tra istanze)."""
+        global _global_last_request
+        with _global_throttle_lock:
+            elapsed = time.monotonic() - _global_last_request
             wait = self._min_interval - elapsed
             if wait > 0:
                 time.sleep(wait)
-            self._last_request = time.monotonic()
+            _global_last_request = time.monotonic()
 
     @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=2, max=30),
-        retry=retry_if_exception_type((requests.Timeout, requests.ConnectionError)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=1, max=10),
+        retry=retry_if_exception(_is_retryable_error),
         reraise=True,
     )
     def _get(self, endpoint: str, params: dict | None = None) -> Any:
@@ -141,12 +147,13 @@ class DeribitClient:
             raise
         except requests.HTTPError as e:
             self._circuit_breaker.record_failure()
-            _log.warning(
-                "HTTP error fetching %s: %s (status=%d)",
-                endpoint,
-                e,
-                e.response.status_code if e.response else 0,
-            )
+            status = e.response.status_code if e.response else 0
+            if status == 429:
+                retry_after = int(e.response.headers.get("Retry-After", 2))
+                _log.debug("429 on %s — sleeping %ds before retry", endpoint, retry_after)
+                time.sleep(retry_after)
+            else:
+                _log.warning("HTTP error fetching %s: %s (status=%d)", endpoint, e, status)
             raise
 
     def clear_cache(self) -> None:
