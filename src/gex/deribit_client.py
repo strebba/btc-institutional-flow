@@ -5,6 +5,7 @@ Endpoints usati (tutti GET, no auth):
   GET /public/ticker?instrument_name={name}
   GET /public/get_index_price?index_name=btc_usd
 """
+
 from __future__ import annotations
 
 import threading
@@ -13,12 +14,47 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from typing import Any, Optional
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
+from typing import Any, Optional
+
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from src.config import get_settings, setup_logging
 
 _log = setup_logging("gex.deribit")
+
+
+class CircuitBreaker:
+    """Circuit breaker per evitare cascata errori durante fetch massivo."""
+
+    def __init__(self, failure_threshold: int = 20, recovery_timeout: int = 60) -> None:
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failures = 0
+        self.last_failure_time: float = 0.0
+        self._lock = threading.Lock()
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self.failures += 1
+            self.last_failure_time = time.time()
+
+    def record_success(self) -> None:
+        with self._lock:
+            self.failures = 0
+
+    def is_open(self) -> bool:
+        with self._lock:
+            if self.failures >= self.failure_threshold:
+                if time.time() - self.last_failure_time > self.recovery_timeout:
+                    self.failures = 0
+                    return False
+                return True
+            return False
 
 
 class DeribitClient:
@@ -33,15 +69,17 @@ class DeribitClient:
     def __init__(self, cfg: dict | None = None) -> None:
         self._cfg = cfg or get_settings()["deribit"]
         self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": "ibit-gamma-tracker/1.0",
-            "Accept":     "application/json",
-        })
+        self._session.headers.update(
+            {
+                "User-Agent": "ibit-gamma-tracker/1.0",
+                "Accept": "application/json",
+            }
+        )
         self._min_interval = 1.0 / self._cfg["rate_limit_rps"]
         self._last_request: float = 0.0
         self._throttle_lock = threading.Lock()
-        # Cache in memoria per la sessione (evita richieste duplicate)
         self._cache: dict[str, Any] = {}
+        self._circuit_breaker = CircuitBreaker(failure_threshold=20, recovery_timeout=60)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Internal helpers
@@ -51,12 +89,17 @@ class DeribitClient:
         """Rispetta il rate limit configurato (thread-safe)."""
         with self._throttle_lock:
             elapsed = time.monotonic() - self._last_request
-            wait    = self._min_interval - elapsed
+            wait = self._min_interval - elapsed
             if wait > 0:
                 time.sleep(wait)
             self._last_request = time.monotonic()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=0.5, max=10))
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type((requests.Timeout, requests.ConnectionError)),
+        reraise=True,
+    )
     def _get(self, endpoint: str, params: dict | None = None) -> Any:
         """GET con throttle, retry e caching.
 
@@ -75,18 +118,36 @@ class DeribitClient:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        if self._circuit_breaker.is_open():
+            _log.warning("Circuit breaker OPEN - throttling requests")
+            time.sleep(5)
+
         self._throttle()
-        url  = f"{self.BASE_URL}{endpoint}"
-        resp = self._session.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        url = f"{self.BASE_URL}{endpoint}"
+        try:
+            resp = self._session.get(url, params=params, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
 
-        if "error" in data:
-            raise RuntimeError(f"Deribit API error: {data['error']}")
+            if "error" in data:
+                raise RuntimeError(f"Deribit API error: {data['error']}")
 
-        result = data.get("result")
-        self._cache[cache_key] = result
-        return result
+            result = data.get("result")
+            self._cache[cache_key] = result
+            self._circuit_breaker.record_success()
+            return result
+        except (requests.Timeout, requests.ConnectionError) as e:
+            self._circuit_breaker.record_failure()
+            raise
+        except requests.HTTPError as e:
+            self._circuit_breaker.record_failure()
+            _log.warning(
+                "HTTP error fetching %s: %s (status=%d)",
+                endpoint,
+                e,
+                e.response.status_code if e.response else 0,
+            )
+            raise
 
     def clear_cache(self) -> None:
         """Svuota la cache in memoria."""
@@ -121,11 +182,14 @@ class DeribitClient:
         Returns:
             list[dict]: lista di strumenti con nome, strike, tipo, scadenza.
         """
-        result = self._get("/get_instruments", {
-            "currency": currency,
-            "kind":     kind,
-            "expired":  str(expired).lower(),
-        })
+        result = self._get(
+            "/get_instruments",
+            {
+                "currency": currency,
+                "kind": kind,
+                "expired": str(expired).lower(),
+            },
+        )
         return result or []
 
     def get_ticker(self, instrument_name: str) -> dict:
@@ -157,10 +221,13 @@ class DeribitClient:
         Returns:
             dict: book con gamma, delta, open_interest, etc.
         """
-        result = self._get("/get_order_book", {
-            "instrument_name": instrument_name,
-            "depth":           depth,
-        })
+        result = self._get(
+            "/get_order_book",
+            {
+                "instrument_name": instrument_name,
+                "depth": depth,
+            },
+        )
         return result or {}
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -187,19 +254,19 @@ class DeribitClient:
             ticker = self.get_ticker(name)
             greeks = ticker.get("greeks", {})
             return {
-                "instrument_name":      name,
-                "strike":               float(instr.get("strike", 0)),
-                "option_type":          instr.get("option_type", ""),
+                "instrument_name": name,
+                "strike": float(instr.get("strike", 0)),
+                "option_type": instr.get("option_type", ""),
                 "expiration_timestamp": instr.get("expiration_timestamp", 0),
-                "gamma":                float(greeks.get("gamma", 0) or 0),
-                "delta":                float(greeks.get("delta", 0) or 0),
-                "vega":                 float(greeks.get("vega",  0) or 0),
-                "open_interest":        float(ticker.get("open_interest", 0) or 0),
-                "mark_price":           float(ticker.get("mark_price", 0) or 0),
-                "mark_iv":              float(ticker.get("mark_iv", 0) or 0),
-                "underlying_price":     float(ticker.get("underlying_price", 0) or 0),
-                "best_bid":             float(ticker.get("best_bid_price", 0) or 0),
-                "best_ask":             float(ticker.get("best_ask_price", 0) or 0),
+                "gamma": float(greeks.get("gamma", 0) or 0),
+                "delta": float(greeks.get("delta", 0) or 0),
+                "vega": float(greeks.get("vega", 0) or 0),
+                "open_interest": float(ticker.get("open_interest", 0) or 0),
+                "mark_price": float(ticker.get("mark_price", 0) or 0),
+                "mark_iv": float(ticker.get("mark_iv", 0) or 0),
+                "underlying_price": float(ticker.get("underlying_price", 0) or 0),
+                "best_bid": float(ticker.get("best_bid_price", 0) or 0),
+                "best_ask": float(ticker.get("best_ask_price", 0) or 0),
             }
         except Exception as e:
             _log.warning("Errore fetch opzione %s: %s", name, e)
@@ -224,14 +291,13 @@ class DeribitClient:
         _log.info("Strumenti %s attivi: %d — avvio fetch concorrente", currency, len(instruments))
 
         results: list[dict] = []
-        errors  = 0
+        errors = 0
         # max_workers > rate_limit_rps: i thread extra restano in attesa del throttle
         max_workers = min(len(instruments), 20)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(self._fetch_one_option, instr): instr
-                for instr in instruments
+                executor.submit(self._fetch_one_option, instr): instr for instr in instruments
             }
             for i, future in enumerate(as_completed(futures), 1):
                 result = future.result()
@@ -244,6 +310,7 @@ class DeribitClient:
 
         _log.info(
             "Fetch completato: %d opzioni valide, %d errori",
-            len(results), errors,
+            len(results),
+            errors,
         )
         return results

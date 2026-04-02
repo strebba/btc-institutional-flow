@@ -10,6 +10,7 @@ API key: env var COINGLASS_API_KEY > settings.yaml coinglass.api_key.
 
 Docs: https://docs.coinglass.com
 """
+
 from __future__ import annotations
 
 import os
@@ -21,18 +22,24 @@ import requests
 
 try:
     from tenacity import retry, stop_after_attempt, wait_exponential
+
     _HAS_TENACITY = True
 except ImportError:
     _HAS_TENACITY = False
+
     # No-op fallback: il decorator non fa nulla senza tenacity
     def retry(*args, **kwargs):  # type: ignore[misc]
         def decorator(fn):
             return fn
+
         return decorator
+
     def stop_after_attempt(n):  # type: ignore[misc]
         return None
+
     def wait_exponential(**kwargs):  # type: ignore[misc]
         return None
+
 
 import pandas as pd
 
@@ -56,30 +63,30 @@ class CoinGlassClient:
     BASE_URL = "https://open-api-v4.coinglass.com"
 
     def __init__(self, cfg: dict | None = None) -> None:
-        settings   = get_settings()
-        self._cfg  = cfg or settings.get("coinglass", {})
+        settings = get_settings()
+        self._cfg = cfg or settings.get("coinglass", {})
 
         # API key: env var ha precedenza su settings.yaml
-        self._api_key = (
-            os.getenv("COINGLASS_API_KEY")
-            or self._cfg.get("api_key", "")
-        ).strip()
+        self._api_key = (os.getenv("COINGLASS_API_KEY") or self._cfg.get("api_key", "")).strip()
 
-        self._timeout      = self._cfg.get("timeout_s", 15)
-        self._rate_limit   = self._cfg.get("rate_limit_rps", 1.0)
+        self._timeout = self._cfg.get("timeout_s", 15)
+        self._rate_limit = self._cfg.get("rate_limit_rps", 1.0)
         self._last_call_ts = 0.0
 
         self._session = requests.Session()
-        self._session.headers.update({
-            "CG-API-KEY": self._api_key,
-            "Accept":     "application/json",
-        })
+        self._session.headers.update(
+            {
+                "CG-API-KEY": self._api_key,
+                "Accept": "application/json",
+            }
+        )
+        _log.info("CoinGlass client initialized (API key present: %s)", bool(self._api_key))
 
     def _throttle(self) -> None:
         """Rispetta il rate limit configurato (req/s)."""
         if self._rate_limit > 0:
             elapsed = time.time() - self._last_call_ts
-            wait    = (1.0 / self._rate_limit) - elapsed
+            wait = (1.0 / self._rate_limit) - elapsed
             if wait > 0:
                 time.sleep(wait)
         self._last_call_ts = time.time()
@@ -106,17 +113,34 @@ class CoinGlassClient:
 
         self._throttle()
         url = self._cfg.get("base_url", self.BASE_URL) + path
-        resp = self._session.get(url, params=params or {}, timeout=self._timeout)
+        try:
+            resp = self._session.get(url, params=params or {}, timeout=self._timeout)
+        except requests.Timeout:
+            _log.warning("CoinGlass timeout: %s %s", path, params)
+            raise CoinGlassError(f"Timeout requesting {path}")
+        except requests.ConnectionError as e:
+            _log.warning("CoinGlass connection error: %s", e)
+            raise CoinGlassError(f"Connection error requesting {path}")
 
         if resp.status_code == 401:
             raise CoinGlassError("CoinGlass: API key non valida (401)")
+        if resp.status_code == 403:
+            _log.warning("CoinGlass: endpoint %s non disponibile per il tier corrente (403)", path)
+            raise CoinGlassError(f"Endpoint {path} not available (403)")
         if resp.status_code == 429:
             raise CoinGlassError("CoinGlass: rate limit superato (429)")
-        resp.raise_for_status()
+
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            _log.error("CoinGlass HTTP error: %s (status=%d)", e, resp.status_code)
+            raise CoinGlassError(f"HTTP error: {resp.status_code}")
 
         body = resp.json()
         if body.get("code") != "0":
-            raise CoinGlassError(f"CoinGlass API error: {body.get('msg', body)}")
+            msg = body.get("msg", body)
+            _log.warning("CoinGlass API error: %s", msg)
+            raise CoinGlassError(f"API error: {msg}")
 
         return body.get("data", [])
 
@@ -167,17 +191,19 @@ class CoinGlassClient:
             etf_flows_list: list[dict] = entry.get("etf_flows") or []
             if etf_flows_list:
                 for etf_entry in etf_flows_list:
-                    ticker   = etf_entry.get("etf_ticker") or etf_entry.get("ticker")
+                    ticker = etf_entry.get("etf_ticker") or etf_entry.get("ticker")
                     flow_val = etf_entry.get("flow_usd")
                     if not ticker or flow_val is None:
                         continue
                     try:
-                        results.append(EtfFlowData(
-                            date     = flow_date,
-                            ticker   = str(ticker),
-                            flow_usd = float(flow_val),
-                            source   = "coinglass",
-                        ))
+                        results.append(
+                            EtfFlowData(
+                                date=flow_date,
+                                ticker=str(ticker),
+                                flow_usd=float(flow_val),
+                                source="coinglass",
+                            )
+                        )
                     except (TypeError, ValueError):
                         continue
             else:
@@ -187,12 +213,14 @@ class CoinGlassClient:
                     if flow_val is None:
                         continue
                     try:
-                        results.append(EtfFlowData(
-                            date     = flow_date,
-                            ticker   = str(ticker),
-                            flow_usd = float(flow_val),
-                            source   = "coinglass",
-                        ))
+                        results.append(
+                            EtfFlowData(
+                                date=flow_date,
+                                ticker=str(ticker),
+                                flow_usd=float(flow_val),
+                                source="coinglass",
+                            )
+                        )
                     except (TypeError, ValueError):
                         continue
 
@@ -281,7 +309,9 @@ class CoinGlassClient:
             elif isinstance(item, dict):
                 ts_ms = item.get("t") or item.get("time")
                 # "close" è il campo reale nella risposta v4 OHLC aggregated OI
-                oi    = item.get("close") or item.get("c") or item.get("openInterest") or item.get("oi")
+                oi = (
+                    item.get("close") or item.get("c") or item.get("openInterest") or item.get("oi")
+                )
             else:
                 continue
             if ts_ms is None or oi is None:
@@ -315,13 +345,34 @@ class CoinGlassClient:
             pd.Series con DatetimeIndex (tz-naive) e valori float (ratio).
             Serie vuota su errore.
         """
-        try:
-            data = self._get(
-                "/api/futures/global-long-short-account-ratio/history",
-                {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
-            )
-        except (CoinGlassError, Exception) as e:
-            _log.warning("CoinGlass long/short ratio: %s", e)
+        data = None
+
+        # Try different exchange/symbol combinations based on CoinGlass API docs
+        param_sets = [
+            {"exchange": "Binance", "symbol": "BTCUSDT", "interval": "1d", "limit": min(days, 500)},
+            {"exchange": "OKX", "symbol": "BTCUSDT", "interval": "1d", "limit": min(days, 500)},
+            {"exchange": "Bybit", "symbol": "BTCUSDT", "interval": "1d", "limit": min(days, 500)},
+            {
+                "exchange": "Binance,OKX,Bybit",
+                "symbol": "BTCUSDT",
+                "interval": "1d",
+                "limit": min(days, 500),
+            },
+        ]
+
+        for params in param_sets:
+            try:
+                data = self._get(
+                    "/api/futures/global-long-short-account-ratio/history",
+                    params,
+                )
+                if data:
+                    break
+            except CoinGlassError:
+                continue
+
+        if data is None:
+            _log.warning("CoinGlass long/short ratio: all parameter combinations failed")
             return pd.Series(dtype=float, name="long_short_ratio")
 
         if not isinstance(data, list) or not data:
@@ -333,13 +384,13 @@ class CoinGlassClient:
                 ts_ms, ratio = item[0], item[1]
             elif isinstance(item, dict):
                 ts_ms = item.get("t") or item.get("time") or item.get("createTime")
-                # v4: long_ratio / short_ratio; v3: longShortRatio o ratio
-                long_r  = item.get("long_ratio") or item.get("longRatio")
-                short_r = item.get("short_ratio") or item.get("shortRatio")
-                if long_r is not None and short_r is not None and float(short_r) > 0:
-                    ratio = float(long_r) / float(short_r)
-                else:
-                    ratio = item.get("longShortRatio") or item.get("ratio") or item.get("c")
+                # Updated field names from CoinGlass API docs
+                ratio = (
+                    item.get("global_account_long_short_ratio")
+                    or item.get("longShortRatio")
+                    or item.get("ratio")
+                    or item.get("c")
+                )
             else:
                 continue
             if ts_ms is None or ratio is None:
@@ -377,13 +428,39 @@ class CoinGlassClient:
             DataFrame vuoto su errore.
         """
         _EMPTY = pd.DataFrame(columns=["long_usd", "short_usd", "total_usd"])
-        try:
-            data = self._get(
-                "/api/futures/liquidation/aggregated-history",
-                {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
-            )
-        except (CoinGlassError, Exception) as e:
-            _log.warning("CoinGlass liquidations: %s", e)
+
+        data = None
+        # Try different exchange_list based on CoinGlass API docs - requires exchange_list param
+        param_sets = [
+            {
+                "exchange_list": "Binance,OKX,Bybit",
+                "symbol": "BTC",
+                "interval": "1d",
+                "limit": min(days, 500),
+            },
+            {
+                "exchange_list": "Binance",
+                "symbol": "BTC",
+                "interval": "1d",
+                "limit": min(days, 500),
+            },
+            {"exchange_list": "OKX", "symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
+            {"exchange_list": "Bybit", "symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
+        ]
+
+        for params in param_sets:
+            try:
+                data = self._get(
+                    "/api/futures/liquidation/aggregated-history",
+                    params,
+                )
+                if data:
+                    break
+            except CoinGlassError:
+                continue
+
+        if data is None:
+            _log.warning("CoinGlass liquidations: all parameter combinations failed")
             return _EMPTY
 
         if not isinstance(data, list) or not data:
@@ -394,12 +471,24 @@ class CoinGlassClient:
             if isinstance(item, list) and len(item) >= 3:
                 ts_ms, long_v, short_v = item[0], item[1], item[2]
             elif isinstance(item, dict):
-                ts_ms   = item.get("t") or item.get("time")
-                # v4: long_liquidation_usd_24h / short_liquidation_usd_24h; v3: longLiquidationUsd ecc.
-                long_v  = (item.get("long_liquidation_usd_24h") or item.get("longLiquidationUsd")
-                           or item.get("buyUsd") or item.get("long") or 0.0)
-                short_v = (item.get("short_liquidation_usd_24h") or item.get("shortLiquidationUsd")
-                           or item.get("sellUsd") or item.get("short") or 0.0)
+                ts_ms = item.get("t") or item.get("time")
+                # Updated field names from CoinGlass API docs
+                long_v = (
+                    item.get("aggregated_long_liquidation_usd")
+                    or item.get("long_liquidation_usd_24h")
+                    or item.get("longLiquidationUsd")
+                    or item.get("buyUsd")
+                    or item.get("long")
+                    or 0.0
+                )
+                short_v = (
+                    item.get("aggregated_short_liquidation_usd")
+                    or item.get("short_liquidation_usd_24h")
+                    or item.get("shortLiquidationUsd")
+                    or item.get("sellUsd")
+                    or item.get("short")
+                    or 0.0
+                )
             else:
                 continue
             if ts_ms is None:
@@ -434,39 +523,41 @@ class CoinGlassClient:
             pd.Series con DatetimeIndex (tz-naive) e valori float (ratio 0-1).
             Serie vuota su errore.
         """
-        try:
-            data = self._get(
-                "/api/futures/aggregated-taker-buy-sell-volume/history",
-                {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
-            )
-        except (CoinGlassError, Exception) as e:
-            _log.warning("CoinGlass taker volume: %s", e)
-            return pd.Series(dtype=float, name="taker_buy_ratio")
+        data = None
+        # Use correct endpoint from CoinGlass API docs: /api/futures/taker-buy-sell-volume/exchange-list
+        param_sets = [
+            {"symbol": "BTC", "range": "1d"},
+            {"symbol": "BTC", "range": "4h"},
+            {"symbol": "BTC", "range": "24h"},
+        ]
 
-        if not isinstance(data, list) or not data:
-            return pd.Series(dtype=float, name="taker_buy_ratio")
-
-        rows: list[tuple] = []
-        for item in data:
-            if isinstance(item, dict):
-                ts_ms = item.get("t") or item.get("time")
-                # v4: buy_volume_usd / sell_volume_usd; v3: buyVolume / sellVolume
-                buy   = next((item[k] for k in ("buy_volume_usd", "buyVolume", "buy", "takerBuyVolume")   if k in item and item[k] is not None), None)
-                sell  = next((item[k] for k in ("sell_volume_usd", "sellVolume", "sell", "takerSellVolume") if k in item and item[k] is not None), None)
-            elif isinstance(item, list) and len(item) >= 3:
-                ts_ms, buy, sell = item[0], item[1], item[2]
-            else:
-                continue
-            if ts_ms is None or buy is None or sell is None:
-                continue
+        for params in param_sets:
             try:
-                total = float(buy) + float(sell)
-                if total <= 0:
-                    continue
-                dt = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
-                rows.append((dt, float(buy) / total))
-            except (TypeError, ValueError, OSError):
+                data = self._get(
+                    "/api/futures/taker-buy-sell-volume/exchange-list",
+                    params,
+                )
+                if data:
+                    break
+            except CoinGlassError:
                 continue
+
+        if data is None:
+            _log.warning("CoinGlass taker volume: all parameter combinations failed")
+            return pd.Series(dtype=float, name="taker_buy_ratio")
+
+        if not isinstance(data, dict) or not data:
+            return pd.Series(dtype=float, name="taker_buy_ratio")
+
+        # New response format: {"symbol": "BTC", "buy_ratio": 51.01, "sell_ratio": 48.99, ...}
+        # We only get one data point (current), not historical
+        buy_ratio = data.get("buy_ratio")
+        if buy_ratio is not None:
+            # Return current buy ratio as a single-value series
+            now = datetime.now(timezone.utc)
+            return pd.Series([float(buy_ratio) / 100], index=[now], name="taker_buy_ratio")
+
+        return pd.Series(dtype=float, name="taker_buy_ratio")
 
         if not rows:
             return pd.Series(dtype=float, name="taker_buy_ratio")

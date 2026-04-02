@@ -6,6 +6,7 @@ Usa statsmodels.tsa.stattools.grangercausalitytests per testare:
 
 Per lag da 1 a max_lags giorni.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -70,12 +71,14 @@ class GrangerAnalysis:
             _log.warning("%s: troppo pochi dati per ADF (%d)", name, len(clean))
             return True  # assume stazionaria
 
-        result  = adfuller(clean, autolag="AIC")
+        result = adfuller(clean, autolag="AIC")
         p_value = result[1]
         is_stat = p_value < 0.05
         _log.info(
             "ADF %s: p=%.4f → %s",
-            name, p_value, "stazionaria" if is_stat else "NON stazionaria",
+            name,
+            p_value,
+            "stazionaria" if is_stat else "NON stazionaria",
         )
         return is_stat
 
@@ -104,7 +107,7 @@ class GrangerAnalysis:
         df[flow_col] = df[flow_col] / 1e9
 
         # Verifica stazionarietà
-        stat_flows   = self._check_stationarity(df[flow_col],   flow_col)
+        stat_flows = self._check_stationarity(df[flow_col], flow_col)
         stat_returns = self._check_stationarity(df[return_col], return_col)
 
         # Se non stazionari, differenzia
@@ -152,7 +155,9 @@ class GrangerAnalysis:
         if len(df) < max_lags * 3:
             _log.warning(
                 "Dataset troppo corto (%d righe) per %d lag — riduco a %d",
-                len(df), max_lags, len(df) // 3,
+                len(df),
+                max_lags,
+                len(df) // 3,
             )
             max_lags = max(1, len(df) // 3)
 
@@ -170,16 +175,18 @@ class GrangerAnalysis:
                 verbose=False,
             )
             for lag, lag_result in test1.items():
-                f_stat  = lag_result[0]["ssr_ftest"][0]
+                f_stat = lag_result[0]["ssr_ftest"][0]
                 p_value = lag_result[0]["ssr_ftest"][1]
-                results["flows→returns"].append(GrangerResult(
-                    direction="flows→returns",
-                    lag=lag,
-                    f_stat=float(f_stat),
-                    p_value=float(p_value),
-                    significant=p_value < alpha,
-                    alpha=alpha,
-                ))
+                results["flows→returns"].append(
+                    GrangerResult(
+                        direction="flows→returns",
+                        lag=lag,
+                        f_stat=float(f_stat),
+                        p_value=float(p_value),
+                        significant=p_value < alpha,
+                        alpha=alpha,
+                    )
+                )
         except Exception as e:
             _log.error("Errore test H1: %s", e)
 
@@ -192,16 +199,18 @@ class GrangerAnalysis:
                 verbose=False,
             )
             for lag, lag_result in test2.items():
-                f_stat  = lag_result[0]["ssr_ftest"][0]
+                f_stat = lag_result[0]["ssr_ftest"][0]
                 p_value = lag_result[0]["ssr_ftest"][1]
-                results["returns→flows"].append(GrangerResult(
-                    direction="returns→flows",
-                    lag=lag,
-                    f_stat=float(f_stat),
-                    p_value=float(p_value),
-                    significant=p_value < alpha,
-                    alpha=alpha,
-                ))
+                results["returns→flows"].append(
+                    GrangerResult(
+                        direction="returns→flows",
+                        lag=lag,
+                        f_stat=float(f_stat),
+                        p_value=float(p_value),
+                        significant=p_value < alpha,
+                        alpha=alpha,
+                    )
+                )
         except Exception as e:
             _log.error("Errore test H2: %s", e)
 
@@ -230,7 +239,7 @@ class GrangerAnalysis:
 
             if sig:
                 min_lag = min(r.lag for r in sig)
-                min_p   = min(r.p_value for r in sig)
+                min_p = min(r.p_value for r in sig)
                 lines.append(
                     f"  ✓ SIGNIFICATIVO: causalità di Granger rilevata "
                     f"(p={min_p:.4f} al lag {min_lag})"
@@ -242,12 +251,16 @@ class GrangerAnalysis:
                 )
                 lines.append(f"  → {label} con lag {min_lag}d")
             else:
-                lines.append("  ✗ Non c'è evidenza di causalità di Granger (p > 0.05 per tutti i lag)")
+                lines.append(
+                    "  ✗ Non c'è evidenza di causalità di Granger (p > 0.05 per tutti i lag)"
+                )
             lines.append("")
 
         # Tabella risultati
         lines.append("Tabella p-values:\n")
-        lines.append(f"{'Lag':>4}  {'flows→ret p':>12}  {'ret→flows p':>12}  {'flows→ret sig':>13}  {'ret→flows sig':>13}")
+        lines.append(
+            f"{'Lag':>4}  {'flows→ret p':>12}  {'ret→flows p':>12}  {'flows→ret sig':>13}  {'ret→flows sig':>13}"
+        )
         lines.append("-" * 60)
 
         f2r = {r.lag: r for r in results.get("flows→returns", [])}
@@ -277,11 +290,13 @@ class GrangerAnalysis:
         rows = []
         for direction, res_list in results.items():
             for r in res_list:
-                rows.append({
-                    "lag":         r.lag,
-                    "direction":   r.direction,
-                    "f_stat":      r.f_stat,
-                    "p_value":     r.p_value,
-                    "significant": r.significant,
-                })
+                rows.append(
+                    {
+                        "lag": r.lag,
+                        "direction": r.direction,
+                        "f_stat": r.f_stat,
+                        "p_value": r.p_value,
+                        "significant": r.significant,
+                    }
+                )
         return pd.DataFrame(rows)

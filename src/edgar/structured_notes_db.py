@@ -4,6 +4,7 @@ Schema:
   - notes: una riga per ogni nota strutturata estratta da EDGAR.
   - barrier_levels: una o più righe per ogni nota, una per barrier.
 """
+
 from __future__ import annotations
 
 import json
@@ -67,6 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_barriers_status    ON barrier_levels(status);
 
 
 # ─── DB Manager ──────────────────────────────────────────────────────────────
+
 
 class StructuredNotesDB:
     """Gestisce il database SQLite delle note strutturate.
@@ -145,7 +147,7 @@ class StructuredNotesDB:
             int: id del record inserito/aggiornato.
         """
         obs_json = json.dumps(note.observation_dates) if note.observation_dates else "[]"
-        now      = self._now()
+        now = self._now()
 
         with self._conn() as conn:
             # Controlla se esiste già
@@ -166,11 +168,21 @@ class StructuredNotesDB:
                     WHERE id=?
                     """,
                     (
-                        note.issuer, self._d(note.issue_date), self._d(note.maturity_date),
-                        note.notional_usd, note.product_type, note.underlying,
-                        note.initial_level, note.autocall_trigger_pct, note.knockin_barrier_pct,
-                        note.buffer_pct, note.participation_rate, note.coupon_rate,
-                        obs_json, note.raw_text, note_id,
+                        note.issuer,
+                        self._d(note.issue_date),
+                        self._d(note.maturity_date),
+                        note.notional_usd,
+                        note.product_type,
+                        note.underlying,
+                        note.initial_level,
+                        note.autocall_trigger_pct,
+                        note.knockin_barrier_pct,
+                        note.buffer_pct,
+                        note.participation_rate,
+                        note.coupon_rate,
+                        obs_json,
+                        note.raw_text,
+                        note_id,
                     ),
                 )
             else:
@@ -184,11 +196,22 @@ class StructuredNotesDB:
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
-                        note.filing_url, note.issuer, self._d(note.issue_date),
-                        self._d(note.maturity_date), note.notional_usd, note.product_type,
-                        note.underlying, note.initial_level, note.autocall_trigger_pct,
-                        note.knockin_barrier_pct, note.buffer_pct, note.participation_rate,
-                        note.coupon_rate, obs_json, note.raw_text, now,
+                        note.filing_url,
+                        note.issuer,
+                        self._d(note.issue_date),
+                        self._d(note.maturity_date),
+                        note.notional_usd,
+                        note.product_type,
+                        note.underlying,
+                        note.initial_level,
+                        note.autocall_trigger_pct,
+                        note.knockin_barrier_pct,
+                        note.buffer_pct,
+                        note.participation_rate,
+                        note.coupon_rate,
+                        obs_json,
+                        note.raw_text,
+                        now,
                     ),
                 )
                 note_id = cur.lastrowid
@@ -204,13 +227,20 @@ class StructuredNotesDB:
                     VALUES (?,?,?,?,?,?,?,?)
                     """,
                     (
-                        note_id, b.barrier_type, b.level_pct, b.level_price_ibit,
-                        b.level_price_btc, self._d(b.observation_date),
-                        b.status, now,
+                        note_id,
+                        b.barrier_type,
+                        b.level_pct,
+                        b.level_price_ibit,
+                        b.level_price_btc,
+                        self._d(b.observation_date),
+                        b.status,
+                        now,
                     ),
                 )
 
-        _log.debug("Nota salvata: id=%d url=%s barriers=%d", note_id, note.filing_url, len(note.barriers))
+        _log.debug(
+            "Nota salvata: id=%d url=%s barriers=%d", note_id, note.filing_url, len(note.barriers)
+        )
         return note_id
 
     def upsert_notes(self, notes: list[StructuredNote]) -> list[int]:
@@ -283,9 +313,19 @@ class StructuredNotesDB:
         """
         updated = 0
         with self._conn() as conn:
+            # Prima controlla se ci sono barriere nel DB
+            total = conn.execute("SELECT COUNT(*) FROM barrier_levels").fetchone()[0]
+            if total == 0:
+                _log.warning("Nessuna barriera nel DB - eseguire prima run_edgar.py per popolare")
+                return 0
+
             rows = conn.execute(
                 "SELECT id, level_price_ibit FROM barrier_levels WHERE level_price_btc IS NULL"
             ).fetchall()
+            if not rows:
+                _log.info("Tutte le %d barriere hanno già level_price_btc", total)
+                return 0
+
             for row in rows:
                 if row["level_price_ibit"]:
                     btc_price = row["level_price_ibit"] / ibit_btc_ratio
@@ -294,7 +334,7 @@ class StructuredNotesDB:
                         (btc_price, row["id"]),
                     )
                     updated += 1
-        _log.info("Aggiornati prezzi BTC per %d barriere", updated)
+        _log.info("Aggiornati prezzi BTC per %d barriere (su %d totali)", updated, total)
         return updated
 
     def update_barrier_statuses(self, current_ibit_price: float) -> dict[str, int]:
@@ -357,6 +397,7 @@ class StructuredNotesDB:
         Returns:
             StructuredNote: con barriers popolati.
         """
+
         def _date(s: Optional[str]) -> Optional[date]:
             return date.fromisoformat(s) if s else None
 
@@ -413,21 +454,26 @@ class StructuredNotesDB:
             active_barriers = conn.execute(
                 "SELECT COUNT(*) FROM barrier_levels WHERE status='active'"
             ).fetchone()[0]
-            total_notional = conn.execute(
-                "SELECT SUM(notional_usd) FROM notes WHERE notional_usd IS NOT NULL"
-            ).fetchone()[0] or 0
-            by_type = dict(conn.execute(
-                "SELECT product_type, COUNT(*) FROM notes GROUP BY product_type"
-            ).fetchall())
-            by_issuer = dict(conn.execute(
-                "SELECT issuer, COUNT(*) FROM notes GROUP BY issuer"
-            ).fetchall())
+            total_notional = (
+                conn.execute(
+                    "SELECT SUM(notional_usd) FROM notes WHERE notional_usd IS NOT NULL"
+                ).fetchone()[0]
+                or 0
+            )
+            by_type = dict(
+                conn.execute(
+                    "SELECT product_type, COUNT(*) FROM notes GROUP BY product_type"
+                ).fetchall()
+            )
+            by_issuer = dict(
+                conn.execute("SELECT issuer, COUNT(*) FROM notes GROUP BY issuer").fetchall()
+            )
 
         return {
-            "total_notes":       total_notes,
-            "total_barriers":    total_barriers,
-            "active_barriers":   active_barriers,
+            "total_notes": total_notes,
+            "total_barriers": total_barriers,
+            "active_barriers": active_barriers,
             "total_notional_usd": total_notional,
-            "by_product_type":   by_type,
-            "by_issuer":         by_issuer,
+            "by_product_type": by_type,
+            "by_issuer": by_issuer,
         }
