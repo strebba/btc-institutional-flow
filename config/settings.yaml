@@ -12,6 +12,9 @@ database:
 # ─── SEC EDGAR ──────────────────────────────────────────────────────────────────
 edgar:
   base_url: https://efts.sec.gov/LATEST/search-index
+  # OBBLIGATORIO: sostituire con email reale — SEC EDGAR richiede un indirizzo valido
+  # nei ToS (https://www.sec.gov/os/accessing-edgar-data). Usare email falsa rischia ban IP.
+  # Override via env var: EDGAR_USER_AGENT="ibit-gamma-tracker/1.0 (tua@email.com)"
   user_agent: "ibit-gamma-tracker/1.0 (contact@example.com)"
   rate_limit_rps: 8          # max 10/s → usiamo 8 per sicurezza
   max_retries: 3

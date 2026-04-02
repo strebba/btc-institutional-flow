@@ -62,15 +62,15 @@ class GexSnapshot:
     distance_to_call_wall_pct: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if self.put_wall and self.spot_price:
+        if self.put_wall is not None and self.spot_price:
             self.distance_to_put_wall_pct = (
                 (self.put_wall - self.spot_price) / self.spot_price * 100
             )
-        if self.call_wall and self.spot_price:
+        if self.call_wall is not None and self.spot_price:
             self.distance_to_call_wall_pct = (
                 (self.call_wall - self.spot_price) / self.spot_price * 100
             )
-        if self.total_call_oi and self.total_put_oi:
+        if self.total_call_oi is not None and self.total_put_oi is not None and self.total_call_oi > 0:
             self.put_call_ratio = self.total_put_oi / self.total_call_oi
 
 

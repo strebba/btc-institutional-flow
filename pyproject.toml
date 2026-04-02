@@ -1,13 +1,13 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "ibit-gamma-tracker"
 version = "0.1.0"
 description = "Toolkit per analizzare l'impatto del dealer hedging su prodotti strutturati IBIT"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "strebba" }]
 
@@ -26,7 +26,6 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "tenacity>=8.3",
-    "aiohttp>=3.9",
     "rich>=13.7",
 ]
 

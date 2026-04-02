@@ -12,7 +12,7 @@ Endpoints:
 from __future__ import annotations
 
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import json
@@ -20,9 +20,13 @@ import os
 import time
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+
+from src.config import setup_logging
+
+_log = setup_logging("api.main")
 
 # ─── In-memory TTL cache ───────────────────────────────────────────────────────
 
@@ -68,6 +72,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Autenticazione opzionale via API key — impostare API_KEY env var per abilitarla.
+# Se non impostata, tutti gli accessi sono consentiti (utile per sviluppo locale).
+_API_KEY = os.getenv("API_KEY")
+
+
+@app.middleware("http")
+async def _api_key_guard(request: Request, call_next):
+    if _API_KEY and request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        if request.headers.get("X-API-Key") != _API_KEY:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -103,7 +119,7 @@ def _sanitize(obj: Any) -> Any:
 
 
 def _ok(data: Any) -> JSONResponse:
-    payload = {"status": "ok", "timestamp": datetime.utcnow().isoformat(), "data": data}
+    payload = {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat(), "data": data}
     return JSONResponse(content=json.loads(json.dumps(payload, cls=_NumpyEncoder)))
 
 
@@ -160,8 +176,8 @@ def get_gex() -> dict:
         # Persiste snapshot nel DB storico
         try:
             _gex_db_gex.insert_snapshot(snapshot, state.regime)
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.warning("GEX DB persist failed (snapshot non salvato): %s", _e)
 
         # Profilo per strike (intorno a ±40% dallo spot)
         strike_profile = [
@@ -350,8 +366,8 @@ def get_barriers() -> dict:
             if latest["ibit_close"] > 0 and latest["btc_close"] > 0:
                 ratio = latest["ibit_close"] / latest["btc_close"]
                 db.compute_btc_prices(ibit_btc_ratio=ratio)
-        except Exception:
-            pass  # se il fetch fallisce, usa i valori già nel DB
+        except Exception as _e:
+            _log.warning("IBIT/BTC ratio fetch fallito, uso valori esistenti nel DB: %s", _e)
 
         barriers = db.get_active_barriers()
 
@@ -424,8 +440,8 @@ def get_signals() -> dict:
             _detector.load_history_from_db(_gex_db.get_latest_n(90))
             _regime = _detector.detect(snapshot).regime
             _gex_db.insert_snapshot(snapshot, _regime)
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.warning("GEX DB persist fallito in /signals: %s", _e)
 
         # ── Flussi ─────────────────────────────────────────────────────────────
         scraper   = FarsideScraper()
@@ -462,19 +478,14 @@ def get_signals() -> dict:
         liquidations_long:  float | None = None
         liquidations_short: float | None = None
 
-        macro_cached = _cache_get("macro")
-        if macro_cached is not None:
-            try:
-                md = macro_cached.body  # JSONResponse
-                import json as _json
-                md = _json.loads(md)["data"]
-                funding_rate_ann  = md.get("funding_rate_annualized_pct")
-                oi_change_7d_pct  = md.get("oi_change_7d_pct")
-                long_short_ratio  = md.get("long_short_ratio_latest")
-                liquidations_long = md.get("liquidations_long_24h_usd")
-                liquidations_short = md.get("liquidations_short_24h_usd")
-            except Exception:
-                pass
+        # Legge dalla cache del dict macro (non dalla JSONResponse)
+        macro_data_cached = _cache_get("macro_data")
+        if macro_data_cached is not None:
+            funding_rate_ann   = macro_data_cached.get("funding_rate_annualized_pct")
+            oi_change_7d_pct   = macro_data_cached.get("oi_change_7d_pct")
+            long_short_ratio   = macro_data_cached.get("long_short_ratio_latest")
+            liquidations_long  = macro_data_cached.get("liquidations_long_24h_usd")
+            liquidations_short = macro_data_cached.get("liquidations_short_24h_usd")
 
         if funding_rate_ann is None:
             # Fetch diretto senza cache (per primo avvio)
@@ -483,8 +494,8 @@ def get_signals() -> dict:
                 fr_series = cg.fetch_funding_rate_history(days=14)
                 if not fr_series.empty:
                     funding_rate_ann = float(fr_series.iloc[-1]) * 3 * 365 * 100
-            except Exception:
-                pass
+            except Exception as _e:
+                _log.warning("Funding rate fetch fallito in /signals: %s", _e)
 
         if oi_change_7d_pct is None:
             try:
@@ -495,8 +506,8 @@ def get_signals() -> dict:
                     oi_now    = float(oi_series.iloc[-1])
                     if oi_7d_ago > 0:
                         oi_change_7d_pct = (oi_now - oi_7d_ago) / oi_7d_ago * 100
-            except Exception:
-                pass
+            except Exception as _e:
+                _log.warning("OI change fetch fallito in /signals: %s", _e)
 
         if long_short_ratio is None:
             try:
@@ -504,8 +515,8 @@ def get_signals() -> dict:
                 ls_series = cg.fetch_long_short_ratio(days=3)
                 if not ls_series.empty:
                     long_short_ratio = float(ls_series.iloc[-1])
-            except Exception:
-                pass
+            except Exception as _e:
+                _log.warning("Long/short ratio fetch fallito in /signals: %s", _e)
 
         if liquidations_long is None:
             try:
@@ -514,8 +525,8 @@ def get_signals() -> dict:
                 if not liq_df.empty:
                     liquidations_long  = float(liq_df["long_usd"].iloc[-1])
                     liquidations_short = float(liq_df["short_usd"].iloc[-1])
-            except Exception:
-                pass
+            except Exception as _e:
+                _log.warning("Liquidations fetch fallito in /signals: %s", _e)
 
         # ── SignalModel multi-fattore ──────────────────────────────────────────
         signal_inputs = SignalInputs(
@@ -635,7 +646,7 @@ def get_macro() -> dict:
                     for ts, v in fr_series.tail(90).items()
                 ]
         except Exception as _e:
-            pass
+            _log.warning("Funding rate fetch fallito in /macro: %s", _e)
 
         # ── Aggregated OI ──────────────────────────────────────────────────────
         oi_latest_usd: float | None = None
@@ -656,8 +667,8 @@ def get_macro() -> dict:
                      "oi_usd": round(float(v), 0)}
                     for ts, v in oi_series.tail(90).items()
                 ]
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.warning("OI fetch fallito in /macro: %s", _e)
 
         # ── Long/Short ratio ───────────────────────────────────────────────────
         long_short_ratio_latest: float | None = None
@@ -671,8 +682,8 @@ def get_macro() -> dict:
                      "ratio": round(float(v), 4)}
                     for ts, v in ls_series.tail(90).items()
                 ]
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.warning("Long/short ratio fetch fallito in /macro: %s", _e)
 
         # ── Liquidations ───────────────────────────────────────────────────────
         liquidations_long_24h_usd: float | None = None
@@ -694,8 +705,8 @@ def get_macro() -> dict:
                     }
                     for ts, row in liq_df.tail(90).iterrows()
                 ]
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.warning("Liquidations fetch fallito in /macro: %s", _e)
 
         # ── Taker volume ───────────────────────────────────────────────────────
         taker_buy_ratio_latest: float | None = None
@@ -709,10 +720,10 @@ def get_macro() -> dict:
                      "buy_ratio": round(float(v), 4)}
                     for ts, v in tk_series.tail(90).items()
                 ]
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.warning("Taker volume fetch fallito in /macro: %s", _e)
 
-        response = _ok({
+        macro_data = {
             # Valori puntuali (latest)
             "funding_rate_8h_pct":          funding_rate_8h_pct,
             "funding_rate_annualized_pct":  funding_rate_ann_pct,
@@ -731,7 +742,10 @@ def get_macro() -> dict:
                 "liquidations": liq_history,
                 "taker":        taker_history,
             },
-        })
+        }
+        # Caching separato del dict raw: usato da /signals senza accedere a JSONResponse.body
+        _cache_set("macro_data", macro_data)
+        response = _ok(macro_data)
         _cache_set("macro", response)
         return response
 

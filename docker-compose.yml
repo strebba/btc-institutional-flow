@@ -1,0 +1,21 @@
+services:
+  api:
+    build: .
+    container_name: btc-flow-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data       # SQLite persistente
+      - ./logs:/app/logs       # Log persistenti
+    environment:
+      # Origini consentite per CORS — aggiorna con il dominio della ptf dashboard
+      - CORS_ORIGINS=https://seashell-app-h7hc4.ondigitalocean.app,http://localhost:3000,http://localhost:8501
+      # Sostituisci con la tua email reale per SEC EDGAR user-agent
+      - EDGAR_USER_AGENT=ibit-gamma-tracker/1.0 (contact@example.com)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

@@ -199,16 +199,16 @@ class Backtest:
                 n_trades=0, days_long=0, days_short=0, days_flat=0,
             )
 
-        # Equity curve
-        equity = (1 + rets).cumprod()
+        # Equity curve — log returns richiedono exp(cumsum), non (1+r).cumprod()
+        equity = np.exp(rets.cumsum())
 
         # Rendimenti
         total_ret = float(equity.iloc[-1] - 1)
-        n_years   = len(rets) / 252
+        n_years   = len(rets) / 365  # BTC tratta 365 giorni/anno (no weekend off)
         ann_ret   = float((1 + total_ret) ** (1 / n_years) - 1) if n_years > 0 else 0.0
 
-        # Sharpe (rf=0, annualizzato)
-        ann_vol   = float(rets.std() * (252 ** 0.5))
+        # Sharpe (rf=0, annualizzato) — sqrt(365) per crypto
+        ann_vol   = float(rets.std() * (365 ** 0.5))
         sharpe    = ann_ret / ann_vol if ann_vol > 0 else 0.0
 
         # Max drawdown

@@ -13,7 +13,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.config import get_settings, setup_logging
 
-logger = get_settings()  # lazy init
 _log = setup_logging("edgar.search")
 
 

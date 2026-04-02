@@ -213,8 +213,8 @@ class CoinGlassClient:
         """
         try:
             data = self._get(
-                "/api/futures/fundingRate/oi-weight-ohlc-history",
-                {"symbol": "BTC", "interval": "h8", "limit": min(days * 3, 1000)},
+                "/api/futures/funding-rate/oi-weight-history",
+                {"symbol": "BTC", "interval": "8h", "limit": min(days * 3, 1000)},
             )
         except (CoinGlassError, Exception) as e:
             _log.warning("CoinGlass funding rate: %s", e)
@@ -264,7 +264,7 @@ class CoinGlassClient:
         """
         try:
             data = self._get(
-                "/api/futures/openInterest/aggregated-history",
+                "/api/futures/open-interest/aggregated-history",
                 {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
             )
         except (CoinGlassError, Exception) as e:
@@ -280,7 +280,8 @@ class CoinGlassClient:
                 ts_ms, oi = item[0], item[1]
             elif isinstance(item, dict):
                 ts_ms = item.get("t") or item.get("time")
-                oi    = item.get("openInterest") or item.get("oi") or item.get("c")
+                # "close" è il campo reale nella risposta v4 OHLC aggregated OI
+                oi    = item.get("close") or item.get("c") or item.get("openInterest") or item.get("oi")
             else:
                 continue
             if ts_ms is None or oi is None:
@@ -316,7 +317,7 @@ class CoinGlassClient:
         """
         try:
             data = self._get(
-                "/api/futures/globalLongShortAccountRatio/history",
+                "/api/futures/global-long-short-account-ratio/history",
                 {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
             )
         except (CoinGlassError, Exception) as e:
@@ -332,7 +333,13 @@ class CoinGlassClient:
                 ts_ms, ratio = item[0], item[1]
             elif isinstance(item, dict):
                 ts_ms = item.get("t") or item.get("time") or item.get("createTime")
-                ratio = item.get("longShortRatio") or item.get("ratio") or item.get("c")
+                # v4: long_ratio / short_ratio; v3: longShortRatio o ratio
+                long_r  = item.get("long_ratio") or item.get("longRatio")
+                short_r = item.get("short_ratio") or item.get("shortRatio")
+                if long_r is not None and short_r is not None and float(short_r) > 0:
+                    ratio = float(long_r) / float(short_r)
+                else:
+                    ratio = item.get("longShortRatio") or item.get("ratio") or item.get("c")
             else:
                 continue
             if ts_ms is None or ratio is None:
@@ -372,7 +379,7 @@ class CoinGlassClient:
         _EMPTY = pd.DataFrame(columns=["long_usd", "short_usd", "total_usd"])
         try:
             data = self._get(
-                "/api/futures/liquidation/history",
+                "/api/futures/liquidation/aggregated-history",
                 {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
             )
         except (CoinGlassError, Exception) as e:
@@ -388,8 +395,11 @@ class CoinGlassClient:
                 ts_ms, long_v, short_v = item[0], item[1], item[2]
             elif isinstance(item, dict):
                 ts_ms   = item.get("t") or item.get("time")
-                long_v  = item.get("longLiquidationUsd") or item.get("buyUsd") or item.get("long") or 0.0
-                short_v = item.get("shortLiquidationUsd") or item.get("sellUsd") or item.get("short") or 0.0
+                # v4: long_liquidation_usd_24h / short_liquidation_usd_24h; v3: longLiquidationUsd ecc.
+                long_v  = (item.get("long_liquidation_usd_24h") or item.get("longLiquidationUsd")
+                           or item.get("buyUsd") or item.get("long") or 0.0)
+                short_v = (item.get("short_liquidation_usd_24h") or item.get("shortLiquidationUsd")
+                           or item.get("sellUsd") or item.get("short") or 0.0)
             else:
                 continue
             if ts_ms is None:
@@ -426,7 +436,7 @@ class CoinGlassClient:
         """
         try:
             data = self._get(
-                "/api/futures/takerBuySellVolume",
+                "/api/futures/aggregated-taker-buy-sell-volume/history",
                 {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
             )
         except (CoinGlassError, Exception) as e:
@@ -440,8 +450,9 @@ class CoinGlassClient:
         for item in data:
             if isinstance(item, dict):
                 ts_ms = item.get("t") or item.get("time")
-                buy   = next((item[k] for k in ("buyVolume", "buy", "takerBuyVolume")   if k in item and item[k] is not None), None)
-                sell  = next((item[k] for k in ("sellVolume", "sell", "takerSellVolume") if k in item and item[k] is not None), None)
+                # v4: buy_volume_usd / sell_volume_usd; v3: buyVolume / sellVolume
+                buy   = next((item[k] for k in ("buy_volume_usd", "buyVolume", "buy", "takerBuyVolume")   if k in item and item[k] is not None), None)
+                sell  = next((item[k] for k in ("sell_volume_usd", "sellVolume", "sell", "takerSellVolume") if k in item and item[k] is not None), None)
             elif isinstance(item, list) and len(item) >= 3:
                 ts_ms, buy, sell = item[0], item[1], item[2]
             else:
