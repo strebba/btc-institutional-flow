@@ -567,3 +567,78 @@ class CoinGlassClient:
         daily.index = daily.index.tz_localize(None)
         daily.name = "taker_buy_ratio"
         return daily
+
+    # ─── Options Info ─────────────────────────────────────────────────────────
+
+    def fetch_options_info(self, symbol: str = "BTC") -> list[dict]:
+        """OI totale, volume e market share per exchange (opzioni BTC/ETH).
+
+        Usato per calcolare il coverage score del GEX: confronta l'OI che
+        abbiamo fetchato da Deribit con l'OI totale dichiarato da CoinGlass.
+
+        Args:
+            symbol: "BTC" o "ETH".
+
+        Returns:
+            list[dict] con un elemento per exchange. Campi principali:
+            exchange_name, open_interest (contratti), open_interest_usd,
+            oi_market_share (%), volume_usd_24h.
+            Lista vuota su errore o endpoint non disponibile nel tier.
+        """
+        try:
+            data = self._get("/api/option/info", {"symbol": symbol})
+        except CoinGlassError as e:
+            _log.warning("CoinGlass options info [%s]: %s", symbol, e)
+            return []
+        except Exception as e:
+            _log.warning("CoinGlass options info (rete) [%s]: %s", symbol, e)
+            return []
+
+        if not isinstance(data, list):
+            _log.warning("CoinGlass options info: risposta inattesa %s", type(data))
+            return []
+
+        return data
+
+    # ─── Options Max Pain ─────────────────────────────────────────────────────
+
+    def fetch_options_max_pain(
+        self, symbol: str = "BTC", exchange: str = "Deribit"
+    ) -> list[dict]:
+        """Max pain e call/put OI per expiry per un singolo exchange.
+
+        Usato per costruire put/call ratio e max pain multi-exchange
+        (Deribit + CME + Binance + OKX) più rappresentativi del posizionamento
+        istituzionale complessivo.
+
+        Args:
+            symbol: "BTC" o "ETH".
+            exchange: "Deribit", "CME", "Binance", "OKX", "Bybit".
+
+        Returns:
+            list[dict] con un elemento per data di scadenza. Campi principali:
+            date (str "YYMMDD"), max_pain_price (str),
+            call_open_interest (contratti), call_open_interest_notional (USD),
+            put_open_interest (contratti), put_open_interest_notional (USD).
+            Lista vuota se endpoint non disponibile o dati assenti.
+        """
+        try:
+            data = self._get(
+                "/api/option/max-pain",
+                {"symbol": symbol, "exchange": exchange},
+            )
+        except CoinGlassError as e:
+            _log.warning("CoinGlass max pain [%s/%s]: %s", symbol, exchange, e)
+            return []
+        except Exception as e:
+            _log.warning("CoinGlass max pain (rete) [%s/%s]: %s", symbol, exchange, e)
+            return []
+
+        if not isinstance(data, list):
+            _log.warning(
+                "CoinGlass max pain [%s/%s]: risposta inattesa %s",
+                symbol, exchange, type(data),
+            )
+            return []
+
+        return data

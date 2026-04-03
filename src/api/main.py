@@ -35,12 +35,13 @@ _log = setup_logging("api.main")
 _cache: dict[str, tuple[float, Any]] = {}  # key → (timestamp, payload)
 
 _TTL = {
-    "gex": 300,  # 5 min  — opzioni Deribit, ~90s fetch
-    "_gex_data": 300,  # 5 min  — raw GexSnapshot objects (condivisi tra /gex e /signals)
-    "flows": 900,  # 15 min — Farside scrape
-    "barriers": 3600,  # 1 ora  — dati SEC EDGAR statici
-    "signals": 300,  # 5 min  — dipende da gex + flows
-    "macro": 3600,  # 1 ora  — dati CoinGlass giornalieri
+    "gex":            300,   # 5 min  — opzioni Deribit, ~90s fetch
+    "_gex_data":      300,   # 5 min  — raw GexSnapshot objects (condivisi tra /gex e /signals)
+    "gex_enrichment": 3600,  # 1 ora  — CoinGlass coverage score + multi-exchange PCR
+    "flows":          900,   # 15 min — Farside scrape
+    "barriers":       3600,  # 1 ora  — dati SEC EDGAR statici
+    "signals":        300,   # 5 min  — dipende da gex + flows
+    "macro":          3600,  # 1 ora  — dati CoinGlass giornalieri
 }
 
 # Lock che impedisce fetch Deribit concorrenti: il secondo richiedente attende
@@ -152,6 +153,119 @@ def health() -> dict:
     return _ok({"service": "btc-institutional-flow", "healthy": True})
 
 
+# ─── CoinGlass GEX enrichment ─────────────────────────────────────────────────
+
+def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
+    """Arricchisce il GEX con coverage score e metriche multi-exchange da CoinGlass.
+
+    Cachato 1 ora perché i dati CoinGlass cambiano lentamente (aggregati giornalieri).
+
+    Args:
+        our_call_oi: call OI totale fetchato da Deribit (contratti BTC).
+        our_put_oi: put OI totale fetchato da Deribit (contratti BTC).
+
+    Returns:
+        dict con:
+          data_quality: {coverage_pct, quality_label, deribit_oi_usd, fetched_oi_contracts}
+          market_context: {market_pcr, market_max_pain, exchanges_included}
+    """
+    cached = _cache_get("gex_enrichment")
+    if cached is not None:
+        # Aggiorna coverage_pct con OI attuale (Deribit fluttua ogni fetch)
+        deribit_oi_contracts = cached.get("_deribit_oi_contracts", 0)
+        if deribit_oi_contracts > 0:
+            our_total = our_call_oi + our_put_oi
+            cov = round(min(our_total / deribit_oi_contracts * 100, 100.0), 1)
+            label = "good" if cov >= 80 else "degraded" if cov >= 50 else "poor"
+            cached["data_quality"]["coverage_pct"] = cov
+            cached["data_quality"]["quality_label"] = label
+            cached["data_quality"]["fetched_oi_contracts"] = round(our_total, 1)
+        return cached
+
+    from src.flows.coinglass_client import CoinGlassClient
+
+    result: dict = {
+        "data_quality": {
+            "coverage_pct":        None,
+            "quality_label":       "unknown",
+            "deribit_oi_usd":      None,
+            "fetched_oi_contracts": round(our_call_oi + our_put_oi, 1),
+        },
+        "market_context": {
+            "market_pcr":          None,
+            "market_max_pain":     None,
+            "exchanges_included":  [],
+        },
+        "_deribit_oi_contracts": 0,  # campo interno per aggiornamento coverage
+    }
+
+    try:
+        cg = CoinGlassClient()
+
+        # ── 1. Coverage score ────────────────────────────────────────────────
+        options_info = cg.fetch_options_info("BTC")
+        deribit_info = next(
+            (x for x in options_info
+             if isinstance(x, dict) and "deribit" in str(x.get("exchange_name", "")).lower()),
+            None,
+        )
+        if deribit_info:
+            cg_oi_contracts = float(deribit_info.get("open_interest") or 0)
+            cg_oi_usd       = float(deribit_info.get("open_interest_usd") or 0)
+            result["_deribit_oi_contracts"] = cg_oi_contracts
+            result["data_quality"]["deribit_oi_usd"] = round(cg_oi_usd, 0) if cg_oi_usd else None
+
+            if cg_oi_contracts > 0:
+                our_total = our_call_oi + our_put_oi
+                cov   = round(min(our_total / cg_oi_contracts * 100, 100.0), 1)
+                label = "good" if cov >= 80 else "degraded" if cov >= 50 else "poor"
+                result["data_quality"]["coverage_pct"]  = cov
+                result["data_quality"]["quality_label"] = label
+                result["data_quality"]["fetched_oi_contracts"] = round(our_total, 1)
+
+        # ── 2. Multi-exchange PCR e max pain ─────────────────────────────────
+        _EXCHANGES = ["Deribit", "CME", "Binance", "OKX"]
+        total_call_notional = 0.0
+        total_put_notional  = 0.0
+        weighted_pain_sum   = 0.0
+        total_pain_weight   = 0.0
+        exchanges_with_data: list[str] = []
+
+        for exch in _EXCHANGES:
+            mp_data = cg.fetch_options_max_pain("BTC", exch)
+            if not mp_data:
+                continue
+            exchanges_with_data.append(exch)
+            for expiry in mp_data:
+                if not isinstance(expiry, dict):
+                    continue
+                call_n   = float(expiry.get("call_open_interest_notional") or 0)
+                put_n    = float(expiry.get("put_open_interest_notional") or 0)
+                max_pain = float(expiry.get("max_pain_price") or 0)
+                weight   = call_n + put_n
+                total_call_notional += call_n
+                total_put_notional  += put_n
+                if max_pain > 0 and weight > 0:
+                    weighted_pain_sum  += max_pain * weight
+                    total_pain_weight  += weight
+
+        if total_call_notional > 0:
+            result["market_context"]["market_pcr"] = round(
+                total_put_notional / total_call_notional, 3
+            )
+        if total_pain_weight > 0:
+            result["market_context"]["market_max_pain"] = round(
+                weighted_pain_sum / total_pain_weight, 0
+            )
+        result["market_context"]["exchanges_included"] = exchanges_with_data
+
+    except Exception as _e:
+        _log.warning("CoinGlass GEX enrichment failed: %s", _e)
+
+    _cache_set("gex_enrichment", result)
+    return result
+
+
 # ─── GEX shared fetch (dedup lock) ────────────────────────────────────────────
 
 
@@ -241,6 +355,10 @@ def get_gex() -> dict:
             if abs(gs.strike - spot) / spot < 0.40
         ]
 
+        # Enrichment CoinGlass: coverage score + multi-exchange PCR/max pain.
+        # TTL separato (1h) — indipendente dal fetch Deribit (5min).
+        enrichment = _enrich_gex_with_coinglass(snapshot.total_call_oi, snapshot.total_put_oi)
+
         response = _ok(
             {
                 "snapshot": gex_dict,
@@ -258,6 +376,9 @@ def get_gex() -> dict:
                     "total_call_oi": snapshot.total_call_oi,
                     "total_put_oi": snapshot.total_put_oi,
                 },
+                # Nuovi campi: qualità del dato e contesto di mercato multi-exchange
+                "data_quality": enrichment.get("data_quality", {}),
+                "market_context": enrichment.get("market_context", {}),
             }
         )
         _cache_set("gex", response)
