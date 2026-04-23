@@ -82,6 +82,21 @@ coinglass:
   timeout_s: 15
   rate_limit_rps: 1      # 80 req/min startup tier → 1/s per sicurezza
 
+# ─── ALERTS (Telegram) ──────────────────────────────────────────────────────────
+# Abilita il bot Telegram con TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID come env vars.
+# Senza env vars l'API parte lo stesso, gli alert sono semplicemente disabilitati.
+alerts:
+  telegram_enabled: true
+  daily_recap:
+    hour_utc: 7            # 07:00 UTC = 09:00 Italia (pre-open US)
+    minute_utc: 0
+  etf_flow_check:
+    interval_hours: 4                            # ogni 4 ore controlla i flussi
+    single_day_usd_threshold: 500_000_000        # ±$500M giornaliero
+    cumulative_7d_usd_threshold: 2_000_000_000   # ±$2B cumulativo 7 giorni
+    streak_min_days: 3                           # 3+ giorni stessa direzione
+  cooldown_hours: 24       # min intervallo tra alert dello stesso tipo
+
 # ─── DASHBOARD ──────────────────────────────────────────────────────────────────
 dashboard:
   refresh_interval_s: 900    # 15 minuti

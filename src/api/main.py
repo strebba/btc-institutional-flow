@@ -26,9 +26,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from src.config import setup_logging
+from src.config import get_settings, setup_logging
 
 _log = setup_logging("api.main")
+
+# ─── Alert scheduler (lazy init, graceful degrade) ─────────────────────────────
+
+_alert_scheduler = None  # type: ignore[var-annotated]
 
 # ─── In-memory TTL cache ───────────────────────────────────────────────────────
 
@@ -92,6 +96,80 @@ async def _api_key_guard(request: Request, call_next):
         if request.headers.get("X-API-Key") != _API_KEY:
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
+
+
+# ─── Alert scheduler startup/shutdown ──────────────────────────────────────────
+
+
+@app.on_event("startup")
+async def _start_alert_scheduler() -> None:
+    """Avvia APScheduler con 2 job: daily recap + ETF flow check.
+
+    Graceful degrade: se TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID mancano, l'app
+    parte lo stesso e i job non vengono registrati.
+    """
+    global _alert_scheduler
+
+    cfg = get_settings().get("alerts", {})
+    if not cfg.get("telegram_enabled", True):
+        _log.info("[alerts] disabilitati via settings.alerts.telegram_enabled=false")
+        return
+
+    if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("TELEGRAM_CHAT_ID"):
+        _log.warning(
+            "[alerts] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID mancanti — scheduler non avviato"
+        )
+        return
+
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        from src.alerts.gex_alert_monitor import GexAlertMonitor
+
+        monitor = GexAlertMonitor()
+        scheduler = AsyncIOScheduler(timezone="UTC")
+
+        recap_cfg = cfg.get("daily_recap", {})
+        scheduler.add_job(
+            monitor.send_daily_recap,
+            CronTrigger(
+                hour=int(recap_cfg.get("hour_utc", 7)),
+                minute=int(recap_cfg.get("minute_utc", 0)),
+                timezone="UTC",
+            ),
+            id="daily_recap",
+            replace_existing=True,
+        )
+
+        flow_cfg = cfg.get("etf_flow_check", {})
+        scheduler.add_job(
+            monitor.check_etf_flows,
+            IntervalTrigger(hours=int(flow_cfg.get("interval_hours", 4))),
+            id="etf_flow_check",
+            replace_existing=True,
+        )
+
+        scheduler.start()
+        _alert_scheduler = scheduler
+        _log.info(
+            "[alerts] scheduler started — daily_recap %02d:%02d UTC, etf_flow_check every %dh",
+            int(recap_cfg.get("hour_utc", 7)),
+            int(recap_cfg.get("minute_utc", 0)),
+            int(flow_cfg.get("interval_hours", 4)),
+        )
+    except Exception:
+        _log.exception("[alerts] scheduler startup failed")
+
+
+@app.on_event("shutdown")
+async def _stop_alert_scheduler() -> None:
+    global _alert_scheduler
+    if _alert_scheduler is not None:
+        _alert_scheduler.shutdown(wait=False)
+        _alert_scheduler = None
+        _log.info("[alerts] scheduler stopped")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
