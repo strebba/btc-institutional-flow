@@ -7,6 +7,7 @@ Endpoints:
   GET /api/barriers  - Barriere attive da SEC EDGAR
   GET /api/signals   - Segnale composito LONG/CAUTION/RISK_OFF + Sharpe backtest
   GET /api/macro     - Indicatori macro: funding rate, OI, long/short ratio, liquidazioni
+  GET /api/wagmi     - WAGMI Index 0-100: indicatore composito momentum+strutturale
   GET /docs          - Swagger UI (FastAPI built-in)
 """
 
@@ -46,6 +47,7 @@ _TTL = {
     "barriers":       3600,  # 1 ora  — dati SEC EDGAR statici
     "signals":        300,   # 5 min  — dipende da gex + flows
     "macro":          3600,  # 1 ora  — dati CoinGlass giornalieri
+    "wagmi":          300,   # 5 min  — stessa frequenza di /signals
 }
 
 # Lock che impedisce fetch Deribit concorrenti: il secondo richiedente attende
@@ -1021,3 +1023,151 @@ def get_macro() -> dict:
     except Exception as exc:
         traceback.print_exc()
         raise _error(f"Macro error: {exc}")
+
+
+# ─── /api/wagmi ───────────────────────────────────────────────────────────────
+
+
+@app.get("/api/wagmi", tags=["signals"])
+def get_wagmi() -> dict:
+    """WAGMI Index (0-100): indicatore composito momentum + strutturale per BTC.
+
+    Integra 7 fattori con pesi differenti rispetto a /api/signals:
+      - gamma_structure (25%): posizione rispetto al gamma flip + regime GEX
+      - etf_flow (20%): domanda istituzionale ETF 3gg
+      - squeeze_setup (15%): divergenza L/S ratio vs funding rate
+      - funding_rate (12%): contrarian sentiment
+      - oi_trend (10%): momentum open interest
+      - options_structure (10%): distanza da call wall, put wall, max pain
+      - liquidation_bias (8%): asimmetria liquidazioni
+
+    Labels: NGMI (0-30) | DEGEN (31-50) | MEH (51-64) | WAGMI (65-79) | FULL_WAGMI (80-100)
+    Risposta cachata 5 minuti.
+    """
+    cached = _cache_get("wagmi")
+    if cached is not None:
+        return cached
+
+    try:
+        from src.analytics.wagmi import WagmiInputs, WagmiModel
+        from src.flows.scraper import FarsideScraper
+        from src.flows.price_fetcher import PriceFetcher
+        from src.flows.correlation import FlowCorrelation
+
+        # ── GEX — riusa cache condivisa ───────────────────────────────────────
+        gex_data = _get_gex_data()
+        snapshot = gex_data["snapshot"]
+        spot = gex_data["spot"]
+
+        # ── ETF flows 3gg ─────────────────────────────────────────────────────
+        ibit_flow_3d = 0.0
+        try:
+            scraper = FarsideScraper()
+            raw_flows = scraper.fetch()
+            agg_flows = scraper.aggregate(raw_flows)
+            fetcher = PriceFetcher()
+            prices = fetcher.get_all_prices()
+            corr_eng = FlowCorrelation()
+            merged = corr_eng.merge(agg_flows, prices)
+            if not merged.empty and "ibit_flow_3d" in merged.columns:
+                last_val = merged["ibit_flow_3d"].dropna()
+                if not last_val.empty:
+                    ibit_flow_3d = float(last_val.iloc[-1])
+        except Exception as _e:
+            _log.warning("ETF flow fetch fallito in /wagmi: %s", _e)
+
+        # ── Macro CoinGlass — dalla cache se disponibile ──────────────────────
+        funding_rate_ann: float | None = None
+        oi_change_7d_pct: float | None = None
+        long_short_ratio: float | None = None
+        liquidations_long: float | None = None
+        liquidations_short: float | None = None
+
+        macro_data_cached = _cache_get("macro_data")
+        if macro_data_cached is not None:
+            funding_rate_ann = macro_data_cached.get("funding_rate_annualized_pct")
+            oi_change_7d_pct = macro_data_cached.get("oi_change_7d_pct")
+            long_short_ratio = macro_data_cached.get("long_short_ratio_latest")
+            liquidations_long = macro_data_cached.get("liquidations_long_24h_usd")
+            liquidations_short = macro_data_cached.get("liquidations_short_24h_usd")
+
+        if funding_rate_ann is None or oi_change_7d_pct is None or long_short_ratio is None:
+            try:
+                from src.flows.coinglass_client import CoinGlassClient
+                _cg = CoinGlassClient()
+
+                if funding_rate_ann is None:
+                    fr_series = _cg.fetch_funding_rate_history(days=14)
+                    if not fr_series.empty:
+                        funding_rate_ann = float(fr_series.iloc[-1]) * 3 * 365 * 100
+
+                if oi_change_7d_pct is None:
+                    oi_series = _cg.fetch_aggregated_oi_history(days=14)
+                    if len(oi_series) >= 8:
+                        oi_7d = float(oi_series.iloc[-8])
+                        if oi_7d > 0:
+                            oi_change_7d_pct = (float(oi_series.iloc[-1]) - oi_7d) / oi_7d * 100
+
+                if long_short_ratio is None:
+                    ls_series = _cg.fetch_long_short_ratio(days=3)
+                    if not ls_series.empty:
+                        long_short_ratio = float(ls_series.iloc[-1])
+
+                if liquidations_long is None:
+                    liq_df = _cg.fetch_liquidations(days=2)
+                    if not liq_df.empty:
+                        liquidations_long = float(liq_df["long_usd"].iloc[-1])
+                        liquidations_short = float(liq_df["short_usd"].iloc[-1])
+            except Exception as _e:
+                _log.warning("CoinGlass fetch fallito in /wagmi: %s", _e)
+
+        # ── Calcolo WAGMI ─────────────────────────────────────────────────────
+        wagmi_inputs = WagmiInputs(
+            gex_usd=snapshot.total_net_gex,
+            spot_price=spot,
+            gamma_flip_price=snapshot.gamma_flip_price,
+            etf_flow_3d_usd=ibit_flow_3d,
+            long_short_ratio=long_short_ratio,
+            funding_rate_annualized_pct=funding_rate_ann,
+            oi_change_7d_pct=oi_change_7d_pct,
+            call_wall_price=snapshot.call_wall,
+            put_wall_price=snapshot.put_wall,
+            max_pain_price=snapshot.max_pain,
+            liquidations_long_24h_usd=liquidations_long,
+            liquidations_short_24h_usd=liquidations_short,
+        )
+
+        model = WagmiModel()
+        result = model.compute(wagmi_inputs)
+
+        response = _ok(
+            {
+                "score": result.score,
+                "label": result.label,
+                "narrative": result.narrative,
+                "key_level": result.key_level,
+                "key_level_label": result.key_level_label,
+                "components": result.components,
+                "weights": result.weights_used,
+                "inputs": {
+                    "spot_price_usd": spot,
+                    "gex_usd_m": round(snapshot.total_net_gex / 1e6, 2),
+                    "gamma_flip_price": snapshot.gamma_flip_price,
+                    "call_wall": snapshot.call_wall,
+                    "put_wall": snapshot.put_wall,
+                    "max_pain": snapshot.max_pain,
+                    "etf_flow_3d_usd_m": round(ibit_flow_3d / 1e6, 2),
+                    "long_short_ratio": long_short_ratio,
+                    "funding_rate_annualized_pct": funding_rate_ann,
+                    "oi_change_7d_pct": oi_change_7d_pct,
+                    "liquidations_long_24h_usd": liquidations_long,
+                    "liquidations_short_24h_usd": liquidations_short,
+                },
+            }
+        )
+        _cache_set("wagmi", response)
+        return response
+
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"WAGMI error: {exc}")
