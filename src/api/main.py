@@ -7,7 +7,7 @@ Endpoints:
   GET /api/barriers  - Barriere attive da SEC EDGAR
   GET /api/signals   - Segnale composito LONG/CAUTION/RISK_OFF + Sharpe backtest
   GET /api/macro     - Indicatori macro: funding rate, OI, long/short ratio, liquidazioni
-  GET /api/wagmi     - WAGMI Index 0-100: indicatore composito momentum+strutturale
+  GET /api/ifi       - Institutional Flow Index: serie storica giornaliera 0-100 (D/W chart)
   GET /docs          - Swagger UI (FastAPI built-in)
 """
 
@@ -47,7 +47,7 @@ _TTL = {
     "barriers":       3600,  # 1 ora  — dati SEC EDGAR statici
     "signals":        300,   # 5 min  — dipende da gex + flows
     "macro":          3600,  # 1 ora  — dati CoinGlass giornalieri
-    "wagmi":          300,   # 5 min  — stessa frequenza di /signals
+    "ifi":            900,   # 15 min — serie giornaliera, cambia lentamente
 }
 
 # Lock che impedisce fetch Deribit concorrenti: il secondo richiedente attende
@@ -1025,149 +1025,123 @@ def get_macro() -> dict:
         raise _error(f"Macro error: {exc}")
 
 
-# ─── /api/wagmi ───────────────────────────────────────────────────────────────
+# ─── /api/ifi ─────────────────────────────────────────────────────────────────
 
 
-@app.get("/api/wagmi", tags=["signals"])
-def get_wagmi() -> dict:
-    """WAGMI Index (0-100): indicatore composito momentum + strutturale per BTC.
+@app.get("/api/ifi", tags=["signals"])
+def get_ifi() -> dict:
+    """Institutional Flow Index (IFI): serie storica giornaliera 0-100 per BTC.
 
-    Integra 7 fattori con pesi differenti rispetto a /api/signals:
-      - gamma_structure (25%): posizione rispetto al gamma flip + regime GEX
-      - etf_flow (20%): domanda istituzionale ETF 3gg
-      - squeeze_setup (15%): divergenza L/S ratio vs funding rate
-      - funding_rate (12%): contrarian sentiment
-      - oi_trend (10%): momentum open interest
-      - options_structure (10%): distanza da call wall, put wall, max pain
-      - liquidation_bias (8%): asimmetria liquidazioni
+    Indicatore chartabile su timeframe D/W basato su ETF flows (da gen 2024),
+    prezzo BTC e dati CoinGlass (funding/OI/L/S per ultimi 333-500gg).
+    Usa sigmoid scaling su tutti i fattori per una curva liscia e continua.
 
-    Labels: NGMI (0-30) | DEGEN (31-50) | MEH (51-64) | WAGMI (65-79) | FULL_WAGMI (80-100)
-    Risposta cachata 5 minuti.
+    Fattori: flow_momentum (40%) · flow_trend (20%) · price_momentum (15%) ·
+             funding (10%) · oi_momentum (10%) · ls_squeeze (5%)
+
+    Regimi: Outflow (<30) | Distribution (30-45) | Neutral (45-55) |
+            Momentum (55-70) | Accumulation (≥70)
+
+    Fast path: legge da DB ifi_history (popolato dal cron_ifi.py).
+    Slow path: calcola on-the-fly se DB vuoto (solo flows + prezzo, no CoinGlass).
+    Risposta cachata 15 minuti.
     """
-    cached = _cache_get("wagmi")
+    cached = _cache_get("ifi")
     if cached is not None:
         return cached
 
     try:
-        from src.analytics.wagmi import WagmiInputs, WagmiModel
+        from src.analytics.ifi import IFIModel, regime_label
+        from src.analytics.ifi_db import IFIDb
         from src.flows.scraper import FarsideScraper
         from src.flows.price_fetcher import PriceFetcher
         from src.flows.correlation import FlowCorrelation
 
-        # ── GEX — riusa cache condivisa ───────────────────────────────────────
-        gex_data = _get_gex_data()
-        snapshot = gex_data["snapshot"]
-        spot = gex_data["spot"]
+        db = IFIDb()
 
-        # ── ETF flows 3gg ─────────────────────────────────────────────────────
-        ibit_flow_3d = 0.0
-        try:
+        # ── Fast path: leggi dal DB ────────────────────────────────────────────
+        series_df = db.get_series(days=520)
+        current = db.get_latest()
+
+        # ── Slow path: se DB vuoto, calcola on-the-fly ────────────────────────
+        if series_df.empty:
+            _log.info("IFI DB vuoto — calcolo on-the-fly (solo flows+prezzo)")
             scraper = FarsideScraper()
-            raw_flows = scraper.fetch()
-            agg_flows = scraper.aggregate(raw_flows)
+            raw     = scraper.fetch()
+            agg     = scraper.aggregate(raw)
             fetcher = PriceFetcher()
-            prices = fetcher.get_all_prices()
-            corr_eng = FlowCorrelation()
-            merged = corr_eng.merge(agg_flows, prices)
-            if not merged.empty and "ibit_flow_3d" in merged.columns:
-                last_val = merged["ibit_flow_3d"].dropna()
-                if not last_val.empty:
-                    ibit_flow_3d = float(last_val.iloc[-1])
-        except Exception as _e:
-            _log.warning("ETF flow fetch fallito in /wagmi: %s", _e)
+            prices  = fetcher.get_all_prices()
+            corr    = FlowCorrelation()
+            merged  = corr.merge(agg, prices)
 
-        # ── Macro CoinGlass — dalla cache se disponibile ──────────────────────
-        funding_rate_ann: float | None = None
-        oi_change_7d_pct: float | None = None
-        long_short_ratio: float | None = None
-        liquidations_long: float | None = None
-        liquidations_short: float | None = None
+            if "total_flow" in merged.columns:
+                merged = merged.rename(columns={"total_flow": "total_flow_usd"})
 
-        macro_data_cached = _cache_get("macro_data")
-        if macro_data_cached is not None:
-            funding_rate_ann = macro_data_cached.get("funding_rate_annualized_pct")
-            oi_change_7d_pct = macro_data_cached.get("oi_change_7d_pct")
-            long_short_ratio = macro_data_cached.get("long_short_ratio_latest")
-            liquidations_long = macro_data_cached.get("liquidations_long_24h_usd")
-            liquidations_short = macro_data_cached.get("liquidations_short_24h_usd")
+            model  = IFIModel()
+            scores = model.compute_series(merged)
+            scores = scores.iloc[90:]  # skip warm-up
 
-        if funding_rate_ann is None or oi_change_7d_pct is None or long_short_ratio is None:
-            try:
-                from src.flows.coinglass_client import CoinGlassClient
-                _cg = CoinGlassClient()
+            btc_prices = merged.get("btc_close")
+            flows      = merged.get("total_flow_usd")
 
-                if funding_rate_ann is None:
-                    fr_series = _cg.fetch_funding_rate_history(days=14)
-                    if not fr_series.empty:
-                        funding_rate_ann = float(fr_series.iloc[-1]) * 3 * 365 * 100
+            series_rows = []
+            for ts, score in scores.items():
+                date  = str(ts.date()) if hasattr(ts, "date") else str(ts)
+                btc   = float(btc_prices[ts]) if btc_prices is not None and ts in btc_prices.index else None
+                flow  = float(flows[ts]) if flows is not None and ts in flows.index else None
+                series_rows.append({
+                    "date":              date,
+                    "score":             round(float(score), 2),
+                    "regime":            regime_label(float(score)),
+                    "btc_price":         btc,
+                    "total_flow_usd_m":  round(flow / 1e6, 2) if flow else None,
+                })
 
-                if oi_change_7d_pct is None:
-                    oi_series = _cg.fetch_aggregated_oi_history(days=14)
-                    if len(oi_series) >= 8:
-                        oi_7d = float(oi_series.iloc[-8])
-                        if oi_7d > 0:
-                            oi_change_7d_pct = (float(oi_series.iloc[-1]) - oi_7d) / oi_7d * 100
+            current_score  = float(scores.iloc[-1]) if not scores.empty else 50.0
+            current_regime = regime_label(current_score)
+            current_date   = str(scores.index[-1].date()) if not scores.empty else ""
 
-                if long_short_ratio is None:
-                    ls_series = _cg.fetch_long_short_ratio(days=3)
-                    if not ls_series.empty:
-                        long_short_ratio = float(ls_series.iloc[-1])
-
-                if liquidations_long is None:
-                    liq_df = _cg.fetch_liquidations(days=2)
-                    if not liq_df.empty:
-                        liquidations_long = float(liq_df["long_usd"].iloc[-1])
-                        liquidations_short = float(liq_df["short_usd"].iloc[-1])
-            except Exception as _e:
-                _log.warning("CoinGlass fetch fallito in /wagmi: %s", _e)
-
-        # ── Calcolo WAGMI ─────────────────────────────────────────────────────
-        wagmi_inputs = WagmiInputs(
-            gex_usd=snapshot.total_net_gex,
-            spot_price=spot,
-            gamma_flip_price=snapshot.gamma_flip_price,
-            etf_flow_3d_usd=ibit_flow_3d,
-            long_short_ratio=long_short_ratio,
-            funding_rate_annualized_pct=funding_rate_ann,
-            oi_change_7d_pct=oi_change_7d_pct,
-            call_wall_price=snapshot.call_wall,
-            put_wall_price=snapshot.put_wall,
-            max_pain_price=snapshot.max_pain,
-            liquidations_long_24h_usd=liquidations_long,
-            liquidations_short_24h_usd=liquidations_short,
-        )
-
-        model = WagmiModel()
-        result = model.compute(wagmi_inputs)
-
-        response = _ok(
-            {
-                "score": result.score,
-                "label": result.label,
-                "narrative": result.narrative,
-                "key_level": result.key_level,
-                "key_level_label": result.key_level_label,
-                "components": result.components,
-                "weights": result.weights_used,
-                "inputs": {
-                    "spot_price_usd": spot,
-                    "gex_usd_m": round(snapshot.total_net_gex / 1e6, 2),
-                    "gamma_flip_price": snapshot.gamma_flip_price,
-                    "call_wall": snapshot.call_wall,
-                    "put_wall": snapshot.put_wall,
-                    "max_pain": snapshot.max_pain,
-                    "etf_flow_3d_usd_m": round(ibit_flow_3d / 1e6, 2),
-                    "long_short_ratio": long_short_ratio,
-                    "funding_rate_annualized_pct": funding_rate_ann,
-                    "oi_change_7d_pct": oi_change_7d_pct,
-                    "liquidations_long_24h_usd": liquidations_long,
-                    "liquidations_short_24h_usd": liquidations_short,
+            response = _ok({
+                "current": {"score": current_score, "regime": current_regime, "date": current_date},
+                "series":  series_rows,
+                "stats":   {
+                    "days_available": len(series_rows),
+                    "data_start":     series_rows[0]["date"] if series_rows else None,
+                    "source":         "computed_on_the_fly",
                 },
-            }
-        )
-        _cache_set("wagmi", response)
+            })
+            _cache_set("ifi", response)
+            return response
+
+        # ── Serializza serie dal DB ────────────────────────────────────────────
+        series_rows = []
+        for ts, row in series_df.iterrows():
+            date  = str(ts.date()) if hasattr(ts, "date") else str(ts)
+            flow  = row.get("total_flow_usd")
+            series_rows.append({
+                "date":             date,
+                "score":            round(float(row["score"]), 2),
+                "regime":           row["regime"],
+                "btc_price":        row.get("btc_price"),
+                "total_flow_usd_m": round(float(flow) / 1e6, 2) if flow and flow == flow else None,
+            })
+
+        c_score  = float(current["score"]) if current else 50.0
+        c_regime = current["regime"] if current else "Neutral"
+        c_date   = current["date"]  if current else ""
+
+        response = _ok({
+            "current": {"score": c_score, "regime": c_regime, "date": c_date},
+            "series":  series_rows,
+            "stats":   {
+                "days_available": len(series_rows),
+                "data_start":     series_rows[0]["date"] if series_rows else None,
+                "source":         "db",
+            },
+        })
+        _cache_set("ifi", response)
         return response
 
     except Exception as exc:
         traceback.print_exc()
-        raise _error(f"WAGMI error: {exc}")
+        raise _error(f"IFI error: {exc}")
