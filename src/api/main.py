@@ -8,6 +8,7 @@ Endpoints:
   GET /api/signals   - Segnale composito LONG/CAUTION/RISK_OFF + Sharpe backtest
   GET /api/macro     - Indicatori macro: funding rate, OI, long/short ratio, liquidazioni
   GET /api/ifi       - Institutional Flow Index: serie storica giornaliera 0-100 (D/W chart)
+  POST /api/telegram/webhook - Webhook Telegram: gestisce /recap da gruppo
   GET /docs          - Swagger UI (FastAPI built-in)
 """
 
@@ -190,8 +191,21 @@ async def _start_alert_scheduler() -> None:
         )
 
         asyncio.create_task(_catch_up_daily_recap(monitor, recap_cfg))
+        asyncio.create_task(_register_telegram_webhook(monitor._telegram))
     except Exception:
         _log.exception("[alerts] scheduler startup failed")
+
+
+async def _register_telegram_webhook(telegram: Any) -> None:
+    """Registra il webhook Telegram e i comandi del bot se TELEGRAM_WEBHOOK_URL è impostato."""
+    webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").rstrip("/")
+    if not webhook_url or telegram is None:
+        return
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    await telegram.set_webhook(f"{webhook_url}/api/telegram/webhook", secret_token=secret)
+    await telegram.set_commands([
+        {"command": "recap", "description": "Invia il recap GEX + IFI aggiornato"},
+    ])
 
 
 @app.on_event("shutdown")
@@ -260,6 +274,61 @@ def root() -> RedirectResponse:
 def health() -> dict:
     """Health check: verifica che il server sia attivo."""
     return _ok({"service": "btc-institutional-flow", "healthy": True})
+
+
+# ─── /api/telegram/webhook ────────────────────────────────────────────────────
+
+
+@app.post("/api/telegram/webhook", include_in_schema=False)
+async def telegram_webhook(request: Request) -> JSONResponse:
+    """Riceve aggiornamenti da Telegram e gestisce i comandi del bot.
+
+    Comandi supportati:
+      /recap — invia il recap GEX + IFI aggiornato nella chat corrente
+    """
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if secret:
+        received = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if received != secret:
+            return JSONResponse({"ok": False}, status_code=403)
+
+    try:
+        update = await request.json()
+    except Exception:
+        return JSONResponse({"ok": True})
+
+    msg = update.get("message") or update.get("channel_post")
+    if not msg:
+        return JSONResponse({"ok": True})
+
+    text: str = msg.get("text", "")
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+
+    if not text.startswith("/recap") or not chat_id:
+        return JSONResponse({"ok": True})
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        return JSONResponse({"ok": True})
+
+    try:
+        from src.alerts.gex_alert_monitor import GexAlertMonitor
+        from src.alerts.telegram_client import TelegramClient
+
+        monitor = GexAlertMonitor()
+        message = await monitor.build_recap_message()
+        if message:
+            client = TelegramClient(bot_token=token, chat_id=chat_id)
+            await client.send_to(chat_id, message)
+            _log.info("[webhook] /recap inviato a chat %s", chat_id)
+        else:
+            await TelegramClient(bot_token=token, chat_id=chat_id).send_to(
+                chat_id, "<i>Nessun dato GEX disponibile al momento.</i>"
+            )
+    except Exception:
+        _log.exception("[webhook] errore gestione /recap")
+
+    return JSONResponse({"ok": True})
 
 
 # ─── CoinGlass GEX enrichment ─────────────────────────────────────────────────

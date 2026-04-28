@@ -65,3 +65,53 @@ class TelegramClient:
         except httpx.HTTPError as exc:
             _log.error("Telegram send error: %s", exc)
             return False
+
+    async def send_to(self, chat_id: str, text: str) -> bool:
+        """Invia un messaggio HTML a una chat arbitraria (es. risposta a un comando)."""
+        url = f"{_API_BASE}/bot{self._token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(url, json=payload)
+            if not resp.is_success:
+                _log.error("Telegram send_to failed: %s — %s", resp.status_code, resp.text[:200])
+                return False
+            return True
+        except httpx.HTTPError as exc:
+            _log.error("Telegram send_to error: %s", exc)
+            return False
+
+    async def set_webhook(self, webhook_url: str, secret_token: str = "") -> bool:
+        """Registra il webhook su Telegram. Ritorna True se ok."""
+        url = f"{_API_BASE}/bot{self._token}/setWebhook"
+        payload: dict = {"url": webhook_url}
+        if secret_token:
+            payload["secret_token"] = secret_token
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(url, json=payload)
+            ok = resp.is_success and resp.json().get("ok", False)
+            if ok:
+                _log.info("Telegram webhook registrato: %s", webhook_url)
+            else:
+                _log.warning("Telegram setWebhook fallito: %s", resp.text[:200])
+            return ok
+        except httpx.HTTPError as exc:
+            _log.error("Telegram setWebhook error: %s", exc)
+            return False
+
+    async def set_commands(self, commands: list[dict]) -> bool:
+        """Registra i comandi del bot visibili nel menu Telegram."""
+        url = f"{_API_BASE}/bot{self._token}/setMyCommands"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(url, json={"commands": commands})
+            return resp.is_success and resp.json().get("ok", False)
+        except httpx.HTTPError as exc:
+            _log.error("Telegram setMyCommands error: %s", exc)
+            return False

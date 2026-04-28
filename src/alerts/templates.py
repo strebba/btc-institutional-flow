@@ -12,8 +12,6 @@ from typing import Optional
 
 from src.gex.models import GexSnapshot, RegimeState
 
-DASHBOARD_URL = "https://seashell-app-h7hc4.ondigitalocean.app/btc"
-
 _REGIME_EMOJI = {
     "positive_gamma": "🟢",
     "negative_gamma": "🔴",
@@ -216,10 +214,6 @@ def format_daily_recap(
         for a in regime.alerts:
             lines.append(f"• {a}")
 
-    # ── Footer ──
-    lines.append("")
-    lines.append(f'<a href="{DASHBOARD_URL}">Apri dashboard →</a>')
-
     return "\n".join(lines)
 
 
@@ -305,8 +299,5 @@ def format_etf_flow_alert(
             lines.append(f"BTC Spot: {_fmt_price(event.spot_price)}")
         if event.gex_regime is not None:
             lines.append(f"GEX regime: {event.gex_regime}")
-
-    lines.append("")
-    lines.append(f'<a href="{DASHBOARD_URL}">Apri dashboard →</a>')
 
     return "\n".join(lines)

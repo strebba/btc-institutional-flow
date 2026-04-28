@@ -107,9 +107,9 @@ class TestDailyRecap:
         msg = format_daily_recap(_snap(), None, _regime(alerts=[]), None, now=NOW)
         assert "⚠" not in msg
 
-    def test_dashboard_link_present(self) -> None:
+    def test_no_dashboard_link(self) -> None:
         msg = format_daily_recap(_snap(), None, _regime(), None, now=NOW)
-        assert "https://seashell-app-h7hc4.ondigitalocean.app/btc" in msg
+        assert "https://" not in msg
 
 
 class TestFlowAlert:

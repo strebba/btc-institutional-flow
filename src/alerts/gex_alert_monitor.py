@@ -178,44 +178,36 @@ class GexAlertMonitor:
 
     # ─── Daily recap ─────────────────────────────────────────────────────────
 
-    async def send_daily_recap(self) -> bool:
-        """Invia il recap mattutino. Ritorna True se inviato con successo."""
-        if self._telegram is None:
-            _log.info("send_daily_recap skip: telegram non configurato")
-            return False
+    async def build_recap_message(self) -> Optional[str]:
+        """Raccoglie GEX + flows + IFI e genera il messaggio HTML.
 
-        # Cooldown 20h per proteggere da doppie esecuzioni ravvicinate
-        cooldown_h = float(self._cfg.get("cooldown_hours", 24)) - 4
-        if self._alert_db.within_cooldown(ALERT_DAILY_RECAP, hours=cooldown_h):
-            _log.info("send_daily_recap skip: entro cooldown %.0fh", cooldown_h)
-            return False
+        Non applica cooldown né registra l'invio: usato sia da send_daily_recap
+        (scheduling) sia dal webhook Telegram (comando on-demand).
 
-        # GEX: ultimi 2 snapshot per delta
+        Returns:
+            Stringa HTML pronta per Telegram, o None se mancano i dati GEX.
+        """
         latest = self._gex_db.get_latest_n(2)
         if not latest:
-            _log.warning("send_daily_recap skip: nessun GEX snapshot nel DB")
-            return False
+            _log.warning("build_recap_message: nessun GEX snapshot nel DB")
+            return None
 
         snap = latest[-1]
         prev = latest[-2] if len(latest) >= 2 else None
 
-        # Regime: pre-popola storico per percentile corretto
         detector = RegimeDetector()
         history = self._gex_db.get_latest_n(90)
-        # detect() aggiunge lo snap allo storico, quindi escludiamo l'ultimo se coincide
         prepop = history[:-1] if history and history[-1].timestamp == snap.timestamp else history
         detector.load_history_from_db(prepop)
         regime = detector.detect(snap)
 
-        # Flows (best-effort, errori non bloccano il recap GEX)
         flows_summary: Optional[FlowsSummary] = None
         try:
             aggs = self._fetch_flows()
             flows_summary = summarize_flows(aggs)
         except Exception as exc:
-            _log.warning("flows fetch failed in daily_recap: %s", exc)
+            _log.warning("flows fetch failed: %s", exc)
 
-        # IFI (best-effort)
         ifi_summary: Optional[IFISummary] = None
         try:
             from src.analytics.ifi_db import IFIDb
@@ -231,9 +223,24 @@ class GexAlertMonitor:
                     price_score=row.get("price_score"),
                 )
         except Exception as exc:
-            _log.warning("IFI fetch failed in daily_recap: %s", exc)
+            _log.warning("IFI fetch failed: %s", exc)
 
-        message = format_daily_recap(snap, prev, regime, flows_summary, ifi=ifi_summary)
+        return format_daily_recap(snap, prev, regime, flows_summary, ifi=ifi_summary)
+
+    async def send_daily_recap(self) -> bool:
+        """Invia il recap mattutino. Ritorna True se inviato con successo."""
+        if self._telegram is None:
+            _log.info("send_daily_recap skip: telegram non configurato")
+            return False
+
+        cooldown_h = float(self._cfg.get("cooldown_hours", 24)) - 4
+        if self._alert_db.within_cooldown(ALERT_DAILY_RECAP, hours=cooldown_h):
+            _log.info("send_daily_recap skip: entro cooldown %.0fh", cooldown_h)
+            return False
+
+        message = await self.build_recap_message()
+        if message is None:
+            return False
 
         sent = await self._telegram.send_message(message)
         if sent:
