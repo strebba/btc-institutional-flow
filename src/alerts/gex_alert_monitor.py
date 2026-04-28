@@ -28,6 +28,9 @@ from src.gex.regime_detector import RegimeDetector
 
 _log = setup_logging("alerts.monitor")
 
+# Sentinella: differenzia telegram=None (disabilitato esplicitamente) da "non fornito"
+_UNSET: object = object()
+
 ALERT_DAILY_RECAP = "daily_recap"
 ALERT_FLOW_SINGLE_DAY = "etf_flow_single_day"
 ALERT_FLOW_CUMULATIVE = "etf_flow_cumulative_7d"
@@ -144,7 +147,7 @@ class GexAlertMonitor:
     def __init__(
         self,
         *,
-        telegram: Optional[TelegramClient] = None,
+        telegram: Optional[TelegramClient] | object = _UNSET,
         gex_db: Optional[GexDB] = None,
         alert_db: Optional[AlertDB] = None,
         fetch_flows=None,
@@ -153,7 +156,11 @@ class GexAlertMonitor:
         cfg_all = get_settings()
         self._cfg = config or cfg_all.get("alerts", {})
 
-        self._telegram = telegram or self._build_telegram_from_env()
+        # telegram=_UNSET (default) → carica da env; telegram=None → disabilitato
+        if telegram is _UNSET:
+            self._telegram = self._build_telegram_from_env()
+        else:
+            self._telegram = telegram  # type: ignore[assignment]
         self._gex_db = gex_db or GexDB()
         self._alert_db = alert_db or AlertDB()
         self._fetch_flows = fetch_flows or self._default_fetch_flows
