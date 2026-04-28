@@ -13,9 +13,10 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import json
@@ -103,6 +104,31 @@ async def _api_key_guard(request: Request, call_next):
 # ─── Alert scheduler startup/shutdown ──────────────────────────────────────────
 
 
+async def _catch_up_daily_recap(monitor: Any, recap_cfg: dict) -> None:
+    """Invia il daily_recap se il processo è ripartito dopo l'orario pianificato e il recap non è stato ancora inviato oggi."""
+    from src.alerts.alert_db import AlertDB
+    from src.alerts.gex_alert_monitor import ALERT_DAILY_RECAP
+
+    now_utc = datetime.now(timezone.utc)
+    scheduled_hour = int(recap_cfg.get("hour_utc", 7))
+    scheduled_minute = int(recap_cfg.get("minute_utc", 0))
+
+    past_scheduled = now_utc.hour > scheduled_hour or (
+        now_utc.hour == scheduled_hour and now_utc.minute >= scheduled_minute
+    )
+    if not past_scheduled:
+        return
+
+    alert_db = AlertDB()
+    cooldown_h = 20.0
+    if alert_db.within_cooldown(ALERT_DAILY_RECAP, hours=cooldown_h):
+        _log.info("[alerts] catch-up skip: recap già inviato nelle ultime %.0fh", cooldown_h)
+        return
+
+    _log.info("[alerts] catch-up: daily_recap non inviato oggi — lancio ora")
+    await monitor.send_daily_recap()
+
+
 @app.on_event("startup")
 async def _start_alert_scheduler() -> None:
     """Avvia APScheduler con 2 job: daily recap + ETF flow check.
@@ -143,6 +169,7 @@ async def _start_alert_scheduler() -> None:
             ),
             id="daily_recap",
             replace_existing=True,
+            misfire_grace_time=int(timedelta(hours=2).total_seconds()),
         )
 
         flow_cfg = cfg.get("etf_flow_check", {})
@@ -161,6 +188,8 @@ async def _start_alert_scheduler() -> None:
             int(recap_cfg.get("minute_utc", 0)),
             int(flow_cfg.get("interval_hours", 4)),
         )
+
+        asyncio.create_task(_catch_up_daily_recap(monitor, recap_cfg))
     except Exception:
         _log.exception("[alerts] scheduler startup failed")
 
