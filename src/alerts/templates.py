@@ -20,6 +20,22 @@ _REGIME_EMOJI = {
     "neutral": "🟡",
 }
 
+_IFI_EMOJI = {
+    "Accumulation": "🟢",
+    "Momentum": "🔵",
+    "Neutral": "⚪",
+    "Distribution": "🟠",
+    "Outflow": "🔴",
+}
+
+_IFI_READING = {
+    "Accumulation": "Istituzionali in forte accumulo — domanda strutturale superiore alla media storica",
+    "Momentum": "Flussi in accelerazione, momentum positivo — trend in corso ma non ancora estremo",
+    "Neutral": "Fase di equilibrio — nessuna convinzione direzionale, segnali misti",
+    "Distribution": "Segnali di distribuzione — indebolimento strutturale, flussi in calo",
+    "Outflow": "Deflusso istituzionale marcato — pressione ribassista strutturale dominante",
+}
+
 
 def _fmt_money(v: Optional[float]) -> str:
     if v is None:
@@ -52,7 +68,26 @@ def _pct_change(new: float, old: float) -> Optional[float]:
     return (new - old) / abs(old) * 100
 
 
+def _mini_bar(v: Optional[float], width: int = 5) -> str:
+    if v is None:
+        return "—    "
+    filled = round(max(0.0, min(1.0, v)) * width)
+    return "█" * filled + "░" * (width - filled)
+
+
 # ─── Daily recap ─────────────────────────────────────────────────────────────
+
+
+@dataclass
+class IFISummary:
+    """Sintesi IFI per il recap mattutino."""
+
+    score: float
+    regime: str
+    date: str
+    flow_score: Optional[float] = None
+    trend_score: Optional[float] = None
+    price_score: Optional[float] = None
 
 
 @dataclass
@@ -80,6 +115,7 @@ def format_daily_recap(
     regime: RegimeState,
     flows: Optional[FlowsSummary],
     *,
+    ifi: Optional[IFISummary] = None,
     now: Optional[datetime] = None,
 ) -> str:
     """Genera il messaggio HTML del daily recap.
@@ -89,6 +125,7 @@ def format_daily_recap(
         prev_snapshot: snapshot del giorno precedente (per delta %), può essere None.
         regime: RegimeState corrente da RegimeDetector.detect().
         flows: sintesi flussi ETF, può essere None se il fetch è fallito.
+        ifi: sintesi IFI, può essere None se il DB è vuoto.
         now: sovrascrive datetime.now() per test deterministici.
 
     Returns:
@@ -121,6 +158,29 @@ def format_daily_recap(
 
     if regime.gex_percentile is not None:
         lines.append(f"GEX percentile 90d: {regime.gex_percentile:.0f}%")
+
+    # ── IFI block ──
+    lines.append("")
+    lines.append("📈 <b>IFI — Institutional Flow Index</b>")
+    if ifi is None:
+        lines.append("<i>Dati IFI non disponibili</i>")
+    else:
+        ifi_emoji = _IFI_EMOJI.get(ifi.regime, "⚪")
+        lines.append(
+            f"Score: <b>{ifi.score:.0f}/100</b>  ·  {ifi_emoji} <b>{ifi.regime}</b>"
+        )
+        reading = _IFI_READING.get(ifi.regime, "")
+        if reading:
+            lines.append(f"<i>{reading}</i>")
+        factors = []
+        if ifi.flow_score is not None:
+            factors.append(f"Flows {_mini_bar(ifi.flow_score)} {ifi.flow_score:.2f}")
+        if ifi.trend_score is not None:
+            factors.append(f"Trend {_mini_bar(ifi.trend_score)} {ifi.trend_score:.2f}")
+        if ifi.price_score is not None:
+            factors.append(f"Price {_mini_bar(ifi.price_score)} {ifi.price_score:.2f}")
+        if factors:
+            lines.append("  ·  ".join(factors))
 
     # ── Flows block ──
     lines.append("")

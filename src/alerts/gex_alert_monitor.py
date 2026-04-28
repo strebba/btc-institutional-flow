@@ -16,6 +16,7 @@ from src.alerts.telegram_client import TelegramClient
 from src.alerts.templates import (
     EtfFlowEvent,
     FlowsSummary,
+    IFISummary,
     format_daily_recap,
     format_etf_flow_alert,
 )
@@ -214,7 +215,25 @@ class GexAlertMonitor:
         except Exception as exc:
             _log.warning("flows fetch failed in daily_recap: %s", exc)
 
-        message = format_daily_recap(snap, prev, regime, flows_summary)
+        # IFI (best-effort)
+        ifi_summary: Optional[IFISummary] = None
+        try:
+            from src.analytics.ifi_db import IFIDb
+
+            row = IFIDb().get_latest()
+            if row:
+                ifi_summary = IFISummary(
+                    score=float(row["score"]),
+                    regime=str(row["regime"]),
+                    date=str(row["date"]),
+                    flow_score=row.get("flow_score"),
+                    trend_score=row.get("trend_score"),
+                    price_score=row.get("price_score"),
+                )
+        except Exception as exc:
+            _log.warning("IFI fetch failed in daily_recap: %s", exc)
+
+        message = format_daily_recap(snap, prev, regime, flows_summary, ifi=ifi_summary)
 
         sent = await self._telegram.send_message(message)
         if sent:

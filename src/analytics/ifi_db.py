@@ -163,7 +163,8 @@ class IFIDb:
     def get_latest(self) -> Optional[dict]:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT date, score, regime, btc_price, total_flow_usd "
+                "SELECT date, score, regime, flow_score, trend_score, price_score, "
+                "funding_score, oi_score, btc_price, total_flow_usd "
                 "FROM ifi_history ORDER BY date DESC LIMIT 1"
             ).fetchone()
         return dict(row) if row else None
