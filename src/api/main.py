@@ -1192,7 +1192,7 @@ def get_ifi() -> dict:
                     "score":             round(float(score), 2),
                     "regime":            regime_label(float(score)),
                     "btc_price":         btc,
-                    "total_flow_usd_m":  round(flow / 1e6, 2) if flow else None,
+                    "total_flow_usd_m":  round(flow / 1e6, 2) if flow is not None and flow == flow else None,
                 })
 
             current_score  = float(scores.iloc[-1]) if not scores.empty else 50.0
