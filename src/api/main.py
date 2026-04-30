@@ -36,6 +36,7 @@ _log = setup_logging("api.main")
 # ─── Alert scheduler (lazy init, graceful degrade) ─────────────────────────────
 
 _alert_scheduler = None  # type: ignore[var-annotated]
+_ifi_scheduler = None  # type: ignore[var-annotated]
 
 # ─── In-memory TTL cache ───────────────────────────────────────────────────────
 
@@ -121,9 +122,8 @@ async def _catch_up_daily_recap(monitor: Any, recap_cfg: dict) -> None:
         return
 
     alert_db = AlertDB()
-    cooldown_h = 20.0
-    if alert_db.within_cooldown(ALERT_DAILY_RECAP, hours=cooldown_h):
-        _log.info("[alerts] catch-up skip: recap già inviato nelle ultime %.0fh", cooldown_h)
+    if alert_db.sent_today(ALERT_DAILY_RECAP):
+        _log.info("[alerts] catch-up skip: recap già inviato oggi (UTC)")
         return
 
     _log.info("[alerts] catch-up: daily_recap non inviato oggi — lancio ora")
@@ -208,13 +208,66 @@ async def _register_telegram_webhook(telegram: Any) -> None:
     ])
 
 
+async def _auto_ifi_update(*, backfill: bool = False, days: int = 1) -> None:
+    """Aggiorna IFI DB in un thread executor per non bloccare l'event loop."""
+    try:
+        from src.analytics.ifi_updater import run as _ifi_run
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: _ifi_run(backfill=backfill, days=days)
+        )
+        _log.info(
+            "[ifi] aggiornamento completato (backfill=%s, days=%d, result=%d)",
+            backfill, days, result,
+        )
+    except Exception:
+        _log.exception("[ifi] aggiornamento fallito")
+
+
+@app.on_event("startup")
+async def _start_ifi_scheduler() -> None:
+    """Avvia scheduler IFI: backfill automatico se DB vuoto + cron giornaliero 22:00 UTC."""
+    global _ifi_scheduler
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from src.analytics.ifi_db import IFIDb
+
+        db_count = IFIDb().count()
+        if db_count < 30:
+            _log.info("[ifi] DB ha %d righe — lancio backfill in background", db_count)
+            asyncio.create_task(_auto_ifi_update(backfill=True))
+        else:
+            _log.info("[ifi] DB ha %d righe — aggiornamento giornaliero in background", db_count)
+            asyncio.create_task(_auto_ifi_update(days=1))
+
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        scheduler.add_job(
+            _auto_ifi_update,
+            CronTrigger(hour=22, minute=0, timezone="UTC"),
+            id="ifi_daily_update",
+            kwargs={"days": 1},
+            replace_existing=True,
+            misfire_grace_time=int(timedelta(hours=3).total_seconds()),
+        )
+        scheduler.start()
+        _ifi_scheduler = scheduler
+        _log.info("[ifi] scheduler started — daily update at 22:00 UTC")
+    except Exception:
+        _log.exception("[ifi] scheduler startup failed")
+
+
 @app.on_event("shutdown")
 async def _stop_alert_scheduler() -> None:
-    global _alert_scheduler
+    global _alert_scheduler, _ifi_scheduler
     if _alert_scheduler is not None:
         _alert_scheduler.shutdown(wait=False)
         _alert_scheduler = None
         _log.info("[alerts] scheduler stopped")
+    if _ifi_scheduler is not None:
+        _ifi_scheduler.shutdown(wait=False)
+        _ifi_scheduler = None
+        _log.info("[ifi] scheduler stopped")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -402,7 +455,7 @@ def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
                 result["data_quality"]["fetched_oi_contracts"] = round(our_total, 1)
 
         # ── 2. Multi-exchange PCR e max pain ─────────────────────────────────
-        _EXCHANGES = ["Deribit", "CME", "Binance", "OKX"]
+        _EXCHANGES = ["Deribit", "Bybit", "Binance", "OKX"]
         total_call_notional = 0.0
         total_put_notional  = 0.0
         weighted_pain_sum   = 0.0

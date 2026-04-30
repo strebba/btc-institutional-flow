@@ -90,6 +90,21 @@ class AlertDB:
             ts = ts.replace(tzinfo=timezone.utc)
         return datetime.now(tz=timezone.utc) - ts < timedelta(hours=hours)
 
+    def sent_today(self, alert_type: str) -> bool:
+        """True se l'alert è già stato inviato nella giornata corrente (UTC).
+
+        Usato per il daily_recap: impedisce doppi invii nella stessa giornata
+        senza bloccare il giorno successivo anche se ieri sono stati inviati
+        messaggi di test nel pomeriggio.
+        """
+        last = self.get_last_sent(alert_type)
+        if last is None:
+            return False
+        ts, _ = last
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.date() == datetime.now(tz=timezone.utc).date()
+
     def is_duplicate(self, alert_type: str, payload: str) -> bool:
         """True se l'hash del payload coincide con l'ultimo inviato."""
         last = self.get_last_sent(alert_type)

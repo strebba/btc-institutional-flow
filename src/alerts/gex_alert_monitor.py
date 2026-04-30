@@ -240,9 +240,8 @@ class GexAlertMonitor:
             _log.info("send_daily_recap skip: telegram non configurato")
             return False
 
-        cooldown_h = float(self._cfg.get("cooldown_hours", 24)) - 4
-        if self._alert_db.within_cooldown(ALERT_DAILY_RECAP, hours=cooldown_h):
-            _log.info("send_daily_recap skip: entro cooldown %.0fh", cooldown_h)
+        if self._alert_db.sent_today(ALERT_DAILY_RECAP):
+            _log.info("send_daily_recap skip: recap già inviato oggi (UTC)")
             return False
 
         message = await self.build_recap_message()

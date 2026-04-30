@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from src.flows.coinglass_client import CoinGlassClient, CoinGlassError
+from src.flows.coinglass_client import CoinGlassApiError, CoinGlassClient, CoinGlassError
 from src.flows.models import EtfFlowData
 
 
@@ -91,10 +91,10 @@ class TestFetchEtfFlows:
         assert client.fetch_etf_flows() == []
 
     def test_missing_api_key_raises_coinglass_error(self) -> None:
-        """Chiave vuota → CoinGlassError al primo _get."""
+        """Chiave vuota → CoinGlassApiError (config permanente, non ritentata)."""
         client = _client(api_key="")
-        client._session = MagicMock()
-        with pytest.raises(CoinGlassError, match="API key"):
+        client._api_key = ""  # bypassa eventuale env var COINGLASS_API_KEY
+        with pytest.raises(CoinGlassApiError, match="API key"):
             client._get("/api/etf/bitcoin/flow-history")
 
     def test_unix_ms_timestamp_parsed(self) -> None:

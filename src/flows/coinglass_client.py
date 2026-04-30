@@ -21,7 +21,7 @@ from typing import Any
 import requests
 
 try:
-    from tenacity import retry, stop_after_attempt, wait_exponential
+    from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
     _HAS_TENACITY = True
 except ImportError:
@@ -33,6 +33,9 @@ except ImportError:
             return fn
 
         return decorator
+
+    def retry_if_exception_type(*args):  # type: ignore[misc]
+        return None
 
     def stop_after_attempt(n):  # type: ignore[misc]
         return None
@@ -50,7 +53,12 @@ _log = setup_logging("flows.coinglass")
 
 
 class CoinGlassError(Exception):
-    """Eccezione per errori API CoinGlass."""
+    """Errore transitorio CoinGlass (rete, 429, 5xx) — viene ritentato da tenacity."""
+
+
+class CoinGlassApiError(Exception):
+    """Errore permanente dall'API CoinGlass (parametri invalidi, exchange non supportato).
+    Non è una sottoclasse di CoinGlassError: tenacity non lo ritenta."""
 
 
 class CoinGlassClient:
@@ -91,7 +99,11 @@ class CoinGlassClient:
                 time.sleep(wait)
         self._last_call_ts = time.time()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.5, min=1, max=10))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=0.5, min=1, max=10),
+        retry=retry_if_exception_type(CoinGlassError),
+    )
     def _get(self, path: str, params: dict | None = None) -> Any:
         """Esegue GET con retry su errori transitori.
 
@@ -106,7 +118,7 @@ class CoinGlassClient:
             CoinGlassError: su errore API o chiave mancante.
         """
         if not self._api_key:
-            raise CoinGlassError(
+            raise CoinGlassApiError(
                 "CoinGlass API key mancante. "
                 "Imposta env var COINGLASS_API_KEY o config coinglass.api_key"
             )
@@ -140,7 +152,7 @@ class CoinGlassClient:
         if body.get("code") != "0":
             msg = body.get("msg", body)
             _log.warning("CoinGlass API error: %s", msg)
-            raise CoinGlassError(f"API error: {msg}")
+            raise CoinGlassApiError(f"API error: {msg}")
 
         return body.get("data", [])
 
@@ -158,7 +170,7 @@ class CoinGlassClient:
         """
         try:
             data = self._get("/api/etf/bitcoin/flow-history", {"limit": min(days, 500)})
-        except CoinGlassError as e:
+        except (CoinGlassError, CoinGlassApiError) as e:
             _log.warning("CoinGlass ETF flows: %s", e)
             return []
         except Exception as e:
@@ -368,7 +380,7 @@ class CoinGlassClient:
                 )
                 if data:
                     break
-            except CoinGlassError:
+            except (CoinGlassError, CoinGlassApiError):
                 continue
 
         if data is None:
@@ -456,7 +468,7 @@ class CoinGlassClient:
                 )
                 if data:
                     break
-            except CoinGlassError:
+            except (CoinGlassError, CoinGlassApiError):
                 continue
 
         if data is None:
@@ -539,25 +551,38 @@ class CoinGlassClient:
                 )
                 if data:
                     break
-            except CoinGlassError:
+            except (CoinGlassError, CoinGlassApiError):
                 continue
 
         if data is None:
             _log.warning("CoinGlass taker volume: all parameter combinations failed")
             return pd.Series(dtype=float, name="taker_buy_ratio")
 
-        if not isinstance(data, dict) or not data:
+        # Formato dict: snapshot puntuale {"buy_ratio": 51.01, "sell_ratio": 48.99, ...}
+        if isinstance(data, dict):
+            buy_ratio = data.get("buy_ratio")
+            if buy_ratio is not None:
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                return pd.Series([float(buy_ratio) / 100], index=[now], name="taker_buy_ratio")
             return pd.Series(dtype=float, name="taker_buy_ratio")
 
-        # New response format: {"symbol": "BTC", "buy_ratio": 51.01, "sell_ratio": 48.99, ...}
-        # We only get one data point (current), not historical
-        buy_ratio = data.get("buy_ratio")
-        if buy_ratio is not None:
-            # Return current buy ratio as a single-value series
-            now = datetime.now(timezone.utc)
-            return pd.Series([float(buy_ratio) / 100], index=[now], name="taker_buy_ratio")
+        # Formato lista: storico con t/buyVolume/sellVolume
+        if not isinstance(data, list) or not data:
+            return pd.Series(dtype=float, name="taker_buy_ratio")
 
-        return pd.Series(dtype=float, name="taker_buy_ratio")
+        rows: list[tuple] = []
+        for item in data:
+            ts_ms = item.get("t") or item.get("time")
+            buy_v = item.get("buyVolume", 0.0)
+            sell_v = item.get("sellVolume", 0.0)
+            total = (buy_v or 0.0) + (sell_v or 0.0)
+            if ts_ms is None or total == 0:
+                continue
+            try:
+                dt = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
+                rows.append((dt, float(buy_v or 0.0) / total))
+            except (TypeError, ValueError, OSError):
+                continue
 
         if not rows:
             return pd.Series(dtype=float, name="taker_buy_ratio")
@@ -587,7 +612,7 @@ class CoinGlassClient:
         """
         try:
             data = self._get("/api/option/info", {"symbol": symbol})
-        except CoinGlassError as e:
+        except (CoinGlassError, CoinGlassApiError) as e:
             _log.warning("CoinGlass options info [%s]: %s", symbol, e)
             return []
         except Exception as e:
@@ -627,7 +652,7 @@ class CoinGlassClient:
                 "/api/option/max-pain",
                 {"symbol": symbol, "exchange": exchange},
             )
-        except CoinGlassError as e:
+        except (CoinGlassError, CoinGlassApiError) as e:
             _log.warning("CoinGlass max pain [%s/%s]: %s", symbol, exchange, e)
             return []
         except Exception as e:

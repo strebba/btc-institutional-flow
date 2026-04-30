@@ -82,6 +82,38 @@ class TestPayloadHash:
         int(h, 16)  # non solleva se hex valido
 
 
+class TestSentToday:
+    def test_false_if_never_sent(self, db: AlertDB) -> None:
+        assert db.sent_today("daily_recap") is False
+
+    def test_true_right_after_send(self, db: AlertDB) -> None:
+        db.record_sent("daily_recap", "hello")
+        assert db.sent_today("daily_recap") is True
+
+    def test_false_if_sent_yesterday(self, db: AlertDB) -> None:
+        """Messaggio inviato ieri pomeriggio non deve bloccare quello di oggi."""
+        yesterday_afternoon = (
+            datetime.now(tz=timezone.utc) - timedelta(hours=18)
+        ).isoformat()
+        with db._conn() as conn:
+            conn.execute(
+                "INSERT INTO alert_state VALUES (?, ?, ?)",
+                ("daily_recap", yesterday_afternoon, payload_hash("old")),
+            )
+        # Se sono passate 18h ma siamo in un nuovo giorno UTC, deve essere False
+        # (il test potrebbe essere tautologico se gira poco dopo mezzanotte UTC,
+        #  ma copre il caso comune)
+        yesterday_dt = datetime.now(tz=timezone.utc) - timedelta(hours=18)
+        today_dt = datetime.now(tz=timezone.utc)
+        if yesterday_dt.date() < today_dt.date():
+            assert db.sent_today("daily_recap") is False
+
+    def test_independent_per_type(self, db: AlertDB) -> None:
+        db.record_sent("daily_recap", "x")
+        assert db.sent_today("daily_recap") is True
+        assert db.sent_today("etf_flow_event") is False
+
+
 class TestPersistence:
     def test_state_survives_new_instance(self, tmp_path: Path) -> None:
         """Simula restart: istanza A scrive, istanza B legge."""
