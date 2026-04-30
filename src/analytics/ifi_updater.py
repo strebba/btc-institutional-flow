@@ -87,7 +87,7 @@ def _build_df(fetch_days: int) -> pd.DataFrame:
 def _build_factor_df(df: pd.DataFrame) -> pd.DataFrame:
     factors: dict[str, pd.Series] = {}
 
-    flow = df.get("total_flow_usd") or df.get("total_flow")
+    flow = df.get("total_flow_usd") if "total_flow_usd" in df.columns else df.get("total_flow")
     if flow is not None and flow.notna().sum() >= 30:
         factors["flow_momentum"] = _score_flow_momentum(flow.fillna(0.0))
         factors["flow_trend"] = _score_flow_trend(flow.fillna(0.0))
@@ -134,7 +134,7 @@ def run(backfill: bool = False, days: int = 1) -> int:
 
     factor_df = _build_factor_df(df)
     btc_prices = df.get("btc_close")
-    flows = df.get("total_flow_usd") or df.get("total_flow")
+    flows = df.get("total_flow_usd") if "total_flow_usd" in df.columns else df.get("total_flow")
 
     n = db.upsert_series(subset, factor_df if not factor_df.empty else None, btc_prices, flows)
     total = db.count()

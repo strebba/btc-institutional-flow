@@ -1274,7 +1274,7 @@ def get_ifi() -> dict:
                 "score":            round(float(row["score"]), 2),
                 "regime":           row["regime"],
                 "btc_price":        row.get("btc_price"),
-                "total_flow_usd_m": round(float(flow) / 1e6, 2) if flow and flow == flow else None,
+                "total_flow_usd_m": round(float(flow) / 1e6, 2) if flow is not None and flow == flow else None,
             })
 
         c_score  = float(current["score"]) if current else 50.0
