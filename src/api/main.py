@@ -144,13 +144,17 @@ async def _start_alert_scheduler() -> None:
         _log.info("[alerts] disabilitati via settings.alerts.telegram_enabled=false")
         return
 
-    if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("TELEGRAM_CHAT_ID"):
-        _log.warning(
-            "[alerts] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID mancanti — scheduler non avviato"
-        )
+    missing = [v for v in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.getenv(v)]
+    if missing:
+        _log.warning("[alerts] env var mancanti %s — scheduler non avviato", missing)
         return
 
     try:
+        from apscheduler.events import (
+            EVENT_JOB_ERROR,
+            EVENT_JOB_EXECUTED,
+            EVENT_JOB_MISSED,
+        )
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.interval import IntervalTrigger
@@ -179,6 +183,22 @@ async def _start_alert_scheduler() -> None:
             IntervalTrigger(hours=int(flow_cfg.get("interval_hours", 4))),
             id="etf_flow_check",
             replace_existing=True,
+        )
+
+        def _job_listener(event: Any) -> None:
+            if event.code == EVENT_JOB_MISSED:
+                _log.warning(
+                    "[alerts] job %s MISSED scheduled run at %s",
+                    event.job_id, event.scheduled_run_time,
+                )
+            elif getattr(event, "exception", None):
+                _log.error("[alerts] job %s failed: %s", event.job_id, event.exception)
+            else:
+                _log.info("[alerts] job %s executed", event.job_id)
+
+        scheduler.add_listener(
+            _job_listener,
+            EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED,
         )
 
         scheduler.start()
@@ -953,6 +973,25 @@ def get_signals() -> dict:
         )
         model = SignalModel()
         signal_result = model.compute(signal_inputs)
+
+        # ── Salva segnale nel DB (silent failure, non blocca la risposta) ──────
+        try:
+            from src.analytics.signal_db import SignalDB
+            SignalDB().insert(
+                signal_result,
+                spot_price_usd=spot,
+                total_gex_usd=total_gex,
+                ibit_flow_3d_usd=ibit_flow_3d,
+                funding_rate_pct=funding_rate_ann,
+                oi_change_7d_pct=oi_change_7d_pct,
+                long_short_ratio=long_short_ratio,
+                put_call_ratio=snapshot.put_call_ratio,
+                liq_long_usd=liquidations_long,
+                liq_short_usd=liquidations_short,
+                near_active_barrier=near_barrier,
+            )
+        except Exception:
+            _log.warning("signal_db insert fallito", exc_info=True)
 
         # ── Backtest ───────────────────────────────────────────────────────────
         backtest_metrics: dict = {}

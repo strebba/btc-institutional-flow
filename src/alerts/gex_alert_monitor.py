@@ -6,6 +6,7 @@ Due metodi principali chiamati da APScheduler:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -194,7 +195,7 @@ class GexAlertMonitor:
         Returns:
             Stringa HTML pronta per Telegram, o None se mancano i dati GEX.
         """
-        latest = self._gex_db.get_latest_n(2)
+        latest = await asyncio.to_thread(self._gex_db.get_latest_n, 2)
         if not latest:
             _log.warning("build_recap_message: nessun GEX snapshot nel DB")
             return None
@@ -203,14 +204,14 @@ class GexAlertMonitor:
         prev = latest[-2] if len(latest) >= 2 else None
 
         detector = RegimeDetector()
-        history = self._gex_db.get_latest_n(90)
+        history = await asyncio.to_thread(self._gex_db.get_latest_n, 90)
         prepop = history[:-1] if history and history[-1].timestamp == snap.timestamp else history
         detector.load_history_from_db(prepop)
         regime = detector.detect(snap)
 
         flows_summary: Optional[FlowsSummary] = None
         try:
-            aggs = self._fetch_flows()
+            aggs = await asyncio.to_thread(self._fetch_flows)
             flows_summary = summarize_flows(aggs)
         except Exception as exc:
             _log.warning("flows fetch failed: %s", exc)
@@ -219,7 +220,7 @@ class GexAlertMonitor:
         try:
             from src.analytics.ifi_db import IFIDb
 
-            row = IFIDb().get_latest()
+            row = await asyncio.to_thread(lambda: IFIDb().get_latest())
             if row:
                 ifi_summary = IFISummary(
                     score=float(row["score"]),
@@ -240,7 +241,7 @@ class GexAlertMonitor:
             _log.info("send_daily_recap skip: telegram non configurato")
             return False
 
-        if self._alert_db.sent_today(ALERT_DAILY_RECAP):
+        if await asyncio.to_thread(self._alert_db.sent_today, ALERT_DAILY_RECAP):
             _log.info("send_daily_recap skip: recap già inviato oggi (UTC)")
             return False
 
@@ -250,7 +251,7 @@ class GexAlertMonitor:
 
         sent = await self._telegram.send_message(message)
         if sent:
-            self._alert_db.record_sent(ALERT_DAILY_RECAP, message)
+            await asyncio.to_thread(self._alert_db.record_sent, ALERT_DAILY_RECAP, message)
             _log.info("daily_recap inviato")
         return sent
 
