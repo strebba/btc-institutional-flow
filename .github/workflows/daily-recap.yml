@@ -1,0 +1,67 @@
+name: Daily Telegram Recap
+
+# Trigger esterno indipendente dal processo API: GitHub cron fa POST
+# all'endpoint /api/telegram/recap. AlertDB.sent_today() garantisce
+# idempotenza, quindi i retry sono safe.
+#
+# Setup richiesto (Repository Settings → Secrets and variables → Actions):
+#   - API_BASE_URL       = https://seashell-app-h7hc4.ondigitalocean.app
+#   - TELEGRAM_RECAP_KEY = stessa stringa impostata come env var sull'API
+#
+# Test manuale: Actions tab → "Daily Telegram Recap" → Run workflow.
+
+on:
+  schedule:
+    # 07:00 UTC ogni giorno = 09:00 CEST / 08:00 CET.
+    # GitHub cron può avere skew fino a ~10 minuti, accettabile per il recap.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-recap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST /api/telegram/recap
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          TELEGRAM_RECAP_KEY: ${{ secrets.TELEGRAM_RECAP_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE_URL:-}" ] || [ -z "${TELEGRAM_RECAP_KEY:-}" ]; then
+            echo "::error::API_BASE_URL o TELEGRAM_RECAP_KEY non configurati nei secrets"
+            exit 1
+          fi
+
+          URL="${API_BASE_URL%/}/api/telegram/recap"
+          echo "POST $URL"
+
+          # Retry: 3 tentativi con backoff esponenziale (5s, 15s, 45s).
+          # Max 60s per tentativo perché build_recap_message può fare fetch GEX/IFI.
+          for attempt in 1 2 3; do
+            HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
+              --max-time 60 \
+              -X POST "$URL" \
+              -H "X-Recap-Key: $TELEGRAM_RECAP_KEY" \
+              -H "Content-Type: application/json" \
+              -d '{}' || echo "000")
+
+            echo "Attempt $attempt → HTTP $HTTP_CODE"
+            cat /tmp/resp.json || true
+            echo
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Recap trigger ok"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              SLEEP=$((5 * 3 ** (attempt - 1)))
+              echo "Retry in ${SLEEP}s..."
+              sleep "$SLEEP"
+            fi
+          done
+
+          echo "::error::recap trigger failed dopo 3 tentativi"
+          exit 1

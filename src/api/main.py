@@ -9,6 +9,7 @@ Endpoints:
   GET /api/macro     - Indicatori macro: funding rate, OI, long/short ratio, liquidazioni
   GET /api/ifi       - Institutional Flow Index: serie storica giornaliera 0-100 (D/W chart)
   POST /api/telegram/webhook - Webhook Telegram: gestisce /recap da gruppo
+  POST /api/telegram/recap   - Trigger esterno (GitHub Actions cron) per daily recap
   GET /docs          - Swagger UI (FastAPI built-in)
 """
 
@@ -106,33 +107,14 @@ async def _api_key_guard(request: Request, call_next):
 # ─── Alert scheduler startup/shutdown ──────────────────────────────────────────
 
 
-async def _catch_up_daily_recap(monitor: Any, recap_cfg: dict) -> None:
-    """Invia il daily_recap se il processo è ripartito dopo l'orario pianificato e il recap non è stato ancora inviato oggi."""
-    from src.alerts.alert_db import AlertDB
-    from src.alerts.gex_alert_monitor import ALERT_DAILY_RECAP
-
-    now_utc = datetime.now(timezone.utc)
-    scheduled_hour = int(recap_cfg.get("hour_utc", 7))
-    scheduled_minute = int(recap_cfg.get("minute_utc", 0))
-
-    past_scheduled = now_utc.hour > scheduled_hour or (
-        now_utc.hour == scheduled_hour and now_utc.minute >= scheduled_minute
-    )
-    if not past_scheduled:
-        return
-
-    alert_db = AlertDB()
-    if alert_db.sent_today(ALERT_DAILY_RECAP):
-        _log.info("[alerts] catch-up skip: recap già inviato oggi (UTC)")
-        return
-
-    _log.info("[alerts] catch-up: daily_recap non inviato oggi — lancio ora")
-    await monitor.send_daily_recap()
-
-
 @app.on_event("startup")
 async def _start_alert_scheduler() -> None:
-    """Avvia APScheduler con 2 job: daily recap + ETF flow check.
+    """Avvia APScheduler con il solo job etf_flow_check (interval ogni 4h).
+
+    Il daily_recap NON è più gestito qui: viene triggerato esternamente da
+    GitHub Actions via POST /api/telegram/recap. Motivo: lo scheduler in-process
+    è inaffidabile su PaaS (restart container, deploy, OOM) — la sorgente
+    esterna è indipendente dal nostro processo e ha logs dedicati.
 
     Graceful degrade: se TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID mancano, l'app
     parte lo stesso e i job non vengono registrati.
@@ -156,26 +138,12 @@ async def _start_alert_scheduler() -> None:
             EVENT_JOB_MISSED,
         )
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.interval import IntervalTrigger
 
         from src.alerts.gex_alert_monitor import GexAlertMonitor
 
         monitor = GexAlertMonitor()
         scheduler = AsyncIOScheduler(timezone="UTC")
-
-        recap_cfg = cfg.get("daily_recap", {})
-        scheduler.add_job(
-            monitor.send_daily_recap,
-            CronTrigger(
-                hour=int(recap_cfg.get("hour_utc", 7)),
-                minute=int(recap_cfg.get("minute_utc", 0)),
-                timezone="UTC",
-            ),
-            id="daily_recap",
-            replace_existing=True,
-            misfire_grace_time=int(timedelta(hours=2).total_seconds()),
-        )
 
         flow_cfg = cfg.get("etf_flow_check", {})
         scheduler.add_job(
@@ -204,14 +172,12 @@ async def _start_alert_scheduler() -> None:
         scheduler.start()
         _alert_scheduler = scheduler
         _log.info(
-            "[alerts] scheduler started — daily_recap %02d:%02d UTC, etf_flow_check every %dh",
-            int(recap_cfg.get("hour_utc", 7)),
-            int(recap_cfg.get("minute_utc", 0)),
+            "[alerts] scheduler started — etf_flow_check every %dh "
+            "(daily_recap delegato a GitHub Actions cron via /api/telegram/recap)",
             int(flow_cfg.get("interval_hours", 4)),
         )
 
-        asyncio.create_task(_catch_up_daily_recap(monitor, recap_cfg))
-        asyncio.create_task(_register_telegram_webhook(monitor._telegram))
+        await _register_telegram_webhook(monitor._telegram)
     except Exception:
         _log.exception("[alerts] scheduler startup failed")
 
@@ -402,6 +368,60 @@ async def telegram_webhook(request: Request) -> JSONResponse:
         _log.exception("[webhook] errore gestione /recap")
 
     return JSONResponse({"ok": True})
+
+
+# ─── /api/telegram/recap ──────────────────────────────────────────────────────
+
+
+@app.post("/api/telegram/recap", include_in_schema=False)
+async def trigger_daily_recap(request: Request) -> JSONResponse:
+    """Trigger esterno per il daily recap (chiamato da GitHub Actions cron).
+
+    Sostituisce lo scheduler in-process per il daily_recap: GitHub cron è
+    indipendente dal nostro processo, sopravvive a restart/deploy del container
+    e ha logs dedicati. AlertDB.sent_today() garantisce idempotenza in caso
+    di chiamate ripetute o retry.
+
+    Auth: header X-Recap-Key == env TELEGRAM_RECAP_KEY (obbligatorio in prod).
+
+    Risposte:
+        200 {"ok": true, "sent": true}   — recap inviato adesso
+        200 {"ok": true, "sent": false, "reason": "already_sent_today"}
+        200 {"ok": true, "sent": false, "reason": "no_gex_data"}
+        401 {"ok": false}                — chiave mancante o errata
+        503 {"ok": false}                — telegram non configurato
+    """
+    expected = os.getenv("TELEGRAM_RECAP_KEY", "")
+    if not expected:
+        _log.error("[recap-trigger] TELEGRAM_RECAP_KEY non impostato — endpoint disabilitato")
+        return JSONResponse({"ok": False, "reason": "endpoint_disabled"}, status_code=503)
+
+    received = request.headers.get("X-Recap-Key", "")
+    if received != expected:
+        _log.warning("[recap-trigger] auth fallita")
+        return JSONResponse({"ok": False}, status_code=401)
+
+    try:
+        from src.alerts.alert_db import AlertDB
+        from src.alerts.gex_alert_monitor import ALERT_DAILY_RECAP, GexAlertMonitor
+
+        if await asyncio.to_thread(AlertDB().sent_today, ALERT_DAILY_RECAP):
+            _log.info("[recap-trigger] skip: già inviato oggi (UTC)")
+            return JSONResponse({"ok": True, "sent": False, "reason": "already_sent_today"})
+
+        monitor = GexAlertMonitor()
+        if monitor._telegram is None:
+            _log.warning("[recap-trigger] telegram non configurato")
+            return JSONResponse({"ok": False, "reason": "telegram_not_configured"}, status_code=503)
+
+        sent = await monitor.send_daily_recap()
+        if sent:
+            _log.info("[recap-trigger] daily_recap inviato")
+            return JSONResponse({"ok": True, "sent": True})
+        return JSONResponse({"ok": True, "sent": False, "reason": "no_gex_data"})
+    except Exception as exc:
+        _log.exception("[recap-trigger] errore")
+        return JSONResponse({"ok": False, "reason": str(exc)}, status_code=500)
 
 
 # ─── CoinGlass GEX enrichment ─────────────────────────────────────────────────
