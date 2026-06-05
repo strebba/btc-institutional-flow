@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS weight_versions (
     source      TEXT NOT NULL,
     weights     TEXT NOT NULL,              -- JSON {component: weight}
     active      INTEGER NOT NULL DEFAULT 0, -- 1 = versione attiva per la source
+    status      TEXT NOT NULL DEFAULT 'proposed',  -- proposed | active | retired
     rationale   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wv_source_active ON weight_versions(source, active);
@@ -104,6 +105,17 @@ class PredictionDB:
     def _init_db(self) -> None:
         with self._conn() as conn:
             conn.executescript(_DDL)
+            # Migrazione: aggiunge la colonna status se un DB pre-esistente non l'ha.
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(weight_versions)")}
+            if "status" not in cols:
+                conn.execute(
+                    "ALTER TABLE weight_versions ADD COLUMN status TEXT NOT NULL DEFAULT 'proposed'"
+                )
+                conn.execute("UPDATE weight_versions SET status = 'active' WHERE active = 1")
+            # Indice su status creato dopo la migrazione (la colonna ora esiste sicuramente).
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wv_source_status ON weight_versions(source, status)"
+            )
 
     # ─── Predictions ────────────────────────────────────────────────────────
 
@@ -212,23 +224,55 @@ class PredictionDB:
         self, source: str, weights: dict[str, float], *,
         rationale: str = "", activate: bool = False,
     ) -> int:
+        """Inserisce una versione pesi (default status 'proposed'). Se activate, la rende attiva."""
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         with self._conn() as conn:
             cur = conn.execute(
-                "INSERT INTO weight_versions (created_at, source, weights, active, rationale) "
-                "VALUES (?,?,?,?,?)",
-                (ts, source, json.dumps(weights, ensure_ascii=False), 0, rationale),
+                "INSERT INTO weight_versions (created_at, source, weights, active, status, rationale) "
+                "VALUES (?,?,?,?,?,?)",
+                (ts, source, json.dumps(weights, ensure_ascii=False), 0, "proposed", rationale),
             )
             vid = int(cur.lastrowid)
             if activate:
-                conn.execute("UPDATE weight_versions SET active = 0 WHERE source = ?", (source,))
-                conn.execute("UPDATE weight_versions SET active = 1 WHERE id = ?", (vid,))
+                self._activate(conn, vid, source)
         return vid
 
+    @staticmethod
+    def _activate(conn: sqlite3.Connection, version_id: int, source: str) -> None:
+        # Retira l'attiva corrente, attiva la nuova (audit trail: niente cancellazioni).
+        conn.execute(
+            "UPDATE weight_versions SET active = 0, status = 'retired' "
+            "WHERE source = ? AND active = 1",
+            (source,),
+        )
+        conn.execute(
+            "UPDATE weight_versions SET active = 1, status = 'active' WHERE id = ?",
+            (version_id,),
+        )
+
     def activate_weight_version(self, version_id: int, source: str) -> None:
+        """Attivazione human-gated di una versione (il workflow Tuning chiama qui)."""
         with self._conn() as conn:
-            conn.execute("UPDATE weight_versions SET active = 0 WHERE source = ?", (source,))
-            conn.execute("UPDATE weight_versions SET active = 1 WHERE id = ?", (version_id,))
+            self._activate(conn, version_id, source)
+
+    def get_proposed_weights(self, source: str) -> list[dict]:
+        """Versioni in stato 'proposed' in attesa di approvazione, dalla più recente."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, created_at, weights, rationale FROM weight_versions "
+                "WHERE source = ? AND status = 'proposed' ORDER BY id DESC",
+                (source,),
+            ).fetchall()
+        return [{**dict(r), "weights": json.loads(r["weights"])} for r in rows]
+
+    def get_weight_history(self, source: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, created_at, status, active, weights, rationale FROM weight_versions "
+                "WHERE source = ? ORDER BY id DESC",
+                (source,),
+            ).fetchall()
+        return [{**dict(r), "weights": json.loads(r["weights"])} for r in rows]
 
     def get_active_weights(self, source: str) -> Optional[tuple[int, dict[str, float]]]:
         """Restituisce (version_id, weights) della versione attiva, o None se non esiste."""

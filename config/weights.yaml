@@ -1,0 +1,27 @@
+# Pesi del SignalModel dealer-flow — prior + governance della calibrazione.
+#
+# I prior sono il punto di partenza "congelato" dello Stage 1 (assisted). La calibrazione
+# (fase 2) propone nuove versioni che restano `proposed` finché Stefano non le attiva
+# (workflow Tuning, human-gated). I pesi attivi vivono nella tabella weight_versions del DB;
+# questo file è la sorgente dei prior e dei parametri di guardrail.
+
+priors:
+  gex:          0.15
+  etf_flow:     0.15
+  funding_rate: 0.20
+  oi_change:    0.15
+  long_short:   0.15
+  put_call:     0.10
+  liquidations: 0.10
+
+calibration:
+  min_scored: 30          # esiti maturi minimi per source prima di proporre pesi
+  min_scored_gex: 40      # gate più alto per le componenti GEX (validazione forward)
+  max_step: 0.05          # variazione massima per peso per ciclo di calibrazione
+  shrinkage: 0.30         # blend verso i prior (0=ignora prior, 1=resta sui prior)
+  learning_rate: 0.50     # intensità del tilt verso le componenti con IC positivo
+  min_oos_improvement: 0.0  # miglioramento OOS minimo (hit-rate) per accettare la proposta
+
+governance:
+  kill_switch: false      # true = pausa generazione predizioni
+  freeze_weights: true    # true = i pesi restano ai prior (Stage 1); false = consente attivazione calibrazione

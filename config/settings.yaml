@@ -111,3 +111,17 @@ dashboard:
     negative:   "#FF0033"    # Wagmi Lab — red
     neutral:    "#FFFFFF"    # white — spot/BTC lines
     accent:     "#FF6600"    # Wagmi Lab — orange accent
+
+# ─── FORECAST (spine predizione → esito → calibrazione) ───────────────────────────
+forecast:
+  enabled: true              # false = scheduler forecast non avviato
+  horizon_days: 5            # orizzonte di default delle predizioni dealer-flow
+  freshness_max_hours: 30    # oltre questo, /api/forecast/status segnala dati stale
+  schedule:
+    predict_hour_utc: 7      # generazione predizioni giornaliera
+    predict_minute_utc: 30
+    verify_hour_utc: 8       # verifica esiti maturi
+    verify_minute_utc: 0
+    calibrate_dow: mon       # calibrazione settimanale (lun)
+    calibrate_hour_utc: 8
+    calibrate_minute_utc: 30

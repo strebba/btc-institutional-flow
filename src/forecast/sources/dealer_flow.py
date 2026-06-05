@@ -22,8 +22,6 @@ from __future__ import annotations
 from typing import Optional
 
 from src.analytics.signal_model import (
-    LONG_THRESHOLD,
-    RISK_OFF_THRESHOLD,
     SIGNAL_LONG,
     SIGNAL_RISK_OFF,
     SignalResult,

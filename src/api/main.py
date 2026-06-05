@@ -1414,7 +1414,8 @@ def get_calibration(days: int = 180) -> JSONResponse:
         from collections import defaultdict
         from src.forecast.prediction_db import PredictionDB
 
-        rows = PredictionDB().get_with_outcomes(days=days)
+        db = PredictionDB()
+        rows = db.get_with_outcomes(days=days)
         agg: dict = defaultdict(lambda: {"n": 0, "scored": 0, "hits": 0, "brier_sum": 0.0, "brier_n": 0})
         for r in rows:
             key = f"{r['source']}/{r['target_type']}"
@@ -1435,7 +1436,142 @@ def get_calibration(days: int = 180) -> JSONResponse:
                 "hit_rate": round(a["hits"] / a["scored"], 3) if a["scored"] else None,
                 "mean_brier": round(a["brier_sum"] / a["brier_n"], 4) if a["brier_n"] else None,
             }
-        return _ok({"window_days": days, "by_source_target": summary})
+
+        # Pesi attivi + eventuali proposte in attesa di approvazione (dealer_flow)
+        from src.forecast.sources.dealer_flow import SOURCE as _DF
+        active = db.get_active_weights(_DF)
+        weights = {
+            "active": {"version": active[0], "weights": active[1]} if active else None,
+            "proposed": db.get_proposed_weights(_DF),
+        }
+        return _ok({"window_days": days, "by_source_target": summary, "dealer_flow_weights": weights})
     except Exception as exc:
         traceback.print_exc()
         raise _error(f"calibration error: {exc}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FORECAST SCHEDULER (APScheduler in-API) + status/governance
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_forecast_scheduler = None  # type: ignore[var-annotated]
+
+
+async def _job_predict() -> None:
+    from src.forecast.jobs import run_daily_predict
+    fc = get_settings().get("forecast", {})
+    res = await asyncio.to_thread(run_daily_predict, horizon=int(fc.get("horizon_days", 5)))
+    _log.info("[forecast] predict: %s", res)
+
+
+async def _job_verify() -> None:
+    from src.forecast.jobs import run_daily_verify
+    res = await asyncio.to_thread(run_daily_verify)
+    _log.info("[forecast] verify: %s", res)
+
+
+async def _job_calibrate() -> None:
+    from src.forecast.jobs import run_weekly_calibrate
+    rep = await asyncio.to_thread(run_weekly_calibrate)
+    _log.info("[forecast] calibrate: gate=%s scored=%s", rep.gate_ok, rep.metrics["total_scored"])
+
+
+@app.on_event("startup")
+async def _start_forecast_scheduler() -> None:
+    """Avvia lo scheduler forecast (predict/verify/calibrate). Indipendente da Telegram.
+
+    misfire_grace_time + coalesce: tollera run saltati (macchina locale spenta) eseguendo
+    una sola volta al ritorno online. Disabilitabile via settings.forecast.enabled=false.
+    """
+    global _forecast_scheduler
+    fc = get_settings().get("forecast", {})
+    if not fc.get("enabled", True):
+        _log.info("[forecast] scheduler disabilitato (settings.forecast.enabled=false)")
+        return
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
+        s = fc.get("schedule", {})
+        grace = int(timedelta(hours=6).total_seconds())
+        sch = AsyncIOScheduler(timezone="UTC")
+        sch.add_job(
+            _job_predict,
+            CronTrigger(hour=int(s.get("predict_hour_utc", 7)),
+                        minute=int(s.get("predict_minute_utc", 30)), timezone="UTC"),
+            id="forecast_predict", replace_existing=True,
+            misfire_grace_time=grace, coalesce=True,
+        )
+        sch.add_job(
+            _job_verify,
+            CronTrigger(hour=int(s.get("verify_hour_utc", 8)),
+                        minute=int(s.get("verify_minute_utc", 0)), timezone="UTC"),
+            id="forecast_verify", replace_existing=True,
+            misfire_grace_time=grace, coalesce=True,
+        )
+        sch.add_job(
+            _job_calibrate,
+            CronTrigger(day_of_week=str(s.get("calibrate_dow", "mon")),
+                        hour=int(s.get("calibrate_hour_utc", 8)),
+                        minute=int(s.get("calibrate_minute_utc", 30)), timezone="UTC"),
+            id="forecast_calibrate", replace_existing=True,
+            misfire_grace_time=grace, coalesce=True,
+        )
+        sch.start()
+        _forecast_scheduler = sch
+        _log.info("[forecast] scheduler avviato (predict/verify/calibrate)")
+    except Exception:
+        _log.exception("[forecast] scheduler startup failed")
+
+
+@app.get("/api/forecast/status", tags=["forecast"])
+def forecast_status() -> JSONResponse:
+    """Stato operativo del forecast: ultima predizione, freschezza, governance, conteggi."""
+    try:
+        from src.forecast.calibration import load_weights_config
+        from src.forecast.prediction_db import PredictionDB
+
+        db = PredictionDB()
+        recent = db.get_recent(limit=1)
+        last = recent[0].created_at if recent else None
+
+        fresh = None
+        if last:
+            age_h = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(last).replace(tzinfo=timezone.utc)).total_seconds() / 3600
+            max_h = float(get_settings().get("forecast", {}).get("freshness_max_hours", 30))
+            fresh = age_h <= max_h
+
+        gov = load_weights_config().get("governance", {})
+        return _ok({
+            "last_prediction": last,
+            "fresh": fresh,
+            "open": len(db.get_open()),
+            "total": db.count(),
+            "kill_switch": bool(gov.get("kill_switch", False)),
+            "freeze_weights": bool(gov.get("freeze_weights", True)),
+            "scheduler_running": _forecast_scheduler is not None,
+        })
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"forecast status error: {exc}")
+
+
+@app.post("/api/weights/{version_id}/activate", tags=["forecast"])
+async def activate_weights(version_id: int, request: Request) -> JSONResponse:
+    """Attivazione human-gated di una versione pesi (chiamata dal workflow Tuning).
+
+    Body JSON opzionale: {"source": "dealer_flow"}. È l'unico modo per cambiare i pesi attivi.
+    """
+    try:
+        from src.forecast.prediction_db import PredictionDB
+        body = await request.json() if await request.body() else {}
+        source = body.get("source", "dealer_flow")
+        db = PredictionDB()
+        db.activate_weight_version(version_id, source)
+        active = db.get_active_weights(source)
+        return _ok({"activated": version_id, "source": source,
+                    "active_weights": active[1] if active else None})
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"activate weights error: {exc}")
