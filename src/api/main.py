@@ -1335,3 +1335,107 @@ def get_ifi() -> dict:
     except Exception as exc:
         traceback.print_exc()
         raise _error(f"IFI error: {exc}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FORECAST SPINE — predizioni, verifica, calibrazione
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/predictions", tags=["forecast"])
+def get_predictions(limit: int = 50, days: int = 180) -> JSONResponse:
+    """Previsioni recenti con i relativi esiti (join predictions+outcomes)."""
+    try:
+        from src.forecast.prediction_db import PredictionDB
+        rows = PredictionDB().get_with_outcomes(days=days)
+        rows = rows[-limit:]
+        return _ok({"count": len(rows), "predictions": rows})
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"predictions error: {exc}")
+
+
+@app.post("/api/predictions/{prediction_id}/review", tags=["forecast"])
+async def review_prediction(prediction_id: int, request: Request) -> JSONResponse:
+    """Aggiorna l'overlay umano / contro-analisi di una previsione (dal daily-review).
+
+    Body JSON: {"counter_analysis": str?, "human_overlay": str?, "confidence": float?}
+    """
+    try:
+        from src.forecast.prediction_db import PredictionDB
+        body = await request.json()
+        PredictionDB().update_human_fields(
+            prediction_id,
+            counter_analysis=body.get("counter_analysis"),
+            human_overlay=body.get("human_overlay"),
+            confidence=body.get("confidence"),
+        )
+        return _ok({"updated": prediction_id})
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"review error: {exc}")
+
+
+@app.post("/api/predictions/verify", tags=["forecast"])
+def verify_predictions() -> JSONResponse:
+    """Verifica le previsioni mature usando i prezzi reali e salva gli esiti."""
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+        from src.flows.price_fetcher import PriceFetcher
+        from src.forecast.prediction_db import PredictionDB
+        from src.forecast.verifier import score_due_predictions
+
+        db = PredictionDB()
+        fetcher = PriceFetcher()
+        _ticker = {"BTC": "BTC-USD"}
+
+        def provider(asset, start, end):
+            return fetcher.fetch(
+                _ticker.get(asset, asset),
+                start_date=start.date(),
+                end_date=(end + _td(days=1)).date(),
+            )
+
+        outcomes = score_due_predictions(db, provider, _dt.utcnow())
+        hits = sum(1 for o in outcomes if o.hit)
+        return _ok({"verified": len(outcomes), "hit": hits, "miss": len(outcomes) - hits})
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"verify error: {exc}")
+
+
+@app.get("/api/calibration", tags=["forecast"])
+def get_calibration(days: int = 180) -> JSONResponse:
+    """Riepilogo performance: hit-rate per source/target_type + Brier medio (target prob).
+
+    Fase 1: solo report descrittivo. La proposta di nuovi pesi arriva con la fase 2
+    (src/forecast/calibration.py).
+    """
+    try:
+        from collections import defaultdict
+        from src.forecast.prediction_db import PredictionDB
+
+        rows = PredictionDB().get_with_outcomes(days=days)
+        agg: dict = defaultdict(lambda: {"n": 0, "scored": 0, "hits": 0, "brier_sum": 0.0, "brier_n": 0})
+        for r in rows:
+            key = f"{r['source']}/{r['target_type']}"
+            a = agg[key]
+            a["n"] += 1
+            if r.get("hit") is not None:
+                a["scored"] += 1
+                a["hits"] += int(r["hit"])
+                if r.get("brier") is not None:
+                    a["brier_sum"] += float(r["brier"]); a["brier_n"] += 1
+
+        summary = {}
+        for key, a in agg.items():
+            summary[key] = {
+                "predictions": a["n"],
+                "scored": a["scored"],
+                "open": a["n"] - a["scored"],
+                "hit_rate": round(a["hits"] / a["scored"], 3) if a["scored"] else None,
+                "mean_brier": round(a["brier_sum"] / a["brier_n"], 4) if a["brier_n"] else None,
+            }
+        return _ok({"window_days": days, "by_source_target": summary})
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"calibration error: {exc}")
