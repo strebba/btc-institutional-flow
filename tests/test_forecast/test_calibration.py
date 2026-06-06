@@ -61,10 +61,10 @@ def test_propose_weights_gex_gate():
 
 
 def _seed_outcomes(db: PredictionDB, n: int, *, hit_ratio: float = 0.7):
-    """Inserisce n predizioni direction con componenti + esiti (per la calibrazione)."""
-    base = datetime.now(timezone.utc) - timedelta(days=30)
+    """Inserisce n predizioni direction (una per giorno) con componenti + esiti."""
+    base = datetime.now(timezone.utc) - timedelta(days=n + 5)
     for i in range(n):
-        ts = (base + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%S")
+        ts = (base + timedelta(days=i)).strftime("%Y-%m-%dT%H:%M:%S")  # un giorno distinto ciascuna
         # funding_rate alto → return alto (IC positivo costruito)
         fr = 0.9 if i % 2 == 0 else 0.1
         ret = 0.05 if i % 2 == 0 else -0.05

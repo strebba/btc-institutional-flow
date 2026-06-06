@@ -90,6 +90,19 @@ def test_insert_and_dedup(db):
     assert db.count() == 1
 
 
+def test_dedup_per_day_different_timestamp(db):
+    """Stesso giorno + source/target/horizon ma timestamp diverso → deduplicato."""
+    p1 = Prediction(source="dealer_flow", asset="BTC", target_type=TARGET_DIRECTION,
+                    target_spec={"direction": "down", "ref_price": 100.0},
+                    horizon_days=5, confidence=0.5, created_at="2026-06-06T07:30:00")
+    p2 = Prediction(source="dealer_flow", asset="BTC", target_type=TARGET_DIRECTION,
+                    target_spec={"direction": "down", "ref_price": 101.0},
+                    horizon_days=5, confidence=0.5, created_at="2026-06-06T10:38:00")  # stesso giorno
+    assert db.insert_prediction(p1) is not None
+    assert db.insert_prediction(p2) is None       # bloccato dal dedup per-giorno
+    assert db.count() == 1
+
+
 def test_outcome_marks_scored(db):
     p = Prediction(source="dealer_flow", asset="BTC", target_type=TARGET_DIRECTION,
                    target_spec={"direction": "up", "ref_price": 100.0},

@@ -116,6 +116,12 @@ class PredictionDB:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_wv_source_status ON weight_versions(source, status)"
             )
+            # Dedup per-GIORNO: un solo set (source, target_type, horizon) per data.
+            # Evita doppioni quando run manuale e schedulato girano lo stesso giorno o al riavvio.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_day_unique "
+                "ON predictions(date, source, target_type, horizon_days)"
+            )
 
     # ─── Predictions ────────────────────────────────────────────────────────
 
