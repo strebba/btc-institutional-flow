@@ -6,6 +6,7 @@ Usa l'API EFTS (Full-Text Search) di EDGAR:
 from __future__ import annotations
 
 import time
+from datetime import date
 from typing import Any, Generator
 
 import requests
@@ -311,6 +312,7 @@ class EdgarEftsSearcher:
         query: str,
         forms: list[str] | None = None,
         start_date: str | None = None,
+        end_date: str | None = None,
     ) -> list[dict]:
         """Ricerca paginata e ritorna tutti i filing trovati.
 
@@ -318,6 +320,7 @@ class EdgarEftsSearcher:
             query: termine di ricerca.
             forms: form types da filtrare.
             start_date: data di inizio (YYYY-MM-DD).
+            end_date: data di fine (YYYY-MM-DD); default oggi.
 
         Returns:
             list[dict]: lista di filing con url, entity_name, filing_date, form_type.
@@ -325,6 +328,10 @@ class EdgarEftsSearcher:
         cfg   = self._cfg
         forms = forms or cfg["forms"]
         start = start_date or cfg["start_date"]
+        # Con dateRange=custom l'EFTS applica il filtro solo se SONO PRESENTI
+        # entrambi startdt ED enddt: senza enddt il startdt viene ignorato e la
+        # query restituisce l'intero corpus (rompe il refresh incrementale).
+        end   = end_date or date.today().isoformat()
 
         results: list[dict] = []
         page_size = cfg["page_size"]
@@ -335,6 +342,7 @@ class EdgarEftsSearcher:
                 "q":        f'"{query}"',
                 "dateRange": "custom",
                 "startdt":  start,
+                "enddt":    end,
                 "forms":    ",".join(forms),
                 "from":     offset,
                 "size":     page_size,
@@ -358,8 +366,13 @@ class EdgarEftsSearcher:
 
         return results
 
-    def collect_all_filings(self) -> list[dict]:
+    def collect_all_filings(self, start_date: str | None = None) -> list[dict]:
         """Raccoglie filing per tutti i termini configurati, deduplicando.
+
+        Args:
+            start_date: data minima (YYYY-MM-DD) per la ricerca. Se None usa
+                il valore di config. Restringere la finestra abilita refresh
+                incrementali e riduce il rischio di 500 sulla deep-pagination EFTS.
 
         Returns:
             list[dict]: lista deduplicata di filing.
@@ -368,7 +381,7 @@ class EdgarEftsSearcher:
         all_res: list[dict] = []
 
         for term in self._cfg["search_terms"]:
-            filings = self.search(query=term)
+            filings = self.search(query=term, start_date=start_date)
             for f in filings:
                 key = f["accession_no"]
                 if key in seen:
