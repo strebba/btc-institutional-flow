@@ -1,0 +1,68 @@
+name: EDGAR refresh (settimanale)
+
+# Refresh incrementale delle note strutturate IBIT da SEC EDGAR.
+# Esegue scripts/cron_edgar.py e committa il DB aggiornato su main (il filesystem
+# di DigitalOcean App Platform è effimero, quindi la fonte di verità è il DB
+# versionato nel repo; il push su main triggera il deploy).
+#
+# PREREQUISITO: creare la Repository variable EDGAR_USER_AGENT in
+#   Settings → Secrets and variables → Actions → Variables, es.
+#   ibit-gamma-tracker/1.0 (strebba90@gmail.com)
+# Senza, il job fallisce di proposito (per non rischiare il ban IP dalla SEC).
+
+on:
+  schedule:
+    - cron: "30 6 * * 1"   # lunedì 06:30 UTC
+  workflow_dispatch:        # trigger manuale dalla tab Actions
+
+permissions:
+  contents: write           # per committare il DB aggiornato
+
+concurrency:
+  group: edgar-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Guard EDGAR_USER_AGENT
+        env:
+          EDGAR_USER_AGENT: ${{ vars.EDGAR_USER_AGENT }}
+        run: |
+          if [[ -z "$EDGAR_USER_AGENT" || "$EDGAR_USER_AGENT" == *example.com* ]]; then
+            echo "::error::Repository variable EDGAR_USER_AGENT non configurata (o placeholder)."
+            echo "Impostala in Settings → Secrets and variables → Actions → Variables."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run EDGAR refresh
+        env:
+          PYTHONPATH: .
+          EDGAR_USER_AGENT: ${{ vars.EDGAR_USER_AGENT }}
+          EDGAR_LOOKBACK_DAYS: "14"   # overlap > cadenza settimanale
+        run: python scripts/cron_edgar.py
+
+      - name: Commit DB if changed
+        run: |
+          if [[ -n "$(git status --porcelain data/structured_notes.db)" ]]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/structured_notes.db
+            git commit -m "chore(edgar): refresh settimanale automatico [skip ci]"
+            git push
+          else
+            echo "Nessuna modifica al DB — niente da committare."
+          fi

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS notes (
     buffer_pct          REAL,
     participation_rate  REAL,
     coupon_rate         REAL,
+    is_preliminary      INTEGER DEFAULT 0,  -- 1 = preliminary pricing supplement
     observation_dates   TEXT,   -- JSON list of date strings
     raw_text            TEXT,
     created_at          TEXT    NOT NULL
@@ -115,12 +116,21 @@ class StructuredNotesDB:
 
         Versioni:
           0 → 1: schema iniziale (nessuna modifica necessaria, solo bump version)
+          1 → 2: colonna notes.is_preliminary
         """
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
         if ver < 1:
             # v1: schema attuale — nessuna ALTER TABLE necessaria
             conn.execute("PRAGMA user_version = 1")
             _log.debug("DB migrato a versione 1")
+        if ver < 2:
+            # v2: flag preliminary. CREATE TABLE IF NOT EXISTS la include già sui DB
+            # nuovi; su quelli esistenti serve l'ALTER (la colonna potrebbe mancare).
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(notes)")}
+            if "is_preliminary" not in cols:
+                conn.execute("ALTER TABLE notes ADD COLUMN is_preliminary INTEGER DEFAULT 0")
+            conn.execute("PRAGMA user_version = 2")
+            _log.debug("DB migrato a versione 2 (is_preliminary)")
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -164,7 +174,7 @@ class StructuredNotesDB:
                         product_type=?, underlying=?, initial_level=?,
                         autocall_trigger_pct=?, knockin_barrier_pct=?,
                         buffer_pct=?, participation_rate=?, coupon_rate=?,
-                        observation_dates=?, raw_text=?
+                        is_preliminary=?, observation_dates=?, raw_text=?
                     WHERE id=?
                     """,
                     (
@@ -180,6 +190,7 @@ class StructuredNotesDB:
                         note.buffer_pct,
                         note.participation_rate,
                         note.coupon_rate,
+                        int(note.is_preliminary),
                         obs_json,
                         note.raw_text,
                         note_id,
@@ -192,8 +203,8 @@ class StructuredNotesDB:
                         (filing_url, issuer, issue_date, maturity_date, notional_usd,
                          product_type, underlying, initial_level, autocall_trigger_pct,
                          knockin_barrier_pct, buffer_pct, participation_rate, coupon_rate,
-                         observation_dates, raw_text, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         is_preliminary, observation_dates, raw_text, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         note.filing_url,
@@ -209,6 +220,7 @@ class StructuredNotesDB:
                         note.buffer_pct,
                         note.participation_rate,
                         note.coupon_rate,
+                        int(note.is_preliminary),
                         obs_json,
                         note.raw_text,
                         now,
@@ -295,6 +307,7 @@ class StructuredNotesDB:
                 FROM barrier_levels b
                 JOIN notes n ON b.note_id = n.id
                 WHERE b.status = 'active'
+                  AND COALESCE(n.is_preliminary, 0) = 0
                 ORDER BY b.level_price_ibit ASC
                 """
             ).fetchall()
@@ -436,6 +449,7 @@ class StructuredNotesDB:
             buffer_pct=row["buffer_pct"],
             participation_rate=row["participation_rate"],
             coupon_rate=row["coupon_rate"],
+            is_preliminary=bool(row.get("is_preliminary", 0)),
             observation_dates=obs,
             barriers=barriers,
         )

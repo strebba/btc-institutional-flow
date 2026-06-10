@@ -32,6 +32,14 @@ def get_settings() -> dict:
     if db := os.getenv("DB_PATH"):
         cfg["database"]["path"] = db
 
+    # Fail-soft: se lo user-agent è ancora il placeholder, la SEC può rispondere 403
+    # o bannare l'IP (ToS EDGAR richiedono un'email reale). Logga un warning evidente.
+    if "example.com" in cfg["edgar"].get("user_agent", ""):
+        logging.getLogger("config").warning(
+            "EDGAR_USER_AGENT non configurato (placeholder): rischio ban SEC. "
+            "Imposta la env var EDGAR_USER_AGENT con un'email reale."
+        )
+
     return cfg
 
 

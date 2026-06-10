@@ -1,7 +1,6 @@
 """Test unitari per il parser dei prospetti SEC."""
 from __future__ import annotations
 
-import pytest
 from datetime import date
 
 from src.edgar.models import StructuredNote
@@ -55,6 +54,15 @@ class TestParseNotional:
 
     def test_no_match(self):
         assert _parse_notional("no amount here") is None
+
+    def test_aggregate_wins(self):
+        text = "Aggregate principal amount: $5,000,000  Payment at maturity: ..."
+        assert _parse_notional(text) == 5_000_000.0
+
+    def test_rejects_per_note_denomination(self):
+        # "$1,000 stated principal amount" è la denominazione, non il notional.
+        text = "for each $1,000 stated principal amount of the notes"
+        assert _parse_notional(text) is None
 
 
 class TestDetectProductType:
@@ -145,6 +153,47 @@ class TestParseBatchInceptionFilter:
         parser = self._parser_with_stub(monkeypatch, notes)
         out = parser.parse_batch([{"url": "u"}])
         assert len(out) == 1
+
+
+class TestParsePreliminaryVsFinal:
+    """Test end-to-end di parse() con _fetch monkeypatchato (no rete)."""
+
+    def _parse_html(self, monkeypatch, html, filing_date="2026-02-02"):
+        parser = ProspectusParser()
+        monkeypatch.setattr(parser, "_fetch", lambda url: html)
+        return parser.parse({"url": "https://example.com/x.htm",
+                             "entity_name": "JPMorgan Chase Financial Co. LLC",
+                             "filing_date": filing_date})
+
+    def test_preliminary_no_invented_values(self, monkeypatch):
+        html = (
+            "<html><body>PRELIMINARY PRICING SUPPLEMENT "
+            "Subject to completion dated February 2, 2026. "
+            "Auto Callable Notes Linked to the iShares Bitcoin Trust ETF. "
+            "Contingent Interest if the closing price is at least 70.00% of the "
+            "Initial Value. For each $1,000 stated principal amount of the notes."
+            "</body></html>"
+        )
+        note = self._parse_html(monkeypatch, html)
+        assert note.is_preliminary is True
+        assert note.notional_usd is None       # denominazione non inventata
+        assert note.initial_level is None       # Initial Value non ancora fissato
+        # la barriera percentuale resta estratta
+        assert any(b.level_pct == 70.0 for b in note.barriers)
+
+    def test_final_extracts_values(self, monkeypatch):
+        html = (
+            "<html><body>PRICING SUPPLEMENT January 9, 2026. "
+            "Auto Callable Notes Linked to the iShares Bitcoin Trust ETF. "
+            "Aggregate principal amount: $5,000,000. "
+            "Initial Value: $51.16. Barrier at 70.00% of the Initial Value."
+            "</body></html>"
+        )
+        note = self._parse_html(monkeypatch, html, filing_date="2026-01-09")
+        assert note.is_preliminary is False
+        assert note.notional_usd == 5_000_000.0
+        assert note.initial_level == 51.16
+        assert note.issue_date.isoformat() == "2026-01-09"
 
 
 class TestExtractBarrierLevels:

@@ -42,3 +42,13 @@ DB: SQLite in `data/` (note, barrier_levels, prices). Config: `config/settings.y
 
 `Procfile` → `python run_api.py --host 0.0.0.0 --port 8000`. `Dockerfile` + `docker-compose.yml`
 disponibili. Git repo attivo (branch `main`).
+
+## Refresh dati EDGAR (note IBIT)
+
+Il DB `data/structured_notes.db` è **versionato** (fonte di verità: filesystem DO effimero).
+Refresh incrementale: `scripts/cron_edgar.py` (env `EDGAR_LOOKBACK_DAYS`, default 14); full:
+`make update-edgar`. Automazione: `.github/workflows/edgar-refresh.yml` (lunedì, committa il DB su
+`main` → deploy). **Richiede** la Repository variable `EDGAR_USER_AGENT` (email reale) — senza, il
+job fallisce di proposito (ToS SEC). In locale usare la stessa env var (placeholder `example.com` →
+WARNING in `get_settings()`). I supplement *preliminari* hanno `is_preliminary=1` e `initial_level`/
+`notional` = NULL; `/api/barriers` mostra solo i finali.

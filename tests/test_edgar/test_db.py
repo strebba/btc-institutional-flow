@@ -1,7 +1,6 @@
 """Test unitari per StructuredNotesDB."""
 from __future__ import annotations
 
-import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -46,7 +45,7 @@ class TestUpsertNote:
         assert id1 == id2
 
     def test_barriers_saved(self, db, sample_note):
-        note_id = db.upsert_note(sample_note)
+        db.upsert_note(sample_note)
         retrieved = db.get_all_notes()
         assert len(retrieved) == 1
         assert len(retrieved[0].barriers) == 2
@@ -98,6 +97,43 @@ class TestUpdateBarrierStatus:
         # IBIT a 40: knock_in level=31.5 (40>31.5 → no), autocall level=45 (40<45 → no)
         counts = db.update_barrier_statuses(current_ibit_price=40.0)
         assert counts["triggered"] == 0
+
+
+class TestPreliminaryFlag:
+    def _prelim_note(self) -> StructuredNote:
+        return StructuredNote(
+            filing_url="https://example.com/prelim.htm",
+            issuer="JPMorgan",
+            issue_date=date(2026, 2, 2),
+            product_type="autocallable",
+            is_preliminary=True,
+            barriers=[BarrierLevel(barrier_type="knock_in", level_pct=70.0)],
+        )
+
+    def test_schema_version_2(self, db):
+        with db._conn() as conn:
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(notes)")}
+        assert ver == 2
+        assert "is_preliminary" in cols
+
+    def test_roundtrip_flag(self, db):
+        db.upsert_note(self._prelim_note())
+        n = db.get_all_notes()[0]
+        assert n.is_preliminary is True
+
+    def test_default_false(self, db, sample_note):
+        db.upsert_note(sample_note)
+        assert db.get_all_notes()[0].is_preliminary is False
+
+    def test_active_barriers_exclude_preliminary(self, db, sample_note):
+        # Una nota finale (2 barriere) + una preliminare (1 barriera).
+        db.upsert_note(sample_note)
+        db.upsert_note(self._prelim_note())
+        active = db.get_active_barriers()
+        # Solo le 2 barriere della nota finale devono comparire.
+        assert len(active) == 2
+        assert all(b["filing_url"] == sample_note.filing_url for b in active)
 
 
 class TestSummary:
