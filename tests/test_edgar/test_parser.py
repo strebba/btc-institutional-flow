@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import pytest
+from datetime import date
+
+from src.edgar.models import StructuredNote
 from src.edgar.parser import (
+    ProspectusParser,
     _parse_date,
     _parse_notional,
     _detect_product_type,
     _detect_issuer,
+    _canonicalize_issuer,
     _extract_barrier_levels,
 )
 
@@ -83,6 +88,63 @@ class TestDetectIssuer:
 
     def test_not_found(self):
         assert _detect_issuer("Unknown Bank Ltd.", self.ISSUERS) is None
+
+
+class TestCanonicalizeIssuer:
+    def test_jpmorgan_entity_variant(self):
+        # La variante grezza di entity_name EDGAR va unificata a "JPMorgan"
+        assert _canonicalize_issuer("JPMorgan Chase Financial Co. LLC") == "JPMorgan"
+
+    def test_hsbc_state_suffix(self):
+        assert _canonicalize_issuer("HSBC USA INC /MD/") == "HSBC"
+
+    def test_already_canonical(self):
+        assert _canonicalize_issuer("Morgan Stanley") == "Morgan Stanley"
+
+    def test_case_insensitive(self):
+        assert _canonicalize_issuer("goldman sachs & co. llc") == "Goldman Sachs"
+
+    def test_unknown_passthrough(self):
+        # Emittente non mappato: ritorna il nome ripulito, non None
+        assert _canonicalize_issuer("Some Tiny Bank Ltd.") == "Some Tiny Bank Ltd."
+
+    def test_none_input(self):
+        assert _canonicalize_issuer(None) is None
+
+    def test_empty_input(self):
+        assert _canonicalize_issuer("") is None
+
+
+class TestParseBatchInceptionFilter:
+    """parse_batch deve scartare i falsi positivi pre-inception IBIT."""
+
+    def _parser_with_stub(self, monkeypatch, notes_by_url):
+        parser = ProspectusParser()
+
+        def fake_parse(filing_meta):
+            return notes_by_url[filing_meta["url"]]
+
+        monkeypatch.setattr(parser, "parse", fake_parse)
+        return parser
+
+    def test_drops_pre_inception(self, monkeypatch):
+        notes = {
+            "u_old": StructuredNote(filing_url="u_old", issuer="UBS",
+                                    issue_date=date(2008, 4, 30)),
+            "u_new": StructuredNote(filing_url="u_new", issuer="JPMorgan",
+                                    issue_date=date(2026, 2, 2)),
+        }
+        parser = self._parser_with_stub(monkeypatch, notes)
+        out = parser.parse_batch([{"url": "u_old"}, {"url": "u_new"}])
+        urls = [n.filing_url for n in out]
+        assert urls == ["u_new"]
+
+    def test_keeps_note_without_date(self, monkeypatch):
+        # Senza issue_date non possiamo affermare che sia un falso positivo: si tiene.
+        notes = {"u": StructuredNote(filing_url="u", issuer="JPMorgan", issue_date=None)}
+        parser = self._parser_with_stub(monkeypatch, notes)
+        out = parser.parse_batch([{"url": "u"}])
+        assert len(out) == 1
 
 
 class TestExtractBarrierLevels:

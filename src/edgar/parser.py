@@ -125,8 +125,66 @@ _MONTH_MAP = {
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
 
+# Data di inception di IBIT (iShares Bitcoin Trust, quotato l'11-gen-2024).
+# Una nota che referenzia IBIT non può avere pricing/issue date precedente: i
+# filing più vecchi che matchano la ricerca sono falsi positivi del full-text
+# search EDGAR (il termine "IBIT" matcha la sottostringa in "exhibit"/"prohibited").
+_IBIT_INCEPTION = date(2024, 1, 1)
+
+# Mappa di canonicalizzazione emittenti: substring (lowercase) → nome canonico.
+# Serve a unificare le varianti del campo entity_name di EDGAR
+# (es. "JPMorgan Chase Financial Co. LLC" e "HSBC USA INC /MD/") con i nomi
+# usati in known_issuers. L'ordine conta: substring più specifiche prima.
+_ISSUER_CANONICAL: list[tuple[str, str]] = [
+    ("jpmorgan",          "JPMorgan"),
+    ("jp morgan",         "JPMorgan"),
+    ("morgan stanley",    "Morgan Stanley"),
+    ("goldman",           "Goldman Sachs"),
+    ("citigroup",         "Citigroup"),
+    ("citibank",          "Citigroup"),
+    ("bank of nova scotia", "Bank of Nova Scotia"),
+    ("scotiabank",        "Bank of Nova Scotia"),
+    ("barclays",          "Barclays"),
+    ("hsbc",              "HSBC"),
+    ("merrill",           "Bank of America"),
+    ("bank of america",   "Bank of America"),
+    ("bofa",              "Bank of America"),
+    ("wells fargo",       "Wells Fargo"),
+    ("bnp paribas",       "BNP Paribas"),
+    ("societe generale",  "Societe Generale"),
+    ("credit suisse",     "Credit Suisse"),
+    ("ubs",               "UBS"),
+    ("royal bank of canada", "RBC"),
+    ("toronto-dominion",  "TD"),
+    ("td bank",           "TD"),
+    ("marex",             "Marex"),
+]
+
 
 # ─── Helper functions ─────────────────────────────────────────────────────────
+
+
+def _canonicalize_issuer(name: Optional[str]) -> Optional[str]:
+    """Normalizza il nome di un emittente a una forma canonica.
+
+    Cerca una substring nota in `name` (case-insensitive) e ritorna il nome
+    canonico corrispondente; se nessuna matcha, ritorna il nome ripulito.
+
+    Args:
+        name: nome grezzo (da known_issuers o entity_name di EDGAR).
+
+    Returns:
+        str | None: nome canonico, o None se input vuoto/None.
+    """
+    if not name:
+        return None
+    low = name.lower()
+    for needle, canonical in _ISSUER_CANONICAL:
+        if needle in low:
+            return canonical
+    # Nessun match: rimuovi suffissi di stato/forma societaria comuni e spazi doppi
+    cleaned = re.sub(r"\s{2,}", " ", name).strip()
+    return cleaned or None
 
 def _parse_date(s: str) -> Optional[date]:
     """Converte una stringa data in oggetto date.
@@ -450,7 +508,8 @@ class ProspectusParser:
         # ── Estrai campi ──────────────────────────────────────────────────
         known_issuers = self._cfg.get("known_issuers", [])
 
-        issuer        = _detect_issuer(text, known_issuers) or filing_meta.get("entity_name")
+        raw_issuer    = _detect_issuer(text, known_issuers) or filing_meta.get("entity_name")
+        issuer        = _canonicalize_issuer(raw_issuer)
         notional = _parse_notional(text)
         # Fallback nozionale con pattern alternativo
         if notional is None:
@@ -509,21 +568,32 @@ class ProspectusParser:
         m_coupon = _RE_COUPON.search(text)
         coupon_rate = float(m_coupon.group(1)) if m_coupon else None
 
-        # Date: issue e maturity
-        all_dates = _RE_DATE.findall(text)
-        issue_date    = _parse_date(all_dates[0]) if len(all_dates) > 0 else None
-        maturity_date = _parse_date(all_dates[-1]) if len(all_dates) > 1 else None
+        # Date: issue e maturity.
+        # La filing_date di EDGAR è la fonte autorevole per la data di pricing/emissione
+        # di un 424B2 (pricing supplement): usarla evita di scambiare per "issue date"
+        # una data di scadenza/osservazione citata in testa al documento (bug storico:
+        # issue_date nel 2030/2031). Il testo serve solo a ricavare la maturity.
+        text_dates = sorted({
+            d for d in (
+                _parse_date(s) for s in (_RE_DATE.findall(text) + _RE_DATE_ISO.findall(text))
+            ) if d
+        })
 
-        # Prova date ISO se non trovate
-        if not issue_date:
-            iso_dates = _RE_DATE_ISO.findall(text)
-            if iso_dates:
-                issue_date    = _parse_date(iso_dates[0])
-                maturity_date = _parse_date(iso_dates[-1]) if len(iso_dates) > 1 else None
-
-        # Override issue_date con filing_date se disponibile
-        if not issue_date and filing_meta.get("filing_date"):
+        issue_date: Optional[date] = None
+        if filing_meta.get("filing_date"):
             issue_date = _parse_date(filing_meta["filing_date"])
+        if issue_date is None and text_dates:
+            # Fallback: la prima data plausibile nel testo
+            issue_date = text_dates[0]
+
+        # Maturity: la data futura più lontana rispetto all'issue, entro ~15 anni
+        # (le note IBIT hanno tenor tipicamente 1-5y; il cap scarta date-rumore).
+        maturity_date: Optional[date] = None
+        if issue_date:
+            future = [d for d in text_dates if d > issue_date and d.year <= issue_date.year + 15]
+            maturity_date = max(future) if future else None
+        elif text_dates:
+            maturity_date = text_dates[-1]
 
         # Barrier levels
         barriers = _extract_barrier_levels(text, initial_level)
@@ -546,8 +616,10 @@ class ProspectusParser:
         )
         participation = float(m_part.group(1)) if m_part else None
 
-        # Truncate raw text
-        raw = text[:50_000]
+        # Snippet di testo per debug. Tenuto corto (4k) di proposito: raw_text non è
+        # mai riletto a valle (né API né DB read-path), quindi 50k gonfiavano solo il
+        # file SQLite versionato (~14MB). 4k bastano per ispezionare un filing.
+        raw = text[:4_000]
 
         note = StructuredNote(
             filing_url=url,
@@ -596,6 +668,14 @@ class ProspectusParser:
         for i, filing in enumerate(to_parse, 1):
             _log.info("[%d/%d] %s", i, len(to_parse), filing.get("entity_name", "?"))
             note = self.parse(filing)
+
+            # Scarta i falsi positivi: una nota IBIT non può precedere l'inception
+            # dell'ETF (cfr. _IBIT_INCEPTION). Questi filing matchano la ricerca solo
+            # perché "IBIT" compare in "exhibit"/"prohibited".
+            if note.issue_date and note.issue_date < _IBIT_INCEPTION:
+                _log.info("Scartato (pre-IBIT %s): %s", note.issue_date, filing["url"])
+                continue
+
             # Tieni solo le note con almeno qualcosa di utile
             if any([note.issuer, note.notional_usd, note.product_type, note.initial_level]):
                 results.append(note)
