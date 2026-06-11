@@ -268,6 +268,19 @@ class StructuredNotesDB:
         _log.info("Salvate %d note nel DB", len(ids))
         return ids
 
+    def checkpoint(self) -> None:
+        """Forza il checkpoint del WAL nel file principale `.db`.
+
+        In journal_mode=WAL le scritture committate restano nel file `-wal`
+        finché non avviene un checkpoint. Il DB è versionato in git e committato
+        dal job di refresh (`scripts/cron_edgar.py` → workflow Actions), che fa
+        `git add data/structured_notes.db`: senza questo checkpoint esplicito il
+        commit conterrebbe il `.db` SENZA le ultime scritture (rimaste nel -wal).
+        """
+        with self._conn() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        _log.debug("WAL checkpoint completato: %s", self._path)
+
     def get_note_by_url(self, url: str) -> Optional[StructuredNote]:
         """Recupera una nota per filing URL.
 

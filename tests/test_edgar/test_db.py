@@ -136,6 +136,22 @@ class TestPreliminaryFlag:
         assert all(b["filing_url"] == sample_note.filing_url for b in active)
 
 
+class TestCheckpoint:
+    def test_checkpoint_persists_to_main_db(self, tmp_path, sample_note):
+        # Scrive, fa checkpoint, poi rimuove i sidecar -wal/-shm: i dati devono
+        # restare nel file .db principale (il caso del DB versionato in git).
+        path = tmp_path / "cp.db"
+        db = StructuredNotesDB(db_path=path)
+        db.upsert_note(sample_note)
+        db.checkpoint()
+        for sidecar in (f"{path}-wal", f"{path}-shm"):
+            p = Path(sidecar)
+            if p.exists():
+                p.unlink()
+        db2 = StructuredNotesDB(db_path=path)
+        assert len(db2.get_all_notes()) == 1
+
+
 class TestSummary:
     def test_summary(self, db, sample_note):
         db.upsert_note(sample_note)

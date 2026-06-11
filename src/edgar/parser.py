@@ -87,6 +87,23 @@ _RE_INITIAL_VALUE_NEAR = re.compile(
     re.IGNORECASE,
 )
 
+# Segnale forte e cross-issuer (Goldman: "Initial ETF price: $42.73, which is the
+# closing price of the ETF on the pricing date"). Il prezzo di chiusura alla pricing
+# date È l'initial level. Il suffisso "which is the closing price" esclude i valori
+# ipotetici degli esempi (es. "$100.00 ... for illustrative purposes").
+_RE_INITIAL_CLOSING_PRICE = re.compile(
+    r"\$\s*(\d{1,3}\.\d{2,4})[^$]{0,45}?which\s+is\s+the\s+closing\s+price",
+    re.IGNORECASE,
+)
+
+# Formato Morgan Stanley/UBS: "Strike value: $31.41, 84.90% of the initial underlying
+# value" → initial = prezzo / (pct/100). È l'inverso di _RE_BARRIER_ABS (prezzo prima
+# della percentuale).
+_RE_BARRIER_ABS_REVERSE = re.compile(
+    r"\$\s*([\d,]+\.\d{1,4})\s*,\s*([\d]+(?:\.\d+)?)\s*%\s+of\s+the\s+initial",
+    re.IGNORECASE,
+)
+
 _RE_BARRIER_PCT = re.compile(
     r"([\d]+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?(?:initial|starting|reference)\s+"
     r"(?:value|level|price|share\s+price)",
@@ -611,6 +628,31 @@ class ProspectusParser:
                     if 1.0 < val < 500.0:
                         initial_level = val
                 except ValueError:
+                    pass
+
+        # 5) "$XX.XX, which is the closing price ... on the pricing date" (Goldman e
+        #    altri): il prezzo di chiusura alla pricing date è l'initial level.
+        if initial_level is None:
+            m_cp = _RE_INITIAL_CLOSING_PRICE.search(text)
+            if m_cp:
+                try:
+                    val = float(m_cp.group(1))
+                    if 1.0 < val < 500.0:
+                        initial_level = val
+                except ValueError:
+                    pass
+
+        # 6) "$XX.XX, YY.YY% of the initial …" (Morgan Stanley/UBS): ricava l'initial
+        #    dal prezzo assoluto di una barriera e dalla sua percentuale.
+        if initial_level is None:
+            m_rev = _RE_BARRIER_ABS_REVERSE.search(text)
+            if m_rev:
+                try:
+                    price = float(m_rev.group(1).replace(",", ""))
+                    pct   = float(m_rev.group(2)) / 100.0
+                    if pct > 0 and 1.0 < price < 500.0:
+                        initial_level = round(price / pct, 2)
+                except (ValueError, ZeroDivisionError):
                     pass
 
         # Autocall trigger

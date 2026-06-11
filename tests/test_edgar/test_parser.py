@@ -195,6 +195,30 @@ class TestParsePreliminaryVsFinal:
         assert note.initial_level == 51.16
         assert note.issue_date.isoformat() == "2026-01-09"
 
+    def test_initial_from_closing_price(self, monkeypatch):
+        # Formato Goldman: "Initial ETF price: $42.73, which is the closing price …".
+        # Il $100.00 ipotetico NON deve essere preso.
+        html = (
+            "<html><body>PRICING SUPPLEMENT. Notes Linked to the ETF. "
+            "Initial ETF price: $42.73, which is the closing price of the ETF on the "
+            "pricing date. The hypothetical initial ETF price of $100.00 has been chosen "
+            "for illustrative purposes only.</body></html>"
+        )
+        note = self._parse_html(monkeypatch, html, filing_date="2026-04-20")
+        assert note.initial_level == 42.73
+
+    def test_initial_from_reverse_barrier(self, monkeypatch):
+        # Formato Morgan Stanley: "$31.41, 84.90% of the initial underlying value"
+        # → initial = 31.41 / 0.849 ≈ 37.0.
+        html = (
+            "<html><body>PRICING SUPPLEMENT. Notes Linked to the ETF. "
+            "Strike value: $31.41, 84.90% of the initial underlying value. "
+            "Autocall barrier value: $40.70, 110.00% of the initial underlying value."
+            "</body></html>"
+        )
+        note = self._parse_html(monkeypatch, html, filing_date="2026-03-01")
+        assert note.initial_level == 37.0
+
 
 class TestExtractBarrierLevels:
     def test_knock_in(self):

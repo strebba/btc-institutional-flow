@@ -65,6 +65,7 @@ def main() -> None:
 
     db  = StructuredNotesDB()
     ids = db.upsert_notes(notes)
+    db.checkpoint()   # forza il WAL nel .db prima del commit git nel workflow
     stats = db.summary()
 
     print(
