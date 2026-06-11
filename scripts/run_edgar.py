@@ -115,6 +115,7 @@ def main() -> None:
     console.print("\n[bold]Step 3: Salvataggio nel DB...[/bold]")
     db  = StructuredNotesDB()
     ids = db.upsert_notes(notes)
+    db.checkpoint()   # forza il WAL nel .db (DB versionato in git)
     console.print(f"  Salvate {len(ids)} note (id: {ids[:5]}...)")
 
     # ── 4. Summary ────────────────────────────────────────────────────────────
