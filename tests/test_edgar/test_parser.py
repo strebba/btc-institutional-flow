@@ -11,6 +11,7 @@ from src.edgar.parser import (
     _detect_product_type,
     _detect_issuer,
     _canonicalize_issuer,
+    _known_issuer_or_none,
     _extract_barrier_levels,
 )
 
@@ -123,6 +124,30 @@ class TestCanonicalizeIssuer:
         assert _canonicalize_issuer("") is None
 
 
+class TestKnownIssuerOrNone:
+    def test_gs_finance_corp(self):
+        assert _known_issuer_or_none("GS Finance Corp.") == "Goldman Sachs"
+
+    def test_jefferies(self):
+        assert _known_issuer_or_none("Jefferies Financial Group Inc.  (JEF)") == "Jefferies"
+
+    def test_jpmorgan_filer(self):
+        assert _known_issuer_or_none("JPMorgan Chase Financial Co. LLC") == "JPMorgan"
+
+    def test_etf_trust_rejected(self):
+        # Il prospetto della trust IBIT stessa NON è una nota → None
+        assert _known_issuer_or_none("iShares Bitcoin Trust  (IBIT)") is None
+
+    def test_franklin_rejected(self):
+        assert _known_issuer_or_none("Franklin Templeton Digital Holdings Trust  (EZBC)") is None
+
+    def test_random_company_rejected(self):
+        assert _known_issuer_or_none("Flybondi Ltd") is None
+
+    def test_none(self):
+        assert _known_issuer_or_none(None) is None
+
+
 class TestParseBatchInceptionFilter:
     """parse_batch deve scartare i falsi positivi pre-inception IBIT."""
 
@@ -153,6 +178,18 @@ class TestParseBatchInceptionFilter:
         parser = self._parser_with_stub(monkeypatch, notes)
         out = parser.parse_batch([{"url": "u"}])
         assert len(out) == 1
+
+    def test_drops_unknown_issuer(self, monkeypatch):
+        # Filer non-emittente (issuer=None) → falso positivo, scartato.
+        notes = {
+            "junk": StructuredNote(filing_url="junk", issuer=None,
+                                   product_type="leveraged_note"),
+            "ok":   StructuredNote(filing_url="ok", issuer="Goldman Sachs"),
+        }
+        parser = self._parser_with_stub(monkeypatch, notes)
+        out = parser.parse_batch([{"url": "junk", "entity_name": "iShares Bitcoin Trust"},
+                                  {"url": "ok"}])
+        assert [n.filing_url for n in out] == ["ok"]
 
 
 class TestParsePreliminaryVsFinal:
