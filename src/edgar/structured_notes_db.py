@@ -306,8 +306,14 @@ class StructuredNotesDB:
             rows = conn.execute("SELECT * FROM notes ORDER BY issue_date DESC").fetchall()
             return [self._row_to_note(conn, dict(r)) for r in rows]
 
-    def get_active_barriers(self) -> list[dict]:
+    def get_active_barriers(self, underlying: str = "IBIT") -> list[dict]:
         """Restituisce tutti i barrier levels con status='active'.
+
+        Args:
+            underlying: ticker del sottostante (default "IBIT"). I consumatori
+                (API /api/barriers, dashboard, analytics) ragionano in prezzi
+                IBIT→BTC, quindi le note su altri ETF (FBTC/BITB/ARKB) sono
+                escluse di default.
 
         Returns:
             list[dict]: barrier levels con dati dalla nota associata.
@@ -316,13 +322,15 @@ class StructuredNotesDB:
             rows = conn.execute(
                 """
                 SELECT b.*, n.issuer, n.product_type, n.maturity_date,
-                       n.initial_level, n.filing_url
+                       n.initial_level, n.filing_url, n.underlying
                 FROM barrier_levels b
                 JOIN notes n ON b.note_id = n.id
                 WHERE b.status = 'active'
                   AND COALESCE(n.is_preliminary, 0) = 0
+                  AND COALESCE(n.underlying, 'IBIT') = ?
                 ORDER BY b.level_price_ibit ASC
-                """
+                """,
+                (underlying,),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -345,8 +353,16 @@ class StructuredNotesDB:
                 _log.warning("Nessuna barriera nel DB - eseguire prima run_edgar.py per popolare")
                 return 0
 
+            # Solo le barriere di note IBIT: level_price_ibit delle note su altri
+            # ETF (FBTC/BITB/ARKB) è in scala diversa e il ratio non si applica.
             rows = conn.execute(
-                "SELECT id, level_price_ibit FROM barrier_levels WHERE level_price_btc IS NULL"
+                """
+                SELECT b.id, b.level_price_ibit
+                FROM barrier_levels b
+                JOIN notes n ON b.note_id = n.id
+                WHERE b.level_price_btc IS NULL
+                  AND COALESCE(n.underlying, 'IBIT') = 'IBIT'
+                """
             ).fetchall()
             if not rows:
                 _log.info("Tutte le %d barriere hanno già level_price_btc", total)
@@ -381,9 +397,16 @@ class StructuredNotesDB:
         """
         counts = {"triggered": 0, "reactivated": 0}
         with self._conn() as conn:
+            # Il confronto col prezzo IBIT ha senso solo per note IBIT: le barriere
+            # di note su altri ETF restano allo status corrente.
             rows = conn.execute(
-                "SELECT id, barrier_type, level_price_ibit, status FROM barrier_levels "
-                "WHERE level_price_ibit IS NOT NULL"
+                """
+                SELECT b.id, b.barrier_type, b.level_price_ibit, b.status
+                FROM barrier_levels b
+                JOIN notes n ON b.note_id = n.id
+                WHERE b.level_price_ibit IS NOT NULL
+                  AND COALESCE(n.underlying, 'IBIT') = 'IBIT'
+                """
             ).fetchall()
 
             for row in rows:

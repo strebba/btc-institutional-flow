@@ -136,6 +136,62 @@ class TestPreliminaryFlag:
         assert all(b["filing_url"] == sample_note.filing_url for b in active)
 
 
+class TestUnderlyingFilter:
+    """Le funzioni in prezzi IBIT devono ignorare le note su altri ETF."""
+
+    def _fbtc_note(self) -> StructuredNote:
+        return StructuredNote(
+            filing_url="https://example.com/fbtc.htm",
+            issuer="Goldman Sachs",
+            issue_date=date(2026, 1, 15),
+            product_type="autocallable",
+            underlying="FBTC",
+            initial_level=80.0,
+            barriers=[BarrierLevel(barrier_type="knock_in", level_pct=70.0,
+                                   level_price_ibit=56.0)],
+        )
+
+    def test_underlying_roundtrip(self, db):
+        db.upsert_note(self._fbtc_note())
+        assert db.get_all_notes()[0].underlying == "FBTC"
+
+    def test_active_barriers_exclude_non_ibit(self, db, sample_note):
+        db.upsert_note(sample_note)
+        db.upsert_note(self._fbtc_note())
+        active = db.get_active_barriers()
+        assert len(active) == 2
+        assert all(b["underlying"] == "IBIT" for b in active)
+
+    def test_active_barriers_explicit_underlying(self, db, sample_note):
+        db.upsert_note(sample_note)
+        db.upsert_note(self._fbtc_note())
+        active = db.get_active_barriers(underlying="FBTC")
+        assert len(active) == 1
+        assert active[0]["underlying"] == "FBTC"
+
+    def test_compute_btc_prices_skips_non_ibit(self, db, sample_note):
+        # Il ratio IBIT/BTC non si applica ai prezzi FBTC: level_price_btc
+        # delle note FBTC deve restare NULL.
+        db.upsert_note(sample_note)
+        db.upsert_note(self._fbtc_note())
+        db.compute_btc_prices(ibit_btc_ratio=0.001)
+        notes = {n.filing_url: n for n in db.get_all_notes()}
+        fbtc_prices = [b.level_price_btc for b in notes[self._fbtc_note().filing_url].barriers]
+        ibit_prices = [b.level_price_btc for b in notes[sample_note.filing_url].barriers]
+        assert all(p is None for p in fbtc_prices)
+        assert all(p is not None for p in ibit_prices)
+
+    def test_update_statuses_skips_non_ibit(self, db, sample_note):
+        # IBIT a 30: la knock_in FBTC (56.0, in prezzi FBTC) non va confrontata
+        # col prezzo IBIT e deve restare active.
+        db.upsert_note(sample_note)
+        db.upsert_note(self._fbtc_note())
+        db.update_barrier_statuses(current_ibit_price=30.0)
+        fbtc_barriers = db.get_active_barriers(underlying="FBTC")
+        assert len(fbtc_barriers) == 1
+        assert fbtc_barriers[0]["status"] == "active"
+
+
 class TestCheckpoint:
     def test_checkpoint_persists_to_main_db(self, tmp_path, sample_note):
         # Scrive, fa checkpoint, poi rimuove i sidecar -wal/-shm: i dati devono
