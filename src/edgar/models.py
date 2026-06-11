@@ -49,6 +49,9 @@ class StructuredNote:
         buffer_pct: buffer di protezione in % (es. 10.0 = 10%).
         participation_rate: tasso di partecipazione per note con leva.
         coupon_rate: cedola annua in % se prevista.
+        is_preliminary: True se il filing è un "preliminary pricing supplement"
+            ("subject to completion"), in cui Initial Value e notional non sono
+            ancora fissati (quindi restano None).
         observation_dates: lista di date di osservazione (JSON-serializzabile).
         barriers: lista di BarrierLevel associati.
         raw_text: testo grezzo del filing (troncato a 50k caratteri).
@@ -69,6 +72,7 @@ class StructuredNote:
     buffer_pct: Optional[float] = None
     participation_rate: Optional[float] = None
     coupon_rate: Optional[float] = None
+    is_preliminary: bool = False
     observation_dates: list[str] = field(default_factory=list)
     barriers: list[BarrierLevel] = field(default_factory=list)
     raw_text: Optional[str] = None

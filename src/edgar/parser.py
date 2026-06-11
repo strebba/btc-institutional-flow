@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
 from datetime import date
 from typing import Optional
 
@@ -42,6 +41,25 @@ _RE_NOTIONAL_PLAIN_M = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern prioritario e affidabile per la size dell'offering nei supplement finali:
+# "Aggregate principal amount: $5,000,000".
+_RE_NOTIONAL_AGGREGATE = re.compile(
+    r"aggregate\s+principal\s+amount\s*:?\s*\$?\s*([\d,]+(?:\.\d+)?)\s*(million|billion|M|B)?",
+    re.IGNORECASE,
+)
+
+# Soglia sotto la quale un "notional" è in realtà la denominazione per-nota
+# (es. $1,000 "stated principal amount"), non la size dell'offering.
+_MIN_NOTIONAL_USD = 50_000.0
+
+# Filing preliminare ("subject to completion"): Initial Value e aggregate principal
+# non sono ancora fissati → non vanno inventati.
+_RE_PRELIMINARY = re.compile(
+    r"subject\s+to\s+completion|preliminary\s+pricing\s+supplement|"
+    r"preliminary\s+prospectus\s+supplement",
+    re.IGNORECASE,
+)
+
 _RE_INITIAL_LEVEL = re.compile(
     r"(?:initial\s+(?:value|level|price)|starting\s+(?:value|level)|"
     r"reference\s+(?:price|value|level)|initial\s+share\s+price)"
@@ -59,6 +77,13 @@ _RE_INITIAL_LEVEL_ALT = re.compile(
     r"(?:price|value)\s+of\s+(?:the\s+)?(?:underlying|IBIT|share)\s+on\s+the\s+"
     r"(?:pricing|trade)\s+date\s*:?\s*\$?([\d,]+\.?\d*)"
     r")",
+    re.IGNORECASE,
+)
+
+# "Initial Value" … "$XX.XX" entro ~60 caratteri (tabella key-terms dei finali JPM).
+# Prezzo vincolato a 1-3 cifre intere + 2-4 decimali per non agganciare nozionali.
+_RE_INITIAL_VALUE_NEAR = re.compile(
+    r"initial\s+value\b[^$]{0,60}?\$\s*(\d{1,3}\.\d{2,4})\b",
     re.IGNORECASE,
 )
 
@@ -229,32 +254,50 @@ def _parse_notional(text: str) -> Optional[float]:
     Returns:
         float | None: nozionale in USD o None.
     """
+    def _scaled(num: str, suffix: str) -> float:
+        val = float(num.replace(",", ""))
+        s = (suffix or "").lower()
+        if s in ("million", "m"):
+            val *= 1_000_000
+        elif s in ("billion", "b"):
+            val *= 1_000_000_000
+        return val
+
+    # Pattern 0 (prioritario) — "Aggregate principal amount: $X": la size reale
+    # dell'offering nei supplement finali.
+    m = _RE_NOTIONAL_AGGREGATE.search(text)
+    if m:
+        val = _scaled(m.group(1), m.group(2))
+        if val >= _MIN_NOTIONAL_USD:
+            return val
+
     # Pattern 1 — con suffisso milioni/miliardi
     m = _RE_NOTIONAL.search(text)
     if m:
-        val = float(m.group(1).replace(",", ""))
-        suffix = (m.group(2) or "").lower()
-        if suffix in ("million", "m"):
-            val *= 1_000_000
-        elif suffix in ("billion", "b"):
-            val *= 1_000_000_000
-        return val
+        val = _scaled(m.group(1), m.group(2))
+        if val >= _MIN_NOTIONAL_USD:
+            return val
 
     # Pattern 2 — "$X,XXX aggregate principal" (già coperto da _RE_NOTIONAL_ALT)
     m = _RE_NOTIONAL_ALT.search(text)
     if m:
-        return float(m.group(1).replace(",", ""))
+        val = float(m.group(1).replace(",", ""))
+        if val >= _MIN_NOTIONAL_USD:
+            return val
 
     # Pattern 3 — "$X notional/face value"
     m = _RE_NOTIONAL_ALT2.search(text)
     if m:
-        return float(m.group(1).replace(",", ""))
+        val = float(m.group(1).replace(",", ""))
+        if val >= _MIN_NOTIONAL_USD:
+            return val
 
     # Pattern 4 — "$X million" generico (ultimo resort)
     m = _RE_NOTIONAL_PLAIN_M.search(text)
     if m:
         return float(m.group(1).replace(",", "")) * 1_000_000
 
+    # Nessun pattern affidabile: meglio None che la denominazione per-nota ($1,000).
     return None
 
 
@@ -508,17 +551,13 @@ class ProspectusParser:
         # ── Estrai campi ──────────────────────────────────────────────────
         known_issuers = self._cfg.get("known_issuers", [])
 
+        # Un "preliminary pricing supplement" non ha ancora Initial Value né la
+        # size dell'offering: lo segnaliamo per non inventare valori più sotto.
+        is_preliminary = bool(_RE_PRELIMINARY.search(text))
+
         raw_issuer    = _detect_issuer(text, known_issuers) or filing_meta.get("entity_name")
         issuer        = _canonicalize_issuer(raw_issuer)
-        notional = _parse_notional(text)
-        # Fallback nozionale con pattern alternativo
-        if notional is None:
-            m_n = _RE_NOTIONAL_ALT.search(text)
-            if m_n:
-                try:
-                    notional = float(m_n.group(1).replace(",", ""))
-                except ValueError:
-                    pass
+        notional      = _parse_notional(text)
         product_type  = _detect_product_type(text)
 
         # Initial level — strategia in cascata
@@ -560,6 +599,20 @@ class ProspectusParser:
                 except (ValueError, ZeroDivisionError):
                     pass
 
+        # 4) "Initial Value" seguito a breve da un prezzo IBIT "$XX.XX" (supplement
+        #    finali JPMorgan: il numero è nella tabella key-terms, anche a qualche
+        #    parola di distanza dalla label). Formato prezzo vincolato (1-3 cifre,
+        #    2-4 decimali) per non agganciare importi grandi (es. nozionali).
+        if initial_level is None:
+            m_iv = _RE_INITIAL_VALUE_NEAR.search(text)
+            if m_iv:
+                try:
+                    val = float(m_iv.group(1))
+                    if 1.0 < val < 500.0:
+                        initial_level = val
+                except ValueError:
+                    pass
+
         # Autocall trigger
         m_autocall = _RE_AUTOCALL_PCT.search(text)
         autocall_pct = float(m_autocall.group(1)) if m_autocall else None
@@ -594,6 +647,13 @@ class ProspectusParser:
             maturity_date = max(future) if future else None
         elif text_dates:
             maturity_date = text_dates[-1]
+
+        # Nei preliminari Initial Value e size dell'offering non sono ancora fissati:
+        # non inventarli. Le barriere percentuali (es. "70% dell'Initial Value") restano
+        # valide; senza initial_level il loro prezzo assoluto sarà None (atteso).
+        if is_preliminary:
+            notional      = None
+            initial_level = None
 
         # Barrier levels
         barriers = _extract_barrier_levels(text, initial_level)
@@ -635,17 +695,19 @@ class ProspectusParser:
             buffer_pct=buffer_pct,
             participation_rate=participation,
             coupon_rate=coupon_rate,
+            is_preliminary=is_preliminary,
             barriers=barriers,
             raw_text=raw,
         )
 
         _log.info(
-            "Estratto: issuer=%s type=%s notional=%.0f initial=%.2f barriers=%d",
+            "Estratto: issuer=%s type=%s notional=%.0f initial=%.2f barriers=%d%s",
             issuer or "?",
             product_type or "?",
             notional or 0,
             initial_level or 0,
             len(barriers),
+            " [preliminary]" if is_preliminary else "",
         )
 
         return note

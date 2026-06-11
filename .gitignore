@@ -11,5 +11,6 @@ data/*.html
 data/*.csv
 data/*.db-shm
 data/*.db-wal
-logs/*.log
+logs/
+.claude/
 .DS_Store
