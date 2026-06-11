@@ -13,11 +13,9 @@ Metriche calcolate:
 """
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
-import numpy as np
 
 from src.config import get_settings, setup_logging
 from src.gex.models import GexByStrike, GexSnapshot

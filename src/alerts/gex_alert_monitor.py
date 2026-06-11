@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
 
@@ -24,7 +23,6 @@ from src.alerts.templates import (
 from src.config import get_settings, setup_logging
 from src.flows.models import AggregateFlows
 from src.gex.gex_db import GexDB
-from src.gex.models import GexSnapshot
 from src.gex.regime_detector import RegimeDetector
 
 _log = setup_logging("alerts.monitor")

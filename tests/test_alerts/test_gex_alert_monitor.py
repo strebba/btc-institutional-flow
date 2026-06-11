@@ -13,7 +13,6 @@ from src.alerts.gex_alert_monitor import (
     evaluate_etf_flow_triggers,
     summarize_flows,
 )
-from src.alerts.telegram_client import TelegramClient
 from src.alerts.templates import FlowsSummary
 from src.flows.models import AggregateFlows
 from src.gex.gex_db import GexDB

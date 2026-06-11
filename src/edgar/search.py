@@ -140,36 +140,13 @@ class EdgarSearcher:
 
         for term in self._cfg["search_terms"]:
             for hit in self.search_filings(query=term):
-                src    = hit.get("_source", {})
-                # L'URL del documento primario è in file_num o file_date
-                acc_no = src.get("file_num") or hit.get("_id", "")
-                # EDGAR EFTS restituisce il path relativo del documento
-                doc_path = src.get("period_of_report", "")
-
-                # Costruisci URL canonico del filing (viewer EDGAR)
-                # Il campo `_id` in EFTS è: accession_number (con trattini)
-                raw_id   = hit.get("_id", "")
-                filing_url = (
-                    f"https://www.sec.gov/Archives/edgar/data/"
-                    f"{src.get('entity_id', '')}/{raw_id.replace('-', '')}/{raw_id}.txt"
-                )
-
-                # URL più affidabile: usiamo il link diretto al documento
-                # presente in `file_date` → preferisco costruire l'URL viewer
-                viewer_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&filenum={acc_no}"
-
-                # EFTS v2 fornisce direttamente `_source.file_date` e un campo
-                # `period_of_report`; il link al documento è in `_source.period_of_report`
-                # In realtà usiamo l'endpoint più pratico:
-                entity_id  = src.get("entity_id", "")
-                accession  = raw_id  # es. "0001234567-24-000123"
-                # URL del filing index page
-                index_url  = (
-                    f"https://www.sec.gov/cgi-bin/browse-edgar"
-                    f"?action=getcompany&CIK={entity_id}&type={src.get('form_type','424B2')}"
-                )
-                # URL diretto più utile: costruiamo con accession number senza trattini
-                acc_clean  = accession.replace("-", "")
+                src       = hit.get("_source", {})
+                # Il campo `_id` in EFTS è l'accession number (con trattini),
+                # es. "0001234567-24-000123".
+                accession = hit.get("_id", "")
+                entity_id = src.get("entity_id", "")
+                acc_clean = accession.replace("-", "")
+                # URL diretto al documento del filing.
                 direct_url = (
                     f"https://www.sec.gov/Archives/edgar/data/"
                     f"{entity_id}/{acc_clean}/{accession}.htm"

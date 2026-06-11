@@ -9,10 +9,8 @@ Per lag da 1 a max_lags giorni.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 from statsmodels.tsa.stattools import grangercausalitytests, adfuller
 

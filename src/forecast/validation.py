@@ -14,7 +14,7 @@ di strategia completo sui flussi/EMA.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterator, Optional
+from typing import Iterator, Optional
 
 import numpy as np
 import pandas as pd

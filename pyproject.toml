@@ -52,3 +52,10 @@ addopts   = "-v --tb=short"
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# E701/E702: "multiple statements on one line". Nel codice di scoring/analytics
+# usiamo di proposito guard compatte `if cond: return X  # commento` con commenti
+# allineati (più leggibili di due righe). Disabilitiamo queste regole stilistiche;
+# le regole sostanziali (F401/F841 import e variabili inutilizzati) restano attive.
+ignore = ["E701", "E702"]

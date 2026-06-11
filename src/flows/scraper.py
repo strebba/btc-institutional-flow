@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 from bs4 import BeautifulSoup, Tag
 from tenacity import retry, stop_after_attempt, wait_exponential

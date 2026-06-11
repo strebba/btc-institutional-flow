@@ -11,7 +11,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
@@ -142,7 +142,7 @@ class DeribitClient:
             self._cache[cache_key] = result
             self._circuit_breaker.record_success()
             return result
-        except (requests.Timeout, requests.ConnectionError) as e:
+        except (requests.Timeout, requests.ConnectionError):
             self._circuit_breaker.record_failure()
             raise
         except requests.HTTPError as e:

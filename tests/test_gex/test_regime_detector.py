@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-from src.gex.models import GexByStrike, GexSnapshot
+from src.gex.models import GexSnapshot
 from src.gex.regime_detector import RegimeDetector
 
 
