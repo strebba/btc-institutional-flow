@@ -19,7 +19,7 @@ update-edgar:
 update-all: update-gex update-flows update-edgar
 
 run-api:
-	python3 run_api.py
+	DB_PATH=data/runtime.db python3 run_api.py
 
 run-dashboard:
 	streamlit run src/dashboard/app.py
