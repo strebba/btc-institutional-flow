@@ -12,11 +12,17 @@ from typing import Optional
 
 from src.analytics.signal_model import SignalInputs, SignalModel, SignalResult
 from src.config import setup_logging
+from src.edgar.barrier_utils import (
+    barrier_confluence_scores,
+    compute_confluence,
+    detect_clusters,
+    get_proximity_pct,
+)
 from src.gex.models import GexSnapshot
 
 _log = setup_logging("forecast.context")
 
-_BARRIER_EXCLUSION_PCT = 0.05
+_BARRIER_EXCLUSION_PCT = get_proximity_pct() / 100.0
 
 
 class DataUnavailable(RuntimeError):
@@ -84,13 +90,22 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
         active_barriers = StructuredNotesDB().get_active_barriers()
     except Exception:
         active_barriers = []
-    near_barrier = False
-    if spot > 0:
-        for b in active_barriers:
-            bp = b.get("level_price_btc") or 0.0
-            if bp > 0 and abs(spot - bp) / spot < _BARRIER_EXCLUSION_PCT:
-                near_barrier = True
-                break
+
+    barrier_confluence_bearish = 0.0
+    barrier_confluence_bullish = 0.0
+    if spot > 0 and active_barriers:
+        try:
+            out_b = [dict(b) for b in active_barriers]
+            clusters = detect_clusters(out_b, float(spot))
+            confluence = compute_confluence(
+                clusters,
+                put_wall=snapshot.put_wall,
+                call_wall=snapshot.call_wall,
+                gamma_flip=snapshot.gamma_flip_price,
+            )
+            barrier_confluence_bearish, barrier_confluence_bullish = barrier_confluence_scores(confluence)
+        except Exception as exc:
+            _log.warning("Barrier confluence calc fallito: %s", exc)
 
     # ── Macro CoinGlass (opzionali) ────────────────────────────────────────────
     funding_rate_ann = oi_change_7d_pct = long_short_ratio = None
@@ -138,13 +153,14 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
         put_call_ratio=snapshot.put_call_ratio,
         liquidations_long_24h_usd=liquidations_long,
         liquidations_short_24h_usd=liquidations_short,
-        near_active_barrier=near_barrier,
+        barrier_confluence_bearish=barrier_confluence_bearish,
+        barrier_confluence_bullish=barrier_confluence_bullish,
     )
     result = SignalModel(weights=weights).compute(inputs)
 
     return DealerFlowContext(
         result=result, snapshot=snapshot, spot=spot, inputs=inputs,
-        ibit_flow_3d=ibit_flow_3d, near_barrier=near_barrier,
+        ibit_flow_3d=ibit_flow_3d, near_barrier=bool(barrier_confluence_bearish > 0.3 and barrier_confluence_bullish > 0.3),  # noqa: E501
         funding_rate_ann=funding_rate_ann, oi_change_7d_pct=oi_change_7d_pct,
         long_short_ratio=long_short_ratio,
         liquidations_long=liquidations_long, liquidations_short=liquidations_short,

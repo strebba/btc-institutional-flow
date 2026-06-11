@@ -33,16 +33,19 @@ SIGNAL_RISK_OFF = "RISK_OFF"
 LONG_THRESHOLD     = 65.0
 RISK_OFF_THRESHOLD = 40.0
 
-# ─── Pesi dei 7 fattori (devono sommare a 1.0) ────────────────────────────────
+# ─── Pesi degli 8 fattori (devono sommare a 1.0) ──────────────────────────────
+
+BASE_WEIGHT = 0.93  # spazio per il nuovo fattore barrier_confluence (0.07)
 
 WEIGHTS: dict[str, float] = {
-    "gex":            0.15,
-    "etf_flow":       0.15,
-    "funding_rate":   0.20,
-    "oi_change":      0.15,
-    "long_short":     0.15,
-    "put_call":       0.10,
-    "liquidations":   0.10,
+    "gex":                0.15 * BASE_WEIGHT,
+    "etf_flow":           0.15 * BASE_WEIGHT,
+    "funding_rate":       0.20 * BASE_WEIGHT,
+    "oi_change":          0.15 * BASE_WEIGHT,
+    "long_short":         0.15 * BASE_WEIGHT,
+    "put_call":           0.10 * BASE_WEIGHT,
+    "liquidations":       0.10 * BASE_WEIGHT,
+    "barrier_confluence": 0.07,
 }
 
 assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9, "Pesi non sommano a 1.0"
@@ -66,8 +69,8 @@ class SignalInputs:
         put_call_ratio: Rapporto put OI / call OI da Deribit.
         liquidations_long_24h_usd: Liquidazioni long nelle ultime 24h in USD.
         liquidations_short_24h_usd: Liquidazioni short nelle ultime 24h in USD.
-        spot_price: Prezzo spot BTC (usato per proximity check barriere).
-        near_active_barrier: True se il prezzo è entro 5% da una barriera.
+        barrier_confluence_bearish: Score confluenza bearish 0-1 (barriera + GEX).
+        barrier_confluence_bullish: Score confluenza bullish 0-1 (barriera + GEX).
     """
 
     gex_usd:                       Optional[float] = None
@@ -78,8 +81,8 @@ class SignalInputs:
     put_call_ratio:                Optional[float] = None
     liquidations_long_24h_usd:     Optional[float] = None
     liquidations_short_24h_usd:    Optional[float] = None
-    spot_price:                    Optional[float] = None
-    near_active_barrier:           bool = False
+    barrier_confluence_bearish:    float = 0.0
+    barrier_confluence_bullish:    float = 0.0
 
 
 # ─── Output model ────────────────────────────────────────────────────────────
@@ -183,6 +186,36 @@ def _score_liquidations(long_usd: float, short_usd: float) -> float:
     return 0.55 if long_ratio > 0.55 else 0.42
 
 
+def _score_barrier(confluence_bearish: float, confluence_bullish: float) -> float:
+    """Barrier confluenza: premia la direzionalità delle barriere.
+
+    - Se c'è confluenza bearish forte (es. knock-in cluster + put wall) →
+      segnale ribassista (score vicino 0).
+    - Se c'è confluenza bullish forte (es. autocall cluster + call wall) →
+      segnale rialzista (score vicino 1).
+    - Se entrambe attive → punteggio neutro prudenziale.
+    - Se nessuna → 0.50 neutro.
+
+    Args:
+        confluence_bearish: score 0-1, quanto le barriere confermano ribasso.
+        confluence_bullish: score 0-1, quanto le barriere confermano rialzo.
+
+    Returns:
+        float: 0.0 (bearish forte) → 0.50 (neutro) → 1.0 (bullish forte).
+    """
+    if confluence_bearish > 0.6 and confluence_bullish > 0.6:
+        return 0.45  # conflitto: barriere premono in entrambe direzioni
+    if confluence_bearish > 0.6:
+        return max(0.0, 0.50 - confluence_bearish * 0.5)
+    if confluence_bullish > 0.6:
+        return min(1.0, 0.50 + confluence_bullish * 0.5)
+    if confluence_bearish > 0.3:
+        return 0.35
+    if confluence_bullish > 0.3:
+        return 0.65
+    return 0.50
+
+
 # ─── SignalModel ──────────────────────────────────────────────────────────────
 
 class SignalModel:
@@ -208,7 +241,7 @@ class SignalModel:
         """Calcola il segnale composito da un singolo set di input.
 
         Args:
-            inputs: SignalInputs con i valori dei 7 fattori.
+            inputs: SignalInputs con i valori dei fattori.
 
         Returns:
             SignalResult con score, signal, components, weights_used, reason.
@@ -241,6 +274,12 @@ class SignalModel:
                 inputs.liquidations_short_24h_usd,
             )
 
+        # Fattore barriera: sempre presente (default 0.0 = neutro)
+        raw["barrier_confluence"] = _score_barrier(
+            inputs.barrier_confluence_bearish,
+            inputs.barrier_confluence_bullish,
+        )
+
         # Riscala pesi per i fattori disponibili
         available_weight = sum(self._weights[k] for k in raw)
         if available_weight <= 0:
@@ -259,10 +298,6 @@ class SignalModel:
         # Score aggregato (0-100)
         score_01 = sum(raw[k] * scaled_weights[k] for k in raw)
         score = round(score_01 * 100.0, 1)
-
-        # Override: barriera attiva → abbassa score se siamo vicini al LONG threshold
-        if inputs.near_active_barrier and score >= LONG_THRESHOLD:
-            score = LONG_THRESHOLD - 1.0
 
         # Etichetta
         signal = _score_to_signal(score)
@@ -398,8 +433,12 @@ def _build_reason(inputs: SignalInputs, raw: dict[str, float], score: float) -> 
         hedge = "alto hedging" if pcr > 1.3 else ("neutro" if pcr > 0.8 else "complacency")
         parts.append(f"PCR {pcr:.2f} ({hedge})")
 
-    if inputs.near_active_barrier:
-        parts.append("⚠ vicino a barriera attiva")
+    bc_bear = inputs.barrier_confluence_bearish
+    bc_bull = inputs.barrier_confluence_bullish
+    if bc_bear > 0.6:
+        parts.append(f"⚠ confluenza bearish ({bc_bear:.0%})")
+    if bc_bull > 0.6:
+        parts.append(f"✅ confluenza bullish ({bc_bull:.0%})")
 
     signal = _score_to_signal(score)
     return f"{signal} [{score:.0f}/100] — " + " | ".join(parts) if parts else f"{signal} [{score:.0f}/100]"

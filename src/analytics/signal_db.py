@@ -44,8 +44,11 @@ CREATE TABLE IF NOT EXISTS signal_history (
     put_call_ratio       REAL,
     liq_long_usd         REAL,
     liq_short_usd        REAL,
-    near_active_barrier  INTEGER,                -- 0/1
-    created_at           TEXT NOT NULL DEFAULT (datetime('now'))
+    near_active_barrier      INTEGER,                -- 0/1 (deprecato, keep per backward compat)
+    comp_barrier_confluence  REAL,                   -- componente barriera normalizzata 0-1
+    barrier_confluence_bear  REAL,                   -- score bearish confluenza 0-1
+    barrier_confluence_bull  REAL,                   -- score bullish confluenza 0-1
+    created_at               TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_signal_ts   ON signal_history(timestamp);
 CREATE INDEX IF NOT EXISTS idx_signal_date ON signal_history(date);
@@ -93,6 +96,8 @@ class SignalDB:
         liq_long_usd: Optional[float] = None,
         liq_short_usd: Optional[float] = None,
         near_active_barrier: bool = False,
+        barrier_confluence_bearish: float = 0.0,
+        barrier_confluence_bullish: float = 0.0,
     ) -> bool:
         """Inserisce un segnale. Restituisce True se inserito, False se già presente."""
         ts = timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -108,8 +113,9 @@ class SignalDB:
                     comp_long_short, comp_put_call, comp_liquidations,
                     spot_price_usd, total_gex_usd, ibit_flow_3d_usd,
                     funding_rate_pct, oi_change_7d_pct, long_short_ratio,
-                    put_call_ratio, liq_long_usd, liq_short_usd, near_active_barrier
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    put_call_ratio, liq_long_usd, liq_short_usd, near_active_barrier,
+                    comp_barrier_confluence, barrier_confluence_bear, barrier_confluence_bull
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     ts, date, round(result.score, 2), result.signal, result.reason,
@@ -122,6 +128,9 @@ class SignalDB:
                     _safe(long_short_ratio), _safe(put_call_ratio),
                     _safe(liq_long_usd), _safe(liq_short_usd),
                     1 if near_active_barrier else 0,
+                    _safe(c.get("barrier_confluence")),
+                    _safe(barrier_confluence_bearish),
+                    _safe(barrier_confluence_bullish),
                 ),
             )
             return cur.rowcount == 1
@@ -138,7 +147,8 @@ class SignalDB:
                        comp_long_short, comp_put_call, comp_liquidations,
                        spot_price_usd, total_gex_usd, ibit_flow_3d_usd,
                        funding_rate_pct, oi_change_7d_pct, long_short_ratio,
-                       put_call_ratio, liq_long_usd, liq_short_usd, near_active_barrier
+                       put_call_ratio, liq_long_usd, liq_short_usd, near_active_barrier,
+                       comp_barrier_confluence, barrier_confluence_bear, barrier_confluence_bull
                 FROM signal_history
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -160,7 +170,8 @@ class SignalDB:
                        funding_rate_pct, oi_change_7d_pct, long_short_ratio,
                        put_call_ratio, liq_long_usd, liq_short_usd, near_active_barrier,
                        comp_gex, comp_etf_flow, comp_funding_rate, comp_oi_change,
-                       comp_long_short, comp_put_call, comp_liquidations
+                       comp_long_short, comp_put_call, comp_liquidations,
+                       comp_barrier_confluence, barrier_confluence_bear, barrier_confluence_bull
                 FROM signal_history
                 WHERE date >= date('now', ? || ' days')
                 ORDER BY timestamp ASC

@@ -177,22 +177,26 @@ class TestSignalModelCompute:
         assert result.signal == SIGNAL_RISK_OFF
         assert result.score < RISK_OFF_THRESHOLD
 
-    def test_barrier_override_blocks_long(self):
-        """Barriera attiva vicina deve bloccare un segnale LONG."""
-        result_no_barrier = self.model.compute(SignalInputs(
-            gex_usd=800e6,
-            etf_flow_3d_usd=500e6,
-            funding_rate_annualized_pct=-2.0,
+    def test_barrier_confluence_lowers_score(self):
+        """Confluenza bearish abbassa lo score vs bullish."""
+        bullish = self.model.compute(SignalInputs(
+            gex_usd=800e6, etf_flow_3d_usd=500e6,
+            barrier_confluence_bearish=0.0,
+            barrier_confluence_bullish=0.85,
         ))
-        result_with_barrier = self.model.compute(SignalInputs(
-            gex_usd=800e6,
-            etf_flow_3d_usd=500e6,
-            funding_rate_annualized_pct=-2.0,
-            near_active_barrier=True,
+        bearish = self.model.compute(SignalInputs(
+            gex_usd=800e6, etf_flow_3d_usd=500e6,
+            barrier_confluence_bearish=0.85,
+            barrier_confluence_bullish=0.0,
         ))
-        # Con barriera non deve essere LONG (se era LONG senza)
-        if result_no_barrier.signal == SIGNAL_LONG:
-            assert result_with_barrier.signal != SIGNAL_LONG
+        assert bearish.score < bullish.score
+
+    def test_barrier_confluence_neutral_by_default(self):
+        """Nessuna confluenza barriera → score neutro 0.50 nel componente."""
+        result = self.model.compute(SignalInputs(gex_usd=1e8))
+        comp = result.components.get("barrier_confluence")
+        assert comp is not None
+        assert 0.49 <= comp <= 0.51
 
     def test_none_inputs_fallback_to_50(self):
         """Nessun input disponibile → score neutro 50."""
@@ -201,11 +205,11 @@ class TestSignalModelCompute:
         assert result.signal == SIGNAL_CAUTION
 
     def test_components_keys(self):
-        """Il dict components ha le 7 chiavi attese."""
+        """Il dict components ha le 8 chiavi attese (7 classiche + barrier_confluence)."""
         result = self.model.compute(SignalInputs(gex_usd=1e8))
         assert set(result.components.keys()) == {"gex", "etf_flow", "funding_rate",
                                                   "oi_change", "long_short", "put_call",
-                                                  "liquidations"}
+                                                  "liquidations", "barrier_confluence"}
 
     def test_partial_inputs_rescale(self):
         """Con solo 2 fattori il risultato è coerente (pesi riscalati)."""

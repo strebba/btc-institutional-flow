@@ -824,11 +824,62 @@ def get_barriers() -> dict:
             # Converti campi non-serializzabili
             out.append({k: v for k, v in row.items()})
 
+        # ── Cluster detection & confluence ─────────────────────────────────
+        nearest_above = None
+        nearest_below = None
+        clusters_out: list[dict] = []
+        confluence_out: list[dict] = []
+
+        from src.edgar.barrier_utils import (
+            compute_confluence,
+            detect_clusters,
+        )
+
+        if spot_price and spot_price > 0:
+            clusters = detect_clusters(out, float(spot_price))
+
+            # nearest_above / nearest_below
+            for b in sorted(out, key=lambda x: x.get("level_price_btc") or 0):
+                bp = b.get("level_price_btc") or 0
+                if bp > 0:
+                    if bp > spot_price and nearest_above is None:
+                        nearest_above = b
+                    if bp < spot_price:
+                        nearest_below = b
+
+            # Confluenza con GEX (opportunistic — solo da cache)
+            gex_cached = _cache_get("_gex_data")
+            if gex_cached:
+                snap = gex_cached.get("snapshot")
+                if snap:
+                    confluence_out = compute_confluence(
+                        clusters,
+                        put_wall=snap.put_wall,
+                        call_wall=snap.call_wall,
+                        gamma_flip=snap.gamma_flip_price,
+                    )
+
+            clusters_out = [
+                {
+                    "mean_price_btc": c.mean_price_btc,
+                    "total_notional_usd": c.total_notional_usd,
+                    "dominant_type": c.dominant_type,
+                    "sign": c.sign,
+                    "n_barriers": c.n_barriers,
+                    "distance_to_spot_pct": c.distance_to_spot_pct,
+                }
+                for c in clusters
+            ]
+
         response = _ok(
             {
                 "count": len(out),
                 "barriers": out,
                 "spot_price": spot_price,
+                "clusters": clusters_out,
+                "confluence": confluence_out,
+                "nearest_above": nearest_above,
+                "nearest_below": nearest_below,
             }
         )
         _cache_set("barriers", response)
@@ -886,18 +937,31 @@ def get_signals() -> dict:
             if not last_val.empty:
                 ibit_flow_3d = float(last_val.iloc[-1])
 
-        # ── Barriere ───────────────────────────────────────────────────────────
+        # ── Barriere + confluenza ──────────────────────────────────────────────
         db = StructuredNotesDB()
         active_barriers = db.get_active_barriers()
 
-        barrier_exclusion_pct = 0.05
-        near_barrier = False
-        if spot > 0:
-            for b in active_barriers:
-                bp = b.get("level_price_btc") or 0.0
-                if bp > 0 and abs(spot - bp) / spot < barrier_exclusion_pct:
-                    near_barrier = True
-                    break
+        from src.edgar.barrier_utils import (
+            barrier_confluence_scores,
+            compute_confluence,
+            detect_clusters,
+        )
+
+        barrier_confluence_bearish = 0.0
+        barrier_confluence_bullish = 0.0
+        if spot > 0 and active_barriers:
+            out_b = [dict(b) for b in active_barriers]
+            clusters = detect_clusters(out_b, float(spot))
+            if clusters and snapshot.put_wall:
+                confluence = compute_confluence(
+                    clusters,
+                    put_wall=snapshot.put_wall,
+                    call_wall=snapshot.call_wall,
+                    gamma_flip=snapshot.gamma_flip_price,
+                )
+                bear, bull = barrier_confluence_scores(confluence)
+                barrier_confluence_bearish = bear
+                barrier_confluence_bullish = bull
 
         # ── Macro CoinGlass (dalla cache macro se disponibile) ─────────────────
         funding_rate_ann: float | None = None
@@ -969,7 +1033,8 @@ def get_signals() -> dict:
             put_call_ratio=snapshot.put_call_ratio,
             liquidations_long_24h_usd=liquidations_long,
             liquidations_short_24h_usd=liquidations_short,
-            near_active_barrier=near_barrier,
+            barrier_confluence_bearish=barrier_confluence_bearish,
+            barrier_confluence_bullish=barrier_confluence_bullish,
         )
         model = SignalModel()
         signal_result = model.compute(signal_inputs)
@@ -988,7 +1053,8 @@ def get_signals() -> dict:
                 put_call_ratio=snapshot.put_call_ratio,
                 liq_long_usd=liquidations_long,
                 liq_short_usd=liquidations_short,
-                near_active_barrier=near_barrier,
+                barrier_confluence_bearish=barrier_confluence_bearish,
+                barrier_confluence_bullish=barrier_confluence_bullish,
             )
         except Exception:
             _log.warning("signal_db insert fallito", exc_info=True)
@@ -1050,7 +1116,8 @@ def get_signals() -> dict:
                     "put_call_ratio": snapshot.put_call_ratio,
                     "liquidations_long_24h_usd": liquidations_long,
                     "liquidations_short_24h_usd": liquidations_short,
-                    "near_active_barrier": near_barrier,
+                    "barrier_confluence_bearish": round(barrier_confluence_bearish, 3),
+                    "barrier_confluence_bullish": round(barrier_confluence_bullish, 3),
                     "active_barriers_count": len(active_barriers),
                 },
                 "backtest": backtest_metrics,

@@ -364,79 +364,6 @@ def run_event_study(barriers: list[dict], merged_df: pd.DataFrame) -> list:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Composite signal
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-def _composite_signal(
-    snap: dict,
-    merged_df: pd.DataFrame,
-    barriers: list[dict],
-) -> tuple[str, dict]:
-    """Calcola il segnale operativo composito.
-
-    Returns:
-        (signal, details) dove signal è "LONG" | "CAUTION" | "RISK_OFF".
-    """
-    gex = snap.get("total_net_gex") or 0.0
-    spot = snap.get("spot_price") or 0.0
-
-    # Fattore 1: GEX regime
-    gex_ok = gex > 0
-    gex_flat = abs(gex) < 1_000_000
-
-    # Fattore 2: IBIT flows 3 giorni
-    ibit_3d = 0.0
-    if not merged_df.empty and "ibit_flow_3d" in merged_df.columns:
-        last = merged_df["ibit_flow_3d"].dropna()
-        if not last.empty:
-            ibit_3d = float(last.iloc[-1])
-
-    flow_ok = ibit_3d > 100e6
-    flow_bad = ibit_3d < -200e6
-
-    # Fattore 3: prossimità barriera
-    closest_dist = float("inf")
-    closest_barrier = None
-    if barriers and spot > 0:
-        for b in barriers:
-            level = b.get("level_price_btc") or 0.0
-            if level > 0:
-                dist = abs(spot - level) / spot * 100
-                if dist < closest_dist:
-                    closest_dist = dist
-                    closest_barrier = b
-
-    barrier_ok = closest_dist > 8
-    barrier_caution = 3 < closest_dist <= 8
-    barrier_alert = closest_dist <= 3
-
-    green = sum([gex_ok and not gex_flat, flow_ok, barrier_ok])
-    red = sum([not gex_ok, flow_bad, barrier_alert])
-
-    if green == 3:
-        signal = "LONG"
-    elif red >= 2:
-        signal = "RISK_OFF"
-    else:
-        signal = "CAUTION"
-
-    return signal, {
-        "gex": gex,
-        "gex_ok": gex_ok,
-        "gex_flat": gex_flat,
-        "ibit_3d": ibit_3d,
-        "flow_ok": flow_ok,
-        "flow_bad": flow_bad,
-        "closest_dist": closest_dist,
-        "closest_barrier": closest_barrier,
-        "barrier_ok": barrier_ok,
-        "barrier_caution": barrier_caution,
-        "barrier_alert": barrier_alert,
-    }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Sidebar
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -636,7 +563,12 @@ ma dalla gestione del rischio dei dealer.
     fig = _barrier_map_chart(barriers, spot)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Alert contestuale basato su distanza
+    # Alert contestuale basato su distanza (soglie derivate da settings)
+    from src.edgar.barrier_utils import get_proximity_pct
+    _prox = get_proximity_pct()
+    _alert_pct = _prox * 1.5   # alert immediato
+    _caution_pct = _prox * 4   # zona di attenzione
+
     valid_barriers = [b for b in barriers if (b.get("level_price_btc") or 0) > 0 and spot > 0]
     if valid_barriers:
         closest = min(
@@ -648,7 +580,7 @@ ma dalla gestione del rischio dei dealer.
         btype = closest.get("barrier_type", "barrier")
         issuer_str = closest.get("issuer", "N/A")
 
-        if distance < 3:
+        if distance < _alert_pct:
             st.error(f"""
 ⚠️ **ATTENZIONE**: Il prezzo BTC (${spot:,.0f}) è a solo **{distance:.1f}%** dal
 {btype} a ${level:,.0f} (nota emessa da {issuer_str}).
@@ -657,7 +589,7 @@ ma dalla gestione del rischio dei dealer.
 {"vendere aggressivamente" if "knock" in btype else "ribilanciare le posizioni"},
 il che potrebbe {"accelerare il ribasso" if "knock" in btype else "creare volatilità a breve termine"}.
 """)
-        elif distance < 8:
+        elif distance < _caution_pct:
             st.warning(f"""
 📍 **Zona di attenzione**: Il {btype} più vicino è a **{distance:.1f}%** dal prezzo
 corrente (${level:,.0f}, {issuer_str}). Monitora se il prezzo si avvicina ulteriormente.
@@ -695,6 +627,69 @@ Questo può causare:
 - Controlla la colonna "Nozionale" — barriere con nozionale alto hanno
   più impatto di quelle con nozionale basso
 """)
+
+    # ── Confluenza Barriere + GEX ─────────────────────────────────────────--
+    st.subheader("🔗 Confluenza Barriere + GEX Walls")
+    st.caption(
+        "Zone in cui barriere e livelli GEX convergono entro 1% — "
+        "massima significatività tecnica."
+    )
+
+    put_wall = snap.get("put_wall")
+    call_wall = snap.get("call_wall")
+    gamma_flip = snap.get("gamma_flip_price")
+
+    from src.dashboard.charts import barrier_gex_confluence as _confluence_chart
+    from src.edgar.barrier_utils import (
+        compute_confluence,
+        detect_clusters,
+    )
+
+    if barriers and spot > 0:
+        clusters = detect_clusters(barriers, float(spot))
+        confluence_data = compute_confluence(
+            clusters,
+            put_wall=put_wall,
+            call_wall=call_wall,
+            gamma_flip=gamma_flip,
+        )
+        fig2 = _confluence_chart(
+            barriers, [
+                {"mean_price_btc": c.mean_price_btc,
+                 "total_notional_usd": c.total_notional_usd,
+                 "dominant_type": c.dominant_type,
+                 "sign": c.sign,
+                 "n_barriers": c.n_barriers,
+                 "distance_to_spot_pct": c.distance_to_spot_pct}
+                for c in clusters
+            ],
+            confluence_data,
+            spot, put_wall, call_wall, gamma_flip,
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+        # Tabella confluenze
+        if confluence_data:
+            st.subheader("📊 Confluenze Rilevate")
+            cf_rows = []
+            for c in confluence_data:
+                emoji = "🟢" if c["confluence_type"] == "bullish_reinforced" else (
+                    "🔴" if c["confluence_type"] == "bearish_reinforced" else "🟡"
+                )
+                cf_rows.append({
+                    "Tipo": emoji + " " + c["confluence_type"].replace("_", " "),
+                    "Cluster Prezzo": f"${c['cluster_mean_price_btc']:,.0f}",
+                    "Nozionale": f"${c['cluster_notional_usd']:,.0f}",
+                    "N Barriere": c["cluster_n_barriers"],
+                    "Livello GEX": c["gex_level_name"],
+                    "Distanza": f"{c['distance_pct']:.2f}%",
+                })
+            if cf_rows:
+                st.dataframe(pd.DataFrame(cf_rows), use_container_width=True)
+        else:
+            st.info("Nessuna confluenza rilevata tra barriere e livelli GEX.")
+    else:
+        st.info("Dati insufficienti per calcolare confluenza.")
 
     # Tabella note attive
     st.subheader("📋 Note Strutturate Attive")
@@ -1123,124 +1118,105 @@ statisticamente significativo con quel ritardo.
 
 def _tab_signals(snap: dict, merged_df: pd.DataFrame, barriers: list[dict]) -> None:
     from src.dashboard.charts import backtest_equity
+    from src.analytics.signal_model import SignalModel, SignalInputs
+    from src.edgar.barrier_utils import (
+        barrier_confluence_scores,
+        compute_confluence,
+        detect_clusters,
+    )
 
-    st.header("🚦 Segnali Operativi")
+    st.header("🚦 Segnale Composito Multi-Fattore")
     st.markdown("""
-Questo pannello combina i tre pilastri dell'analisi (Barriere, GEX, Flussi)
-in segnali operativi. **Non sono raccomandazioni di investimento** — sono
-strumenti di analisi che evidenziano condizioni di mercato rilevanti basate
-sulla microstructura.
+Questo pannello combina **8 fattori** (GEX, ETF flows, funding rate,
+OI change, long/short ratio, put/call ratio, liquidazioni, confluenza barriere)
+in un segnale 0-100. **Non sono raccomandazioni di investimento**.
 """)
     st.warning("""
-⚠️ **Disclaimer**: Questi segnali si basano su un modello sperimentale con
-dati limitati. Non sostituiscono l'analisi personale. Usa sempre gestione
-del rischio e position sizing appropriati. Il backtest storico non garantisce
-performance futura.
+⚠️ **Disclaimer**: Modello sperimentale con dati limitati. Non sostituisce
+l'analisi personale. Backtest storico non garantisce performance futura.
 """)
 
-    # Calcola segnale composito
-    signal, details = _composite_signal(snap, merged_df, barriers)
+    # ── Calcola segnale SignalModel ─────────────────────────────────────────
+    spot = snap.get("spot_price") or 0.0
+    gex = snap.get("total_net_gex")
 
-    ibit_3d = details["ibit_3d"]
-    c_dist = details["closest_dist"]
+    # Flussi 3gg
+    ibit_flow_3d = 0.0
+    if not merged_df.empty and "ibit_flow_3d" in merged_df.columns:
+        last = merged_df["ibit_flow_3d"].dropna()
+        if not last.empty:
+            ibit_flow_3d = float(last.iloc[-1])
 
-    gex_status = "✅ Positivo" if details["gex_ok"] else "❌ Negativo"
-    flow_status = (
-        "✅ Positivi"
-        if details["flow_ok"]
-        else ("❌ Negativi" if details["flow_bad"] else "🟡 Neutri")
-    )
-    barr_status = (
-        "✅ Nessuna"
-        if details["barrier_ok"]
-        else ("🟡 Attenzione" if details["barrier_caution"] else "❌ Entro 5%")
-    )
+    # Confluenza barriere
+    bear_score = 0.0
+    bull_score = 0.0
+    if barriers and spot > 0:
+        clusters = detect_clusters(barriers, float(spot))
+        confluence = compute_confluence(
+            clusters,
+            put_wall=snap.get("put_wall"),
+            call_wall=snap.get("call_wall"),
+            gamma_flip=snap.get("gamma_flip_price"),
+        )
+        bear_score, bull_score = barrier_confluence_scores(confluence)
 
-    gex_detail = (
-        "Dealer assorbono volatilità" if details["gex_ok"] else "Dealer amplificano i movimenti"
-    )
-    flow_detail = f"IBIT 3gg: ${ibit_3d / 1e6:+.0f}M"
-    barr_detail = (
-        f"Barriera più vicina: {c_dist:.1f}%"
-        if c_dist < float("inf")
-        else "Nessuna barriera nel DB"
-    )
+    # Proxy CoinGlass dalla cache (dati giornalieri congelati nel merged_df)
 
+    inputs = SignalInputs(
+        gex_usd=gex,
+        etf_flow_3d_usd=ibit_flow_3d,
+        barrier_confluence_bearish=bear_score,
+        barrier_confluence_bullish=bull_score,
+    )
+    model = SignalModel()
+    result = model.compute(inputs)
+
+    signal = result.signal
+    score = result.score
+
+    # ── Display ──────────────────────────────────────────────────────────────
+    col1, col2, col3 = st.columns(3)
     if signal == "LONG":
-        st.success(f"""
-### 🟢 REGIME FAVOREVOLE
-
-| Fattore | Stato | Dettaglio |
-|:---|:---:|:---|
-| Gamma Exposure | {gex_status} | {gex_detail} |
-| Flussi IBIT (3gg) | {flow_status} | {flow_detail} |
-| Barriere vicine | {barr_status} | {barr_detail} |
-
-**Interpretazione**: Le condizioni strutturali favoriscono stabilità
-o rialzo graduale. Il mercato è in regime "mean-reverting" — i cali
-tendono a essere comprati meccanicamente dai dealer.
-""")
-
+        col1.success(f"### 🟢 LONG\nScore: **{score:.0f}/100**")
     elif signal == "RISK_OFF":
-        st.error(f"""
-### 🔴 REGIME DI RISCHIO
+        col1.error(f"### 🔴 RISK_OFF\nScore: **{score:.0f}/100**")
+    else:
+        col1.warning(f"### 🟡 CAUTION\nScore: **{score:.0f}/100**")
 
-| Fattore | Stato | Dettaglio |
-|:---|:---:|:---|
-| Gamma Exposure | {gex_status} | {gex_detail} |
-| Flussi IBIT (3gg) | {flow_status} | {flow_detail} |
-| Barriere vicine | {barr_status} | {barr_detail} |
+    col2.metric("GEX Totale", f"${(gex or 0)/1e6:+.0f}M")
+    col3.metric("Flussi IBIT 3gg", f"${ibit_flow_3d/1e6:+.0f}M")
 
-**Interpretazione**: Le condizioni strutturali favoriscono volatilità
-elevata e potenziale ribasso amplificato. I movimenti al ribasso
-tendono a espandersi perché i dealer vendono sui cali.
+    st.markdown(f"**Motivo**: {result.reason}")
 
-**Azione suggerita**: Ridurre leva, allargare stop, considerare
-coperture (put options o riduzione posizione).
-""")
+    # Componenti
+    st.subheader("📊 Contributo Fattori")
+    comp_rows = []
+    comp_names = {
+        "gex": "GEX Regime",
+        "etf_flow": "ETF Flow 3gg",
+        "funding_rate": "Funding Rate",
+        "oi_change": "OI Change 7gg",
+        "long_short": "Long/Short Ratio",
+        "put_call": "Put/Call Ratio",
+        "liquidations": "Liquidazioni",
+        "barrier_confluence": "Confluenza Barriere",
+    }
+    for k, v in result.components.items():
+        if v is not None:
+            pct = v * 100
+            bar = "█" * int(pct / 10) + "░" * (10 - int(pct / 10))
+            comp_rows.append({"Fattore": comp_names.get(k, k), "Score": f"{pct:.0f}%", "Bar": bar})
+    if comp_rows:
+        st.dataframe(pd.DataFrame(comp_rows), use_container_width=True)
 
-    else:  # CAUTION
-        st.warning(f"""
-### 🟡 REGIME MISTO
-
-| Fattore | Stato | Dettaglio |
-|:---|:---:|:---|
-| Gamma Exposure | {gex_status} | {gex_detail} |
-| Flussi IBIT (3gg) | {flow_status} | {flow_detail} |
-| Barriere vicine | {barr_status} | {barr_detail} |
-
-**Interpretazione**: Segnali contrastanti — alcuni fattori sono
-favorevoli, altri no. Riduci l'esposizione e monitora più frequentemente.
-Un cambiamento in uno qualsiasi dei fattori può far scattare il segnale
-in verde o rosso.
-""")
-
-    # Logica del segnale
-    with st.expander("⚙️ Come viene calcolato il segnale"):
-        st.markdown("""
-Il segnale composito è una combinazione di tre fattori indipendenti:
-
-**1. Regime GEX** (peso: 40%)
-- 🟢 se Total Net GEX > 0 (dealer stabilizzano)
-- 🔴 se Total Net GEX < 0 (dealer amplificano)
-- Il regime è il fattore più importante perché determina se
-  ogni altro shock viene assorbito o amplificato
-
-**2. Flussi IBIT 3 giorni** (peso: 30%)
-- 🟢 se somma flussi > +$100M (domanda netta)
-- 🟡 se tra -$100M e +$100M (neutro)
-- 🔴 se < -$200M (deflussi significativi)
-
-**3. Prossimità a Barrier Level** (peso: 30%)
-- 🟢 se la barriera più vicina è > 8% dal prezzo
-- 🟡 se tra 3% e 8%
-- 🔴 se < 3% (trigger imminente)
-
-**Segnale finale**:
-- 🟢 FAVOREVOLE: tutti e 3 i fattori sono verdi
-- 🟡 MISTO: almeno un fattore è giallo/rosso
-- 🔴 RISCHIO: almeno 2 fattori sono rossi
-""")
+    # Confluenza detail
+    if bear_score > 0.1 or bull_score > 0.1:
+        st.subheader("🔗 Dettaglio Confluenza Barriere")
+        con_col1, con_col2 = st.columns(2)
+        if bull_score > 0.1:
+            con_col1.success(f"🟢 Bullish Confluence: {bull_score:.0%}")
+        if bear_score > 0.1:
+            con_col2.error(f"🔴 Bearish Confluence: {bear_score:.0%}")
 
     st.divider()
 

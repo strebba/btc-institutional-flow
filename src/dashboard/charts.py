@@ -30,12 +30,6 @@ _LAYOUT_BASE = dict(
     paper_bgcolor=_BG,
     plot_bgcolor=_BG,
     font=dict(color=_TEXT, size=13, family="'Proxima Nova', Roboto, sans-serif"),
-    legend=dict(
-        bgcolor=_SURFACE,
-        bordercolor=_BORDER,
-        borderwidth=1,
-        font=dict(size=12, family="Roboto, sans-serif"),
-    ),
     margin=dict(l=60, r=70, t=55, b=45),
     hoverlabel=dict(
         bgcolor=_SURFACE,
@@ -43,6 +37,13 @@ _LAYOUT_BASE = dict(
         font=dict(color=_TEXT, size=12, family="JetBrains Mono, monospace"),
     ),
     modebar=dict(bgcolor="rgba(0,0,0,0)", color=_MUTED, activecolor=_POS),
+)
+
+_LEGEND_BASE = dict(
+    bgcolor=_SURFACE,
+    bordercolor=_BORDER,
+    borderwidth=1,
+    font=dict(size=12, family="Roboto, sans-serif"),
 )
 
 
@@ -146,6 +147,114 @@ def barrier_map(barriers: list[dict], spot_price: float) -> go.Figure:
 
     fig.update_layout(
         title="Mappa dei Livelli Critici — Note Strutturate IBIT",
+        xaxis=dict(visible=False, range=[0, 1]),
+        yaxis=_axis_style(title="Prezzo BTC ($)", tickformat="$,.0f"),
+        height=480,
+        **_LAYOUT_BASE,
+    )
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Barrier + GEX Confluence Chart
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def barrier_gex_confluence(
+    barriers: list[dict],
+    clusters: list[dict],
+    confluence: list[dict],
+    spot_price: float,
+    put_wall: Optional[float] = None,
+    call_wall: Optional[float] = None,
+    gamma_flip: Optional[float] = None,
+) -> go.Figure:
+    """Barrier levels sovrapposti a livelli GEX con evidenziazione confluenze.
+
+    Args:
+        barriers: lista barriere attive.
+        clusters: cluster da detect_clusters().
+        confluence: confluenze da compute_confluence().
+        spot_price: prezzo spot BTC.
+        put_wall: prezzo put wall GEX.
+        call_wall: prezzo call wall GEX.
+        gamma_flip: prezzo gamma flip GEX.
+
+    Returns:
+        Figure Plotly.
+    """
+    fig = go.Figure()
+
+    # Colori
+    color_map = {
+        "knock_in": _NEG, "autocall": _POS,
+        "buffer": _NEU, "knock_out": _ACCENT,
+    }
+
+    # Barriere come linee sottili
+    for b in barriers:
+        level = b.get("level_price_btc") or 0.0
+        if level <= 0:
+            continue
+        btype = b.get("barrier_type", "unknown")
+        notional = b.get("notional_usd") or 0.0
+        color = color_map.get(btype, _TEXT)
+        width = max(1.0, min(2.0, 1.0 + notional / 50e6))
+        fig.add_trace(go.Scatter(
+            x=[0, 1], y=[level, level],
+            mode="lines",
+            line=dict(color=color, width=width, dash="dot"),
+            name=f"{btype} — {b.get('issuer', 'N/A')}",
+            legendgroup="barriers", showlegend=False,
+        ))
+
+    # Spot
+    if spot_price > 0:
+        fig.add_trace(go.Scatter(
+            x=[0, 1], y=[spot_price, spot_price],
+            mode="lines",
+            line=dict(color=_TEXT, width=2.5),
+            name=f"Spot ${spot_price:,.0f}",
+        ))
+
+    # GEX walls (if available)
+    gex_levels = [
+        (put_wall, "Put Wall", _NEG, "put_wall"),
+        (gamma_flip, "Gamma Flip", _NEU, "gamma_flip"),
+        (call_wall, "Call Wall", _POS, "call_wall"),
+    ]
+    for level, label, color, gid in gex_levels:
+        if level and level > 0:
+            fig.add_trace(go.Scatter(
+                x=[0, 1], y=[level, level],
+                mode="lines",
+                line=dict(color=color, width=1.5, dash="dash"),
+                name=label,
+                legendgroup="gex",
+            ))
+
+    # Zone di confluenza (bande colorate semitrasparenti)
+    for c in confluence:
+        ctype = c.get("confluence_type", "mixed")
+        mean_p = c.get("cluster_mean_price_btc", 0)
+        if mean_p <= 0:
+            continue
+        if ctype == "bearish_reinforced":
+            band_color = _NEG
+        elif ctype == "bullish_reinforced":
+            band_color = _POS
+        else:
+            band_color = _NEU
+        fig.add_hrect(
+            y0=mean_p * 0.995, y1=mean_p * 1.005,
+            fillcolor=band_color,
+            opacity=0.12,
+            line_width=0,
+            name=f"confluence_{ctype}",
+        )
+
+    fig.update_layout(
+        title="Confluenza Barriere + GEX",
         xaxis=dict(visible=False, range=[0, 1]),
         yaxis=_axis_style(title="Prezzo BTC ($)", tickformat="$,.0f"),
         height=480,

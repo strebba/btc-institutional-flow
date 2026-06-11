@@ -70,7 +70,8 @@ class RegimeDetector:
             RegimeState: regime classificato con alert.
         """
         threshold = self._cfg.get("gex_threshold_usd", 1_000_000)
-        proximity = self._alert_cfg.get("barrier_proximity_pct", 3.0)
+        from src.edgar.barrier_utils import get_proximity_pct
+        proximity = self._alert_cfg.get("barrier_proximity_pct", get_proximity_pct())
         gex       = snapshot.total_net_gex
 
         # Classificazione regime
