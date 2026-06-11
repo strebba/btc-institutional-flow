@@ -165,6 +165,18 @@ _RE_DATE = re.compile(
 
 _RE_DATE_ISO = re.compile(r"\b(20\d{2}[-/]\d{1,2}[-/]\d{1,2})\b")
 
+# ETF Bitcoin spot riconosciuti come sottostante: ticker → pattern (ticker o nome
+# completo del fondo). L'ordine è la priorità: IBIT prima, perché è il focus del
+# toolkit e perché nelle note multi-underlier che includono IBIT vogliamo tracciare
+# proprio la gamba IBIT (coerente con _RE_INITIAL_MULTI, che ne estrae il prezzo).
+_UNDERLYING_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("IBIT", re.compile(r"\bIBIT\b|iShares\s*®?\s*Bitcoin\s+Trust", re.IGNORECASE)),
+    ("FBTC", re.compile(r"\bFBTC\b|(?:Fidelity\s*®?\s*)?Wise\s+Origin\s*®?\s*Bitcoin",
+                        re.IGNORECASE)),
+    ("BITB", re.compile(r"\bBITB\b|Bitwise\s+Bitcoin\s+ETF", re.IGNORECASE)),
+    ("ARKB", re.compile(r"\bARKB\b|ARK\s*21Shares\s+Bitcoin\s+ETF", re.IGNORECASE)),
+]
+
 _PRODUCT_KEYWORDS: dict[str, list[str]] = {
     "autocallable":         ["auto-callable", "autocallable", "auto callable", "auto-call"],
     "barrier_note":         ["barrier note", "knock-in note", "knock-in level"],
@@ -375,6 +387,26 @@ def _detect_product_type(text: str) -> Optional[str]:
         if p in matches:
             return p
     return matches[0]
+
+
+def _detect_underlying(text: str) -> str:
+    """Identifica il ticker dell'ETF sottostante citato nel filing.
+
+    I search terms includono anche FBTC/BITB/ARKB: senza questa detection ogni
+    nota verrebbe registrata come IBIT, inquinando barriere e conversioni BTC.
+
+    Args:
+        text: testo del filing.
+
+    Returns:
+        str: ticker del sottostante (IBIT/FBTC/BITB/ARKB). Le note multi-underlier
+        che includono IBIT sono attribuite a IBIT (priorità di _UNDERLYING_PATTERNS).
+        Fallback "IBIT" se nessun pattern matcha (estrazione testo degradata).
+    """
+    for ticker, pattern in _UNDERLYING_PATTERNS:
+        if pattern.search(text):
+            return ticker
+    return "IBIT"
 
 
 def _detect_issuer(text: str, known_issuers: list[str]) -> Optional[str]:
@@ -784,7 +816,7 @@ class ProspectusParser:
             maturity_date=maturity_date,
             notional_usd=notional,
             product_type=product_type,
-            underlying="IBIT",
+            underlying=_detect_underlying(text),
             initial_level=initial_level,
             autocall_trigger_pct=autocall_pct,
             knockin_barrier_pct=knockin_pct,

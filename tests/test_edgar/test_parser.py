@@ -12,6 +12,7 @@ from src.edgar.parser import (
     _detect_issuer,
     _canonicalize_issuer,
     _known_issuer_or_none,
+    _detect_underlying,
     _extract_barrier_levels,
 )
 
@@ -146,6 +147,38 @@ class TestKnownIssuerOrNone:
 
     def test_none(self):
         assert _known_issuer_or_none(None) is None
+
+
+class TestDetectUnderlying:
+    def test_ibit_ticker(self):
+        assert _detect_underlying("linked to the performance of IBIT shares") == "IBIT"
+
+    def test_ibit_fund_name(self):
+        assert _detect_underlying("the iShares® Bitcoin Trust ETF") == "IBIT"
+
+    def test_fbtc_ticker(self):
+        assert _detect_underlying("notes linked to FBTC") == "FBTC"
+
+    def test_fbtc_fund_name(self):
+        assert _detect_underlying("the Fidelity® Wise Origin® Bitcoin Fund") == "FBTC"
+
+    def test_bitb(self):
+        assert _detect_underlying("linked to the Bitwise Bitcoin ETF (BITB)") == "BITB"
+
+    def test_arkb(self):
+        assert _detect_underlying("the ARK 21Shares Bitcoin ETF") == "ARKB"
+
+    def test_multi_underlier_prefers_ibit(self):
+        # Nota multi-asset Goldman: si traccia la gamba IBIT.
+        text = "linked to the lesser performing of FBTC and the iShares Bitcoin Trust"
+        assert _detect_underlying(text) == "IBIT"
+
+    def test_no_match_falls_back_to_ibit(self):
+        assert _detect_underlying("generic prospectus text") == "IBIT"
+
+    def test_ibit_substring_not_matched(self):
+        # "prohibited" contiene "ibit" ma non deve matchare (word boundary).
+        assert _detect_underlying("transfer is prohibited under FBTC terms") == "FBTC"
 
 
 class TestParseBatchInceptionFilter:

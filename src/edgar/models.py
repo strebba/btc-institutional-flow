@@ -42,8 +42,9 @@ class StructuredNote:
         maturity_date: data di scadenza.
         notional_usd: valore nozionale in USD.
         product_type: tipo prodotto (autocallable, barrier, buffer, ...).
-        underlying: sottostante (tipicamente "IBIT").
-        initial_level: prezzo IBIT alla data di pricing.
+        underlying: ticker dell'ETF sottostante (IBIT/FBTC/BITB/ARKB); le note
+            multi-underlier che includono IBIT sono attribuite a IBIT.
+        initial_level: prezzo del sottostante alla data di pricing.
         autocall_trigger_pct: livello di autocall in % (es. 100.0 = 100%).
         knockin_barrier_pct: livello knock-in in % (es. 70.0 = 70%).
         buffer_pct: buffer di protezione in % (es. 10.0 = 10%).
