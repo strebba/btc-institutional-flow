@@ -12,7 +12,7 @@ Toolkit Python per l'impatto del **dealer hedging** su note strutturate IBIT sul
 make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
-make test           # pytest tests/ -v  (~232 test)
+make test           # pytest tests/ -v  (~506 test)
 make update-all     # update-gex + update-flows + update-edgar (cron data refresh)
 ```
 
@@ -52,3 +52,9 @@ Refresh incrementale: `scripts/cron_edgar.py` (env `EDGAR_LOOKBACK_DAYS`, defaul
 job fallisce di proposito (ToS SEC). In locale usare la stessa env var (placeholder `example.com` →
 WARNING in `get_settings()`). I supplement *preliminari* hanno `is_preliminary=1` e `initial_level`/
 `notional` = NULL; `/api/barriers` mostra solo i finali.
+
+I search terms includono anche FBTC/BITB/ARKB: il parser estrae il ticker reale del sottostante
+(`_detect_underlying`, colonna `notes.underlying`), ma `get_active_barriers()`,
+`compute_btc_prices()` e `update_barrier_statuses()` operano **solo sulle note IBIT** (default) —
+i prezzi/ratio IBIT non si applicano agli altri ETF. `data/runtime.db` (predizioni/cache runtime,
+usato da `make run-api` via `DB_PATH`) è invece **ignorato** da git, separato dal seed versionato.
