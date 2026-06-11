@@ -25,6 +25,9 @@ edgar:
   search_terms:
     - "IBIT"
     - "iShares Bitcoin Trust"
+    - "FBTC"
+    - "BITB"
+    - "ARKB"
   forms:
     - "424B2"
     - "424B3"

@@ -11,8 +11,7 @@ data/*.html
 data/*.csv
 data/*.db-shm
 data/*.db-wal
-# DB runtime (predictions/outcomes/weights + cache): separato dal seed tracciato
-# structured_notes.db, cosi git checkout/reset non azzera piu le predizioni runtime.
+data/structured_notes.db
 data/runtime.db
 logs/
 .claude/

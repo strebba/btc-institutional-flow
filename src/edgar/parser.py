@@ -61,9 +61,11 @@ _RE_PRELIMINARY = re.compile(
 )
 
 _RE_INITIAL_LEVEL = re.compile(
-    r"(?:initial\s+(?:value|level|price)|starting\s+(?:value|level)|"
-    r"reference\s+(?:price|value|level)|initial\s+share\s+price)"
-    r"\s*(?:of\s+the\s+underlying\s*)?:?\s*\$?([\d,]+\.?\d*)",
+    r"(?:initial\s+(?:\w+\s+)?(?:value|level|price|share\s+price)|"
+    r"starting\s+(?:value|level|price)|"
+    r"reference\s+(?:price|value|level))"
+    r"(?:\s+(?:of|is)|\s*:\s*|\s+of\s+the\s+(?:underlying|underlier)\s+)?"
+    r"\s*\$?([\d,]+\.?\d*)",
     re.IGNORECASE,
 )
 
@@ -80,6 +82,14 @@ _RE_INITIAL_LEVEL_ALT = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern multi-asset Goldman: "($XX.XX with respect to the iShares Bitcoin Trust ETF"
+# Il prezzo IBIT è in un parenthetical tra i vari underlier.
+_RE_INITIAL_MULTI = re.compile(
+    r"\$?\s*([\d,]+\.?\d*)\s+with\s+respect\s+to\s+"
+    r"(?:the\s+)?iShares\s*®?\s*Bitcoin",
+    re.IGNORECASE,
+)
+
 # "Initial Value" … "$XX.XX" entro ~60 caratteri (tabella key-terms dei finali JPM).
 # Prezzo vincolato a 1-3 cifre intere + 2-4 decimali per non agganciare nozionali.
 _RE_INITIAL_VALUE_NEAR = re.compile(
@@ -87,12 +97,14 @@ _RE_INITIAL_VALUE_NEAR = re.compile(
     re.IGNORECASE,
 )
 
-# Segnale forte e cross-issuer (Goldman: "Initial ETF price: $42.73, which is the
-# closing price of the ETF on the pricing date"). Il prezzo di chiusura alla pricing
-# date È l'initial level. Il suffisso "which is the closing price" esclude i valori
-# ipotetici degli esempi (es. "$100.00 ... for illustrative purposes").
+# Segnale forte e cross-issuer (Goldman: "Initial ETF level of $42.73, which is the
+# closing level of the ETF on the trade date"). Il prezzo di chiusura alla pricing
+# date È l'initial level. Gestisce varianti "which is the closing level/price" e
+# "which is an intra-day level or the closing level" (Goldman).
 _RE_INITIAL_CLOSING_PRICE = re.compile(
-    r"\$\s*(\d{1,3}\.\d{2,4})[^$]{0,45}?which\s+is\s+the\s+closing\s+price",
+    r"\$\s*(\d{1,3}\.\d{2,4})[^$]{0,80}?"
+    r"which\s+is\s+(?:an\s+intra-day\s+level\s+or\s+)?"
+    r"the\s+closing\s+(?:level|price)",
     re.IGNORECASE,
 )
 
@@ -126,7 +138,8 @@ _RE_AUTOCALL_PCT = re.compile(
 # Pattern JPMorgan: "Barrier Amount: 55.00% of the Initial Value, which is $28.138"
 _RE_BARRIER_ABS = re.compile(
     r"(?:barrier\s+(?:amount|level)|trigger\s+level|knock[\-\s]in\s+level)"
-    r"\s*:?\s*([\d]+(?:\.\d+)?)\s*%\s+of\s+the\s+(?:initial|starting)\s+value"
+    r"\s*:?\s*([\d]+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?"
+    r"(?:initial|starting)\s+(?:\w+\s+)?(?:value|level)"
     r",\s*which\s+is\s+\$?([\d,]+\.?\d*)",
     re.IGNORECASE,
 )
@@ -396,10 +409,14 @@ def _extract_barrier_levels(text: str, initial_level: Optional[float]) -> list[B
     barriers: list[BarrierLevel] = []
     seen_pcts: set[float] = set()
 
-    # Pattern: "XX% of the Initial/Starting Value" con contesto
+    # Pattern: "XX% of the Initial/Starting Value/Level" con contesto
+    # Gestisce varianti con parola opzionale tra initial e level
+    # (es. "initial ETF level", "initial underlier value")
     pattern = re.compile(
-        r"([\d]+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?(?:initial|starting|reference)\s+"
-        r"(?:value|level|price|share\s+price)",
+        r"([\d]+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?"
+        r"(?:initial\s+(?:\w+\s+)?(?:value|level|price|share\s+price)|"
+        r"starting\s+(?:value|level|price)|"
+        r"reference\s+(?:price|value|level))",
         re.IGNORECASE,
     )
 
@@ -679,6 +696,17 @@ class ProspectusParser:
                     if pct > 0 and 1.0 < price < 500.0:
                         initial_level = round(price / pct, 2)
                 except (ValueError, ZeroDivisionError):
+                    pass
+
+        # 7) Multi-asset Goldman: "($XX.XX with respect to the iShares Bitcoin Trust ETF"
+        if initial_level is None:
+            m_multi = _RE_INITIAL_MULTI.search(text)
+            if m_multi:
+                try:
+                    val = float(m_multi.group(1).replace(",", ""))
+                    if 1.0 < val < 500.0:
+                        initial_level = val
+                except ValueError:
                     pass
 
         # Autocall trigger
