@@ -1,7 +1,6 @@
 """Test unitari per GexCalculator."""
 from __future__ import annotations
 
-from datetime import datetime
 
 import pytest
 from src.gex.gex_calculator import GexCalculator

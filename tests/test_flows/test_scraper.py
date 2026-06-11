@@ -5,7 +5,6 @@ from datetime import date
 
 import pytest
 from src.flows.scraper import _parse_flow_value, _parse_farside_date, FarsideScraper
-from src.flows.models import EtfFlowData
 
 
 class TestParseFlowValue:

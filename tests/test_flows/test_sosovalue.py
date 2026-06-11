@@ -151,8 +151,7 @@ class TestFetchHttpMock:
         with patch("requests.Session.get", return_value=mock_resp) as mock_get:
             result = client.fetch(lookback_days=30)
 
-        call_kwargs = mock_get.call_args
-        headers_used = mock_get.call_args  # headers set on session, not per-call
+        assert mock_get.called          # l'API è stata interrogata
         assert len(result) > 0
 
     def test_fetch_returns_empty_on_http_error(self):

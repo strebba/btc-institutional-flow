@@ -9,7 +9,6 @@ from src.forecast.models import DIR_DOWN, DIR_UP
 from src.forecast.validation import (
     beats_benchmarks,
     benchmarks,
-    direction_series,
     directional_hit_rate,
     forward_returns,
     walk_forward_windows,

@@ -1,7 +1,6 @@
 """Test per SignalModel — scoring multi-fattore 7 input."""
 from __future__ import annotations
 
-import pytest
 import pandas as pd
 
 from src.analytics.signal_model import (

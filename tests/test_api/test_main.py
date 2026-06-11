@@ -5,7 +5,6 @@ sanitizzazione, serializzazione) con i data layer mockati.
 """
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest

@@ -895,7 +895,6 @@ dal mercato ogni giorno. Il mercato include ora 10+ ETF spot BTC.
     )
 
     # KPI row
-    recent = merged_df.last("7D")
     today_flow = week_flow = total_today = 0.0
     corr_30d = 0.0
 
@@ -1142,10 +1141,8 @@ performance futura.
     # Calcola segnale composito
     signal, details = _composite_signal(snap, merged_df, barriers)
 
-    gex_raw = details["gex"]
     ibit_3d = details["ibit_3d"]
     c_dist = details["closest_dist"]
-    c_barrier = details["closest_barrier"]
 
     gex_status = "✅ Positivo" if details["gex_ok"] else "❌ Negativo"
     flow_status = (

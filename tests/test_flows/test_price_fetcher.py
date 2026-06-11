@@ -1,8 +1,7 @@
 """Test unitari per PriceFetcher."""
 from __future__ import annotations
 
-import tempfile
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +17,6 @@ def fetcher(tmp_path: Path) -> PriceFetcher:
 @pytest.fixture
 def sample_df() -> pd.DataFrame:
     """DataFrame OHLCV fittizio per 5 giorni."""
-    import numpy as np
     idx = pd.date_range("2024-10-01", periods=5, freq="D")
     df  = pd.DataFrame({
         "Open":   [60_000, 61_000, 59_500, 62_000, 63_000],

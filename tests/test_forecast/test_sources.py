@@ -1,7 +1,6 @@
 """Test degli adapter source EMA e portfolio."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 

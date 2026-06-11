@@ -11,7 +11,6 @@ Output: tabella con CAR medio per tipo di barriera (knock_in, autocall, buffer).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 from typing import Optional
 
 import numpy as np
@@ -326,7 +325,6 @@ class EventStudy:
         """
         try:
             import plotly.graph_objects as go
-            from plotly.subplots import make_subplots
             from src.config import get_settings
             theme = get_settings()["dashboard"]["theme"]
         except ImportError:

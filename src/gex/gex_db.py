@@ -13,12 +13,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Generator
 
 import pandas as pd
 
 from src.config import get_settings, setup_logging
-from src.gex.models import GexByStrike, GexSnapshot
+from src.gex.models import GexSnapshot
 
 _log = setup_logging("gex.db")
 

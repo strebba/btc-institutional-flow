@@ -6,8 +6,6 @@ correlazioni rolling a 30, 60, 90 giorni con Plotly per la visualizzazione.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
 
 import numpy as np
 import pandas as pd
