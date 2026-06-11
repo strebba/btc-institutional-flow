@@ -182,11 +182,13 @@ _ISSUER_CANONICAL: list[tuple[str, str]] = [
     ("jp morgan",         "JPMorgan"),
     ("morgan stanley",    "Morgan Stanley"),
     ("goldman",           "Goldman Sachs"),
+    ("gs finance",        "Goldman Sachs"),  # "GS Finance Corp." (filer Goldman)
     ("citigroup",         "Citigroup"),
     ("citibank",          "Citigroup"),
     ("bank of nova scotia", "Bank of Nova Scotia"),
     ("scotiabank",        "Bank of Nova Scotia"),
     ("barclays",          "Barclays"),
+    ("jefferies",         "Jefferies"),
     ("hsbc",              "HSBC"),
     ("merrill",           "Bank of America"),
     ("bank of america",   "Bank of America"),
@@ -202,8 +204,25 @@ _ISSUER_CANONICAL: list[tuple[str, str]] = [
     ("marex",             "Marex"),
 ]
 
+# Allowlist degli emittenti di note strutturate riconosciuti (i valori canonici).
+# Serve a scartare i falsi positivi del full-text search "IBIT": prospetti di
+# ETF/trust (iShares Bitcoin Trust, Franklin … Trust) e società non-bancarie
+# (Flybondi, Biomotion, ReserveOne…) il cui 424B matcha "IBIT" ma NON sono note.
+_NOTE_ISSUERS: frozenset[str] = frozenset(canonical for _, canonical in _ISSUER_CANONICAL)
+
 
 # ─── Helper functions ─────────────────────────────────────────────────────────
+
+
+def _known_issuer_or_none(name: Optional[str]) -> Optional[str]:
+    """Ritorna l'emittente canonico SE `name` è un emittente di note noto.
+
+    A differenza di `_canonicalize_issuer` (che ripiega sul nome ripulito), qui
+    si ritorna None quando il nome non corrisponde a un emittente in allowlist:
+    è il segnale che il filing NON è una nota strutturata su IBIT.
+    """
+    canonical = _canonicalize_issuer(name)
+    return canonical if canonical in _NOTE_ISSUERS else None
 
 
 def _canonicalize_issuer(name: Optional[str]) -> Optional[str]:
@@ -572,8 +591,15 @@ class ProspectusParser:
         # size dell'offering: lo segnaliamo per non inventare valori più sotto.
         is_preliminary = bool(_RE_PRELIMINARY.search(text))
 
-        raw_issuer    = _detect_issuer(text, known_issuers) or filing_meta.get("entity_name")
-        issuer        = _canonicalize_issuer(raw_issuer)
+        # L'emittente si deduce dall'entity_name di EDGAR (il FILER autorevole),
+        # non dal testo del corpo: lì compaiono nomi di banche come dealer/agent
+        # (es. "UBS") che causavano mis-attribuzioni. Se l'entity_name non è un
+        # emittente di note noto → issuer=None → il filing è un falso positivo
+        # (prospetto ETF/trust o società non pertinente) e viene scartato in
+        # parse_batch. Fallback al testo solo se l'entity_name manca del tutto.
+        issuer = _known_issuer_or_none(filing_meta.get("entity_name"))
+        if issuer is None and not filing_meta.get("entity_name"):
+            issuer = _known_issuer_or_none(_detect_issuer(text, known_issuers))
         notional      = _parse_notional(text)
         product_type  = _detect_product_type(text)
 
@@ -780,11 +806,16 @@ class ProspectusParser:
                 _log.info("Scartato (pre-IBIT %s): %s", note.issue_date, filing["url"])
                 continue
 
-            # Tieni solo le note con almeno qualcosa di utile
-            if any([note.issuer, note.notional_usd, note.product_type, note.initial_level]):
-                results.append(note)
-            else:
-                _log.warning("Filing senza dati utili: %s", filing["url"])
+            # Scarta i filing il cui FILER non è un emittente di note noto: prospetti
+            # di ETF/trust (iShares, Franklin) e società non pertinenti il cui 424B
+            # matcha "IBIT" ma non sono note strutturate (cfr. _known_issuer_or_none).
+            if note.issuer is None:
+                _log.info("Scartato (filer non-emittente: %s): %s",
+                          filing.get("entity_name", "?"), filing["url"])
+                continue
+
+            # Superati i filtri: il filer è un emittente noto → è una nota vera.
+            results.append(note)
 
         _log.info("Parsing completato: %d/%d note con dati", len(results), len(to_parse))
         return results
