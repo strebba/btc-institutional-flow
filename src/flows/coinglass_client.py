@@ -13,12 +13,20 @@ Docs: https://docs.coinglass.com
 
 from __future__ import annotations
 
+import functools
 import os
 import time
 from datetime import date, datetime, timezone
 from typing import Any
 
 import requests
+
+import pandas as pd
+
+from src.config import get_settings, setup_logging
+from src.flows.models import EtfFlowData
+
+_log = setup_logging("flows.coinglass")
 
 try:
     from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -27,29 +35,55 @@ try:
 except ImportError:
     _HAS_TENACITY = False
 
-    # No-op fallback: il decorator non fa nulla senza tenacity
-    def retry(*args, **kwargs):  # type: ignore[misc]
-        def decorator(fn):
-            return fn
-
-        return decorator
-
-    def retry_if_exception_type(*args):  # type: ignore[misc]
-        return None
+    # Fallback senza tenacity: invece di un no-op silenzioso (che disattiverebbe
+    # del tutto i retry sui transitori 429/5xx/timeout), implementiamo un retry
+    # manuale minimale con backoff esponenziale. I parametri sono passati come
+    # marker leggeri da stop_after_attempt/wait_exponential/retry_if_exception_type.
+    _log.warning(
+        "tenacity non installato: uso retry manuale di fallback per CoinGlass "
+        "(installare 'tenacity' per il backoff completo)"
+    )
 
     def stop_after_attempt(n):  # type: ignore[misc]
-        return None
+        return {"max_attempts": n}
 
-    def wait_exponential(**kwargs):  # type: ignore[misc]
-        return None
+    def wait_exponential(multiplier=1.0, min=1, max=10):  # type: ignore[misc]
+        return {"multiplier": multiplier, "min": min, "max": max}
 
+    def retry_if_exception_type(exc_types):  # type: ignore[misc]
+        return exc_types
 
-import pandas as pd
+    def retry(stop=None, wait=None, retry=None):  # type: ignore[misc]
+        max_attempts = (stop or {}).get("max_attempts", 3)
+        wait_cfg = wait or {"multiplier": 0.5, "min": 1, "max": 10}
+        retry_exc = retry or Exception
 
-from src.config import get_settings, setup_logging
-from src.flows.models import EtfFlowData
+        def decorator(fn):
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                last_exc: Exception | None = None
+                for attempt in range(max_attempts):
+                    try:
+                        return fn(*args, **kwargs)
+                    except retry_exc as exc:  # type: ignore[misc]
+                        last_exc = exc
+                        if attempt == max_attempts - 1:
+                            break
+                        delay = min(
+                            wait_cfg["max"],
+                            max(wait_cfg["min"], wait_cfg["multiplier"] * (2 ** attempt)),
+                        )
+                        _log.warning(
+                            "CoinGlass retry %d/%d dopo errore transitorio: %s (sleep %.1fs)",
+                            attempt + 1, max_attempts, exc, delay,
+                        )
+                        time.sleep(delay)
+                assert last_exc is not None
+                raise last_exc
 
-_log = setup_logging("flows.coinglass")
+            return wrapper
+
+        return decorator
 
 
 class CoinGlassError(Exception):

@@ -592,7 +592,8 @@ def get_gex() -> dict:
         calculator = GexCalculator()
         gex_dict = calculator.gex_to_dict(snapshot)
 
-        # Profilo per strike (intorno a ±40% dallo spot)
+        # Profilo per strike (intorno a ±40% dallo spot).
+        # Guardia spot>0: evita ZeroDivisionError se lo spot non è disponibile.
         strike_profile = [
             {
                 "strike": gs.strike,
@@ -603,7 +604,7 @@ def get_gex() -> dict:
                 "put_oi": gs.put_oi,
             }
             for gs in snapshot.gex_by_strike
-            if abs(gs.strike - spot) / spot < 0.40
+            if spot > 0 and abs(gs.strike - spot) / spot < 0.40
         ]
 
         # Enrichment CoinGlass: coverage score + multi-exchange PCR/max pain.
@@ -762,12 +763,30 @@ def get_flows() -> dict:
                     k: round(float(v), 4) if v == v else None for k, v in row.items()
                 }
 
+        # ── Qualità dati: fonte dominante dei flussi ──────────────────────────
+        # Il fallback yfinance ("yfinance_estimate*") è una stima ad-hoc da tracking
+        # error: segnaliamo la qualità così i consumatori possono avvisare l'utente.
+        source_counts: dict[str, int] = {}
+        for f in raw_flows:
+            source_counts[f.source] = source_counts.get(f.source, 0) + 1
+        dominant_source = (
+            max(source_counts, key=source_counts.get) if source_counts else "unknown"
+        )
+        is_estimate = dominant_source.startswith("yfinance")
+        flow_quality = {
+            "dominant_source": dominant_source,
+            "source_breakdown": source_counts,
+            "quality_label": "low_estimate" if is_estimate else "ok",
+            "is_estimate": is_estimate,
+        }
+
         response = _ok(
             {
                 "summary": stats,
                 "history": history,
                 "rolling_correlations_latest": corr_latest,
                 "granger": granger_out,
+                "data_quality": flow_quality,
             }
         )
         _cache_set("flows", response)
@@ -839,6 +858,150 @@ def get_barriers() -> dict:
         raise _error(f"Barriers error: {exc}")
 
 
+# ─── /api/notes ───────────────────────────────────────────────────────────────
+
+
+def _note_to_dict(note) -> dict:
+    """Serializza una StructuredNote (con le sue barriere) in dict JSON-safe."""
+    return {
+        "filing_url":      note.filing_url,
+        "issuer":          note.issuer,
+        "issue_date":      str(note.issue_date) if note.issue_date else None,
+        "maturity_date":   str(note.maturity_date) if note.maturity_date else None,
+        "notional_usd":    note.notional_usd,
+        "product_type":    note.product_type,
+        "underlying":      note.underlying,
+        "initial_level":   note.initial_level,
+        "autocall_trigger_pct": note.autocall_trigger_pct,
+        "knockin_barrier_pct":  note.knockin_barrier_pct,
+        "buffer_pct":      note.buffer_pct,
+        "coupon_rate":     note.coupon_rate,
+        "is_preliminary":  bool(note.is_preliminary),
+        "observation_dates": note.observation_dates,
+        "barriers": [
+            {
+                "barrier_type":     b.barrier_type,
+                "level_pct":        b.level_pct,
+                "level_price_ibit": b.level_price_ibit,
+                "level_price_btc":  b.level_price_btc,
+                "observation_date": str(b.observation_date) if b.observation_date else None,
+                "status":           b.status,
+            }
+            for b in note.barriers
+        ],
+    }
+
+
+@app.get("/api/notes", tags=["barriers"])
+def get_notes(underlying: str = "IBIT", limit: int = 200) -> dict:
+    """Elenco note strutturate (lettura aggregata, per drill-down EDGAR).
+
+    Restituisce metadati sintetici (no raw_text) per ogni nota del sottostante.
+    """
+    try:
+        from src.edgar.structured_notes_db import StructuredNotesDB
+
+        db = StructuredNotesDB()
+        notes = [n for n in db.get_all_notes()
+                 if (n.underlying or "IBIT") == underlying][:limit]
+        return _ok({"count": len(notes), "notes": [_note_to_dict(n) for n in notes]})
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"Notes error: {exc}")
+
+
+@app.get("/api/notes/by-url", tags=["barriers"])
+def get_note_by_url(url: str) -> dict:
+    """Dettaglio di una singola nota strutturata dal suo filing_url (drill-down)."""
+    try:
+        from src.edgar.structured_notes_db import StructuredNotesDB
+
+        db = StructuredNotesDB()
+        note = db.get_note_by_url(url)
+        if note is None:
+            raise _error("Nota non trovata", code=404)
+        return _ok({"note": _note_to_dict(note)})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"Note error: {exc}")
+
+
+# ─── /api/pillars/series ──────────────────────────────────────────────────────
+
+
+@app.get("/api/pillars/series", tags=["signals"])
+def get_pillars_series(pillar: str = "composite", days: int = 180) -> dict:
+    """Serie storica di un pilastro (o del composito) come indice 0-100 chartabile.
+
+    Sostituto generalizzato di /api/ifi: espone qualunque pilastro come serie
+    temporale (gex | barrier | etf_flows | macro | composite).
+    """
+    valid = {"composite", "gex", "barrier", "etf_flows", "macro"}
+    if pillar not in valid:
+        raise _error(f"pillar non valido: {pillar} (validi: {sorted(valid)})", code=400)
+
+    cache_key = f"pillars_series_{pillar}_{days}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        from src.flows.scraper import FarsideScraper
+        from src.flows.price_fetcher import PriceFetcher
+        from src.flows.correlation import FlowCorrelation
+        from src.edgar.structured_notes_db import StructuredNotesDB
+        from src.analytics.pillars import CompositeSignal
+
+        scraper = FarsideScraper()
+        merged = FlowCorrelation().merge(
+            scraper.aggregate(scraper.fetch()), PriceFetcher().get_all_prices()
+        )
+        if "total_flow" in merged.columns and "total_flow_usd" not in merged.columns:
+            merged = merged.rename(columns={"total_flow": "total_flow_usd"})
+
+        # Arricchisci con la serie GEX storica (DB locale) se disponibile
+        try:
+            from src.gex.gex_db import GexDB
+            gex_series = GexDB().get_series(days=max(days, 365))
+            if not gex_series.empty:
+                merged = merged.join(gex_series.rename("total_net_gex"), how="left")
+                merged["total_net_gex"] = merged["total_net_gex"].ffill()
+        except Exception as _e:
+            _log.warning("GEX series non disponibile per /pillars/series: %s", _e)
+
+        active_barriers = StructuredNotesDB().get_active_barriers()
+        scores_df = CompositeSignal().compute_series(merged, active_barriers=active_barriers)
+
+        col = f"{pillar}_score" if pillar != "composite" else "composite_score"
+        if col not in scores_df.columns:
+            raise _error(f"colonna {col} non disponibile", code=500)
+
+        series = scores_df[col].dropna().tail(days)
+        btc = merged.get("btc_close")
+        rows = [
+            {
+                "date": str(ts.date()) if hasattr(ts, "date") else str(ts),
+                "score": round(float(v), 2),
+                "btc_price": float(btc[ts]) if btc is not None and ts in btc.index else None,
+            }
+            for ts, v in series.items()
+        ]
+        response = _ok({
+            "pillar": pillar,
+            "series": rows,
+            "current": rows[-1] if rows else None,
+            "stats": {"days_available": len(rows)},
+        })
+        _cache_set(cache_key, response)
+        return response
+
+    except Exception as exc:
+        traceback.print_exc()
+        raise _error(f"Pillars series error: {exc}")
+
+
 # ─── /api/signals ─────────────────────────────────────────────────────────────
 
 
@@ -846,10 +1009,15 @@ def get_barriers() -> dict:
 def get_signals() -> dict:
     """Segnale composito LONG/CAUTION/RISK_OFF + backtest Sharpe.
 
-    Usa il modello multi-fattore (7 input, scoring 0-100):
-    GEX regime, ETF flow 3d, funding rate, OI change, long/short ratio,
-    put/call ratio, liquidazioni. Punteggio ≥65 = LONG, <40 = RISK_OFF.
-    Risposta cachata per 5 minuti.
+    Architettura a 4 PILASTRI (ognuno con sotto-score 0-100):
+      - gex:       regime dealer gamma + contesto gamma-flip (Deribit)
+      - barrier:   livelli note strutturate IBIT, direzionale + notional-weighted (EDGAR)
+      - etf_flows: domanda spot istituzionale (Farside/CoinGlass)
+      - macro:     funding/OI/long-short/put-call/liquidazioni (CoinGlass)
+    Score finale = blend pesato dei pilastri. ≥65 = LONG, <40 = RISK_OFF.
+
+    Campo `pillars`: dettaglio dei 4 sotto-score. I campi `components`/`weights`
+    espongono i 7 fattori storici per retro-compatibilità. Cachato 5 minuti.
     """
     cached = _cache_get("signals")
     if cached is not None:
@@ -861,7 +1029,7 @@ def get_signals() -> dict:
         from src.flows.correlation import FlowCorrelation
         from src.edgar.structured_notes_db import StructuredNotesDB
         from src.analytics.backtest import Backtest
-        from src.analytics.signal_model import SignalModel, SignalInputs
+        from src.analytics.pillars import CompositeSignal, CompositeInputs
         from src.flows.coinglass_client import CoinGlassClient
 
         # ── GEX — riusa il fetch già in cache (o attende il lock) ──────────────
@@ -959,20 +1127,30 @@ def get_signals() -> dict:
             except Exception as _e:
                 _log.warning("Liquidations fetch fallito in /signals: %s", _e)
 
-        # ── SignalModel multi-fattore ──────────────────────────────────────────
-        signal_inputs = SignalInputs(
+        # ── Segnale composito a 4 PILASTRI (GEX, Barrier, ETF Flows, Macro) ────
+        # Le barriere sono ora un pilastro pesato di prima classe (non più solo veto).
+        flow_is_estimate = bool(raw_flows) and all(
+            f.source.startswith("yfinance") for f in raw_flows
+        )
+        composite_inputs = CompositeInputs(
             gex_usd=total_gex,
+            gamma_flip_price=snapshot.gamma_flip_price,
+            put_wall=snapshot.put_wall,
+            call_wall=snapshot.call_wall,
+            active_barriers=active_barriers,
             etf_flow_3d_usd=ibit_flow_3d,
+            flow_history_df=merged if not merged.empty else None,
+            flow_is_estimate=flow_is_estimate,
             funding_rate_annualized_pct=funding_rate_ann,
             oi_change_7d_pct=oi_change_7d_pct,
             long_short_ratio=long_short_ratio,
             put_call_ratio=snapshot.put_call_ratio,
             liquidations_long_24h_usd=liquidations_long,
             liquidations_short_24h_usd=liquidations_short,
-            near_active_barrier=near_barrier,
+            spot_price=spot,
         )
-        model = SignalModel()
-        signal_result = model.compute(signal_inputs)
+        composite = CompositeSignal()
+        signal_result = composite.compute(composite_inputs)
 
         # ── Salva segnale nel DB (silent failure, non blocca la risposta) ──────
         try:
@@ -1003,7 +1181,7 @@ def get_signals() -> dict:
                 merged,
                 gex_series=_gex_series if not _gex_series.empty else None,
                 active_barriers=active_barriers,
-                signal_model=model,
+                composite=composite,
             )
             for key, m in results.items():
                 backtest_metrics[key] = {
@@ -1033,13 +1211,28 @@ def get_signals() -> dict:
                         row["buy_and_hold"] = round(float(bah_vals[ts]), 4)
                     equity_curve.append(row)
 
+        # Pilastri serializzati per il frontend (sotto-score + componenti leggibili)
+        pillars_out = [
+            {
+                "name": p.name,
+                "score": p.score,
+                "weight": round(p.weight, 4),
+                "components": p.components,
+                "reason": p.reason,
+            }
+            for p in signal_result.pillars
+        ]
+
         response = _ok(
             {
                 "signal": signal_result.signal,
                 "signal_reason": signal_result.reason,
                 "score": signal_result.score,
-                "components": signal_result.components,
+                # components/weights: 7 fattori storici (retro-compat) derivati dai pilastri
+                "components": signal_result.legacy_components,
                 "weights": signal_result.weights_used,
+                # Nuova vista a 4 pilastri (additiva)
+                "pillars": pillars_out,
                 "inputs": {
                     "spot_price_usd": spot,
                     "total_gex_usd_m": round(total_gex / 1e6, 2),
@@ -1218,19 +1411,18 @@ def get_macro() -> dict:
 # ─── /api/ifi ─────────────────────────────────────────────────────────────────
 
 
-@app.get("/api/ifi", tags=["signals"])
+@app.get("/api/ifi", tags=["signals", "deprecated"])
 def get_ifi() -> dict:
-    """Institutional Flow Index (IFI): serie storica giornaliera 0-100 per BTC.
+    """[DEPRECATO] Institutional Flow Index (IFI): serie storica giornaliera 0-100.
+
+    ⚠️ DEPRECATO: l'IFI è stato assorbito nell'architettura a 4 pilastri. Le sue
+    componenti flow vivono ora nel pilastro ETF Flows; funding/OI/L-S nel pilastro
+    Macro. Usare `/api/pillars/series?pillar=etf_flows` (o `composite`) come sostituto
+    generalizzato. Questo endpoint resta attivo per retro-compatibilità e continua
+    a servire lo storico già accumulato in ifi_history.
 
     Indicatore chartabile su timeframe D/W basato su ETF flows (da gen 2024),
     prezzo BTC e dati CoinGlass (funding/OI/L/S per ultimi 333-500gg).
-    Usa sigmoid scaling su tutti i fattori per una curva liscia e continua.
-
-    Fattori: flow_momentum (40%) · flow_trend (20%) · price_momentum (15%) ·
-             funding (10%) · oi_momentum (10%) · ls_squeeze (5%)
-
-    Regimi: Outflow (<30) | Distribution (30-45) | Neutral (45-55) |
-            Momentum (55-70) | Accumulation (≥70)
 
     Fast path: legge da DB ifi_history (popolato dal cron_ifi.py).
     Slow path: calcola on-the-fly se DB vuoto (solo flows + prezzo, no CoinGlass).

@@ -19,6 +19,7 @@ from src.config import get_settings, setup_logging
 
 if TYPE_CHECKING:
     from src.analytics.signal_model import SignalModel
+    from src.analytics.pillars import CompositeSignal
 
 _log = setup_logging("analytics.backtest")
 
@@ -79,17 +80,21 @@ class Backtest:
         gex_series: Optional[pd.Series] = None,
         active_barriers: Optional[list[dict]] = None,
         signal_model: Optional["SignalModel"] = None,
+        composite: Optional["CompositeSignal"] = None,
     ) -> pd.Series:
         """Genera i segnali di trading (+1 long, -1 short, 0 flat).
 
-        Se signal_model è fornito usa lo scoring multi-fattore (0-100).
-        Altrimenti usa le regole legacy (GEX + flow threshold).
+        Priorità modalità:
+          1. composite (4 pilastri): scoring 0-100 con barriere come pilastro pesato.
+          2. signal_model (7 fattori): scoring 0-100, barriere come veto/override.
+          3. regole legacy (GEX + flow threshold).
 
         Args:
             merged_df: DataFrame con ibit_flow_3d, btc_close, btc_return.
             gex_series: serie GEX totale (DatetimeIndex), opzionale.
             active_barriers: lista barriere attive dal DB, opzionale.
             signal_model: SignalModel per scoring multi-fattore, opzionale.
+            composite: CompositeSignal a 4 pilastri, opzionale (ha priorità).
 
         Returns:
             pd.Series: segnali con DatetimeIndex.
@@ -120,6 +125,17 @@ class Backtest:
                 p = b.get("level_price_btc") or 0.0
                 if p > 0:
                     barrier_prices.add(p)
+
+        # ── Modalità Composite (4 pilastri) ────────────────────────────────────
+        # Le barriere sono un PILASTRO pesato: nessun override/veto separato.
+        if composite is not None:
+            scores = composite.compute_series(df, active_barriers=active_barriers)["composite_score"]
+            signals = composite.signals_from_scores(scores)
+            _log.info(
+                "Composite — long=%d, risk_off=%d, flat=%d",
+                (signals == 1).sum(), (signals == -1).sum(), (signals == 0).sum(),
+            )
+            return signals
 
         # ── Modalità SignalModel (multi-fattore) ───────────────────────────────
         if signal_model is not None:
@@ -255,6 +271,7 @@ class Backtest:
         gex_series: Optional[pd.Series] = None,
         active_barriers: Optional[list[dict]] = None,
         signal_model: Optional["SignalModel"] = None,
+        composite: Optional["CompositeSignal"] = None,
     ) -> dict[str, BacktestMetrics]:
         """Esegue il backtest e il benchmark buy-and-hold.
 
@@ -263,7 +280,8 @@ class Backtest:
             gex_series: serie GEX totale (opzionale).
             active_barriers: barriere attive dal DB (opzionale).
             signal_model: SignalModel per scoring multi-fattore (opzionale).
-                Se None usa le regole legacy GEX+flow threshold.
+            composite: CompositeSignal a 4 pilastri (opzionale, ha priorità).
+                Se né composite né signal_model sono forniti usa le regole legacy.
 
         Returns:
             dict: "strategy" e "buy_and_hold" con i rispettivi BacktestMetrics.
@@ -274,14 +292,19 @@ class Backtest:
             return {}
 
         # Genera segnali (lag=1 per evitare look-ahead bias)
-        signals = self._generate_signals(df, gex_series, active_barriers, signal_model)
+        signals = self._generate_signals(
+            df, gex_series, active_barriers, signal_model, composite
+        )
         signals_lagged = signals.shift(1).fillna(0)
 
         # Rendimenti strategia
         btc_rets   = df["btc_return"].dropna()
         strat_rets = btc_rets * signals_lagged.reindex(btc_rets.index).fillna(0)
 
-        name = "Multi-Factor Strategy" if signal_model else "GEX+Flows Strategy"
+        name = (
+            "4-Pillar Strategy" if composite
+            else ("Multi-Factor Strategy" if signal_model else "GEX+Flows Strategy")
+        )
         strategy = self._compute_metrics(strat_rets, name, signals_lagged)
         bah      = self._compute_metrics(btc_rets, "Buy & Hold BTC")
 

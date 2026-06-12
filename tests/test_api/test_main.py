@@ -204,6 +204,50 @@ class TestBarriers:
         assert len(data["barriers"]) == 2
 
 
+class TestNotes:
+    """Drill-down EDGAR: lettura singola nota + elenco aggregato."""
+
+    def _fake_note(self):
+        from src.edgar.models import BarrierLevel, StructuredNote
+        return StructuredNote(
+            filing_url="https://sec.gov/x.htm",
+            issuer="JPMorgan",
+            notional_usd=5_000_000,
+            initial_level=60.0,
+            underlying="IBIT",
+            barriers=[BarrierLevel(barrier_type="knock_in", level_pct=70.0,
+                                   level_price_ibit=42.0, level_price_btc=70000.0)],
+        )
+
+    def test_note_by_url_found(self, client):
+        with patch("src.edgar.structured_notes_db.StructuredNotesDB.get_note_by_url",
+                   return_value=self._fake_note()):
+            r = client.get("/api/notes/by-url", params={"url": "https://sec.gov/x.htm"})
+        assert r.status_code == 200
+        note = r.json()["data"]["note"]
+        assert note["issuer"] == "JPMorgan"
+        assert note["barriers"][0]["barrier_type"] == "knock_in"
+
+    def test_note_by_url_not_found_returns_404(self, client):
+        with patch("src.edgar.structured_notes_db.StructuredNotesDB.get_note_by_url",
+                   return_value=None):
+            r = client.get("/api/notes/by-url", params={"url": "https://sec.gov/missing.htm"})
+        assert r.status_code == 404
+
+    def test_notes_list(self, client):
+        with patch("src.edgar.structured_notes_db.StructuredNotesDB.get_all_notes",
+                   return_value=[self._fake_note()]):
+            data = client.get("/api/notes").json()["data"]
+        assert data["count"] == 1
+        assert data["notes"][0]["underlying"] == "IBIT"
+
+
+class TestPillarsSeries:
+    def test_invalid_pillar_returns_400(self, client):
+        r = client.get("/api/pillars/series", params={"pillar": "bogus"})
+        assert r.status_code == 400
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Autenticazione
 # ──────────────────────────────────────────────────────────────────────────────

@@ -209,6 +209,7 @@ class FarsideScraper:
         results: list[EtfFlowData] = []
         current_year = datetime.now().year
         last_year    = current_year  # usato per inferire l'anno quando non è nella cella
+        prev_month: Optional[int] = None  # mese della riga precedente (per rollover anno)
 
         for row in rows[1:]:
             cells    = row.find_all(["td", "th"])
@@ -222,6 +223,14 @@ class FarsideScraper:
             year_in_cell = re.search(r"20\d{2}", raw_date)
             if year_in_cell:
                 last_year = int(year_in_cell.group(0))
+            else:
+                # La tabella Farside è ordinata dal più recente al più vecchio: se,
+                # scendendo verso date più vecchie, il mese AUMENTA (es. Jan→Dec)
+                # abbiamo attraversato un confine d'anno all'indietro → decrementa.
+                mm = re.search(r"[a-z]{3}", raw_date.lower())
+                cur_month = _MONTH_MAP.get(mm.group(0)) if mm else None
+                if cur_month is not None and prev_month is not None and cur_month > prev_month:
+                    last_year -= 1
 
             parsed_date = _parse_farside_date(raw_date, year_hint=last_year)
             if not parsed_date:
@@ -235,6 +244,8 @@ class FarsideScraper:
             if not parsed_date:
                 _log.debug("Data non parsabile: %r", raw_date)
                 continue
+
+            prev_month = parsed_date.month  # traccia per il rilevamento rollover anno
 
             # Leggi i valori per ogni ticker
             for col_idx, ticker in enumerate(tickers):

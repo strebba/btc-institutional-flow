@@ -322,7 +322,7 @@ class StructuredNotesDB:
             rows = conn.execute(
                 """
                 SELECT b.*, n.issuer, n.product_type, n.maturity_date,
-                       n.initial_level, n.filing_url, n.underlying
+                       n.initial_level, n.notional_usd, n.filing_url, n.underlying
                 FROM barrier_levels b
                 JOIN notes n ON b.note_id = n.id
                 WHERE b.status = 'active'

@@ -261,8 +261,110 @@ def gex_walls(snapshot_dict: dict) -> go.Figure:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ETF Flows Charts
+# Composite signal — gauge a 4 pilastri
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _score_color(score: Optional[float]) -> str:
+    """Colore semaforico per uno score 0-100 (verde≥65, giallo 40-65, rosso<40)."""
+    if score is None:
+        return _MUTED
+    if score >= 65:
+        return _POS
+    if score < 40:
+        return _NEG
+    return _NEU
+
+
+def composite_gauge(score: float, signal: str) -> go.Figure:
+    """Gauge top-level del segnale composito 0-100.
+
+    Args:
+        score: punteggio composito 0-100.
+        signal: etichetta LONG | CAUTION | RISK_OFF.
+
+    Returns:
+        Figure Plotly.
+    """
+    color = _score_color(score)
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=score,
+            number=dict(suffix="/100", font=dict(size=40, color=color)),
+            title=dict(text=f"Segnale composito — <b>{signal}</b>", font=dict(size=18)),
+            gauge=dict(
+                axis=dict(range=[0, 100], tickwidth=1, tickcolor=_MUTED),
+                bar=dict(color=color, thickness=0.3),
+                bgcolor=_SURFACE,
+                borderwidth=1,
+                bordercolor=_BORDER,
+                steps=[
+                    dict(range=[0, 40], color="rgba(248,81,73,0.18)"),
+                    dict(range=[40, 65], color="rgba(210,153,34,0.18)"),
+                    dict(range=[65, 100], color="rgba(63,185,80,0.18)"),
+                ],
+            ),
+        )
+    )
+    fig.update_layout(height=260, **_LAYOUT_BASE)
+    return fig
+
+
+def pillar_gauges(pillars: list[dict]) -> go.Figure:
+    """Quattro mini-gauge affiancati, uno per pilastro (GEX, Barrier, ETF, Macro).
+
+    Args:
+        pillars: lista di dict {name, score, weight, reason}.
+
+    Returns:
+        Figure Plotly con sotto-gauge.
+    """
+    labels = {
+        "gex": "GEX", "barrier": "Barrier",
+        "etf_flows": "ETF Flows", "macro": "Macro",
+    }
+    order = ["gex", "barrier", "etf_flows", "macro"]
+    by_name = {p["name"]: p for p in pillars}
+    ordered = [by_name[n] for n in order if n in by_name]
+    n = len(ordered) or 1
+
+    fig = make_subplots(
+        rows=1, cols=n,
+        specs=[[{"type": "indicator"}] * n],
+        horizontal_spacing=0.06,
+    )
+    for i, p in enumerate(ordered):
+        score = p.get("score")
+        weight = p.get("weight") or 0.0
+        color = _score_color(score)
+        fig.add_trace(
+            go.Indicator(
+                mode="gauge+number",
+                value=score if score is not None else 0,
+                number=(
+                    dict(font=dict(size=22, color=color))
+                    if score is not None
+                    else dict(font=dict(size=16, color=_MUTED), prefix="n/d", suffix="")
+                ),
+                title=dict(
+                    text=f"{labels.get(p['name'], p['name'])}<br>"
+                         f"<span style='font-size:11px;color:{_MUTED}'>peso {weight*100:.0f}%</span>",
+                    font=dict(size=13),
+                ),
+                gauge=dict(
+                    axis=dict(range=[0, 100], tickwidth=1, tickcolor=_MUTED, nticks=5),
+                    bar=dict(color=color, thickness=0.3),
+                    bgcolor=_SURFACE,
+                    borderwidth=1,
+                    bordercolor=_BORDER,
+                ),
+            ),
+            row=1, col=i + 1,
+        )
+    fig.update_layout(height=220, **_LAYOUT_BASE)
+    return fig
+
 
 
 def flows_chart(merged_df: pd.DataFrame) -> go.Figure:

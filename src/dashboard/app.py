@@ -310,6 +310,47 @@ def load_db_summary() -> dict:
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
+def load_macro() -> dict:
+    """Carica i dati macro CoinGlass (funding/OI/L-S/liquidazioni) per il pilastro Macro.
+
+    Best-effort: se CoinGlass non è disponibile (chiave assente, rete) ritorna {}
+    e il pilastro Macro risulterà 'n/d' (i pesi vengono riscalati sugli altri).
+    """
+    out: dict = {}
+    try:
+        from src.flows.coinglass_client import CoinGlassClient
+        cg = CoinGlassClient()
+        try:
+            fr = cg.fetch_funding_rate_history(days=14)
+            if not fr.empty:
+                out["funding_rate_annualized_pct"] = float(fr.iloc[-1]) * 3 * 365 * 100
+        except Exception:
+            pass
+        try:
+            oi = cg.fetch_aggregated_oi_history(days=14)
+            if len(oi) >= 8 and float(oi.iloc[-8]) > 0:
+                out["oi_change_7d_pct"] = (float(oi.iloc[-1]) - float(oi.iloc[-8])) / float(oi.iloc[-8]) * 100
+        except Exception:
+            pass
+        try:
+            ls = cg.fetch_long_short_ratio(days=3)
+            if not ls.empty:
+                out["long_short_ratio"] = float(ls.iloc[-1])
+        except Exception:
+            pass
+        try:
+            liq = cg.fetch_liquidations(days=2)
+            if not liq.empty:
+                out["liquidations_long_24h_usd"] = float(liq["long_usd"].iloc[-1])
+                out["liquidations_short_24h_usd"] = float(liq["short_usd"].iloc[-1])
+        except Exception:
+            pass
+    except Exception as e:
+        _log.warning("Macro CoinGlass non disponibile per la dashboard: %s", e)
+    return out
+
+
+@st.cache_data(ttl=_REFRESH, show_spinner=False)
 def run_granger(merged_df: pd.DataFrame) -> tuple[dict, pd.DataFrame, str]:
     """Esegue il test di Granger causality."""
     from src.analytics.granger import GrangerAnalysis
@@ -338,8 +379,9 @@ def run_regime(merged_df: pd.DataFrame, gex_today: float):
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
 def run_backtest(merged_df: pd.DataFrame, barriers: list[dict]):
-    """Esegue il backtest con serie GEX storica dal DB."""
+    """Esegue il backtest a 4 pilastri con serie GEX storica dal DB."""
     from src.analytics.backtest import Backtest
+    from src.analytics.pillars import CompositeSignal
     from src.gex.gex_db import GexDB
 
     gex_series = GexDB().get_series(days=365)
@@ -348,6 +390,7 @@ def run_backtest(merged_df: pd.DataFrame, barriers: list[dict]):
         merged_df,
         gex_series=gex_series if not gex_series.empty else None,
         active_barriers=barriers if barriers else None,
+        composite=CompositeSignal(),
     )
 
 
@@ -368,72 +411,47 @@ def run_event_study(barriers: list[dict], merged_df: pd.DataFrame) -> list:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _composite_signal(
+def compute_composite(
     snap: dict,
     merged_df: pd.DataFrame,
     barriers: list[dict],
-) -> tuple[str, dict]:
-    """Calcola il segnale operativo composito.
+    macro: dict | None = None,
+):
+    """Calcola il segnale composito a 4 pilastri (GEX, Barrier, ETF Flows, Macro).
+
+    Riusa l'unica sorgente di verità `CompositeSignal` (stessa logica di /api/signals),
+    così dashboard e API non divergono.
 
     Returns:
-        (signal, details) dove signal è "LONG" | "CAUTION" | "RISK_OFF".
+        CompositeResult con score, signal, pillars[], reason.
     """
-    gex = snap.get("total_net_gex") or 0.0
-    spot = snap.get("spot_price") or 0.0
+    from src.analytics.pillars import CompositeSignal, CompositeInputs
 
-    # Fattore 1: GEX regime
-    gex_ok = gex > 0
-    gex_flat = abs(gex) < 1_000_000
+    macro = macro or {}
 
-    # Fattore 2: IBIT flows 3 giorni
     ibit_3d = 0.0
     if not merged_df.empty and "ibit_flow_3d" in merged_df.columns:
         last = merged_df["ibit_flow_3d"].dropna()
         if not last.empty:
             ibit_3d = float(last.iloc[-1])
 
-    flow_ok = ibit_3d > 100e6
-    flow_bad = ibit_3d < -200e6
-
-    # Fattore 3: prossimità barriera
-    closest_dist = float("inf")
-    closest_barrier = None
-    if barriers and spot > 0:
-        for b in barriers:
-            level = b.get("level_price_btc") or 0.0
-            if level > 0:
-                dist = abs(spot - level) / spot * 100
-                if dist < closest_dist:
-                    closest_dist = dist
-                    closest_barrier = b
-
-    barrier_ok = closest_dist > 8
-    barrier_caution = 3 < closest_dist <= 8
-    barrier_alert = closest_dist <= 3
-
-    green = sum([gex_ok and not gex_flat, flow_ok, barrier_ok])
-    red = sum([not gex_ok, flow_bad, barrier_alert])
-
-    if green == 3:
-        signal = "LONG"
-    elif red >= 2:
-        signal = "RISK_OFF"
-    else:
-        signal = "CAUTION"
-
-    return signal, {
-        "gex": gex,
-        "gex_ok": gex_ok,
-        "gex_flat": gex_flat,
-        "ibit_3d": ibit_3d,
-        "flow_ok": flow_ok,
-        "flow_bad": flow_bad,
-        "closest_dist": closest_dist,
-        "closest_barrier": closest_barrier,
-        "barrier_ok": barrier_ok,
-        "barrier_caution": barrier_caution,
-        "barrier_alert": barrier_alert,
-    }
+    inputs = CompositeInputs(
+        gex_usd=snap.get("total_net_gex"),
+        gamma_flip_price=snap.get("gamma_flip_price"),
+        put_wall=snap.get("put_wall"),
+        call_wall=snap.get("call_wall"),
+        active_barriers=barriers or None,
+        etf_flow_3d_usd=ibit_3d,
+        flow_history_df=merged_df if not merged_df.empty else None,
+        put_call_ratio=snap.get("put_call_ratio"),
+        spot_price=snap.get("spot_price"),
+        funding_rate_annualized_pct=macro.get("funding_rate_annualized_pct"),
+        oi_change_7d_pct=macro.get("oi_change_7d_pct"),
+        long_short_ratio=macro.get("long_short_ratio"),
+        liquidations_long_24h_usd=macro.get("liquidations_long_24h_usd"),
+        liquidations_short_24h_usd=macro.get("liquidations_short_24h_usd"),
+    )
+    return CompositeSignal().compute(inputs)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1124,122 +1142,102 @@ statisticamente significativo con quel ritardo.
 def _tab_signals(snap: dict, merged_df: pd.DataFrame, barriers: list[dict]) -> None:
     from src.dashboard.charts import backtest_equity
 
+    from src.dashboard.charts import composite_gauge, pillar_gauges
+
     st.header("🚦 Segnali Operativi")
     st.markdown("""
-Questo pannello combina i tre pilastri dell'analisi (Barriere, GEX, Flussi)
-in segnali operativi. **Non sono raccomandazioni di investimento** — sono
-strumenti di analisi che evidenziano condizioni di mercato rilevanti basate
-sulla microstructura.
+Il segnale combina i **4 pilastri** dell'analisi — **GEX**, **Barrier**, **ETF Flows**,
+**Macro** — ognuno con un sotto-score 0-100. Il punteggio finale è un blend pesato.
+**Non sono raccomandazioni di investimento** ma strumenti di lettura della microstruttura.
 """)
     st.warning("""
-⚠️ **Disclaimer**: Questi segnali si basano su un modello sperimentale con
-dati limitati. Non sostituiscono l'analisi personale. Usa sempre gestione
-del rischio e position sizing appropriati. Il backtest storico non garantisce
+⚠️ **Disclaimer**: modello sperimentale con dati limitati. Non sostituisce l'analisi
+personale. Usa sempre gestione del rischio. Il backtest storico non garantisce
 performance futura.
 """)
 
-    # Calcola segnale composito
-    signal, details = _composite_signal(snap, merged_df, barriers)
+    # Calcola il segnale composito (stessa logica di /api/signals)
+    macro = load_macro()
+    result = compute_composite(snap, merged_df, barriers, macro)
+    signal = result.signal
+    pillars = [
+        {"name": p.name, "score": p.score, "weight": p.weight, "reason": p.reason}
+        for p in result.pillars
+    ]
 
-    ibit_3d = details["ibit_3d"]
-    c_dist = details["closest_dist"]
+    # ── Gauge top-level + banner ───────────────────────────────────────────────
+    g1, g2 = st.columns([1, 1])
+    with g1:
+        st.plotly_chart(composite_gauge(result.score, signal), use_container_width=True)
+    with g2:
+        if signal == "LONG":
+            st.success(
+                "### 🟢 REGIME FAVOREVOLE\n\n"
+                "Le condizioni strutturali favoriscono stabilità o rialzo graduale: "
+                "il mercato tende al *mean-reverting*, i cali vengono assorbiti meccanicamente."
+            )
+        elif signal == "RISK_OFF":
+            st.error(
+                "### 🔴 REGIME DI RISCHIO\n\n"
+                "Volatilità elevata e ribasso potenzialmente amplificato. "
+                "**Azione**: ridurre leva, allargare stop, valutare coperture."
+            )
+        else:
+            st.warning(
+                "### 🟡 REGIME MISTO\n\n"
+                "Segnali contrastanti tra i pilastri. Riduci esposizione e monitora: "
+                "un cambiamento in un pilastro può spostare il segnale."
+            )
 
-    gex_status = "✅ Positivo" if details["gex_ok"] else "❌ Negativo"
-    flow_status = (
-        "✅ Positivi"
-        if details["flow_ok"]
-        else ("❌ Negativi" if details["flow_bad"] else "🟡 Neutri")
+    # ── Sotto-gauge dei 4 pilastri ─────────────────────────────────────────────
+    st.plotly_chart(pillar_gauges(pillars), use_container_width=True)
+
+    # ── Tabella leggibile dei pilastri ─────────────────────────────────────────
+    def _emoji(score):
+        if score is None:
+            return "⚪️ n/d"
+        if score >= 65:
+            return "🟢"
+        if score < 40:
+            return "🔴"
+        return "🟡"
+
+    labels = {"gex": "GEX (dealer gamma)", "barrier": "Barrier (note EDGAR)",
+              "etf_flows": "ETF Flows (domanda spot)", "macro": "Macro (derivati)"}
+    rows = "\n".join(
+        f"| {labels.get(p['name'], p['name'])} | {_emoji(p['score'])} "
+        f"{('%.0f/100' % p['score']) if p['score'] is not None else ''} "
+        f"| {p['weight']*100:.0f}% | {p['reason'] or '—'} |"
+        for p in pillars
     )
-    barr_status = (
-        "✅ Nessuna"
-        if details["barrier_ok"]
-        else ("🟡 Attenzione" if details["barrier_caution"] else "❌ Entro 5%")
+    st.markdown(
+        "| Pilastro | Score | Peso | Lettura |\n|:---|:---:|:---:|:---|\n" + rows
     )
+    if not macro:
+        st.caption(
+            "ℹ️ Pilastro **Macro** non disponibile (CoinGlass non configurato in locale): "
+            "i pesi sono riscalati sugli altri pilastri."
+        )
 
-    gex_detail = (
-        "Dealer assorbono volatilità" if details["gex_ok"] else "Dealer amplificano i movimenti"
-    )
-    flow_detail = f"IBIT 3gg: ${ibit_3d / 1e6:+.0f}M"
-    barr_detail = (
-        f"Barriera più vicina: {c_dist:.1f}%"
-        if c_dist < float("inf")
-        else "Nessuna barriera nel DB"
-    )
-
-    if signal == "LONG":
-        st.success(f"""
-### 🟢 REGIME FAVOREVOLE
-
-| Fattore | Stato | Dettaglio |
-|:---|:---:|:---|
-| Gamma Exposure | {gex_status} | {gex_detail} |
-| Flussi IBIT (3gg) | {flow_status} | {flow_detail} |
-| Barriere vicine | {barr_status} | {barr_detail} |
-
-**Interpretazione**: Le condizioni strutturali favoriscono stabilità
-o rialzo graduale. Il mercato è in regime "mean-reverting" — i cali
-tendono a essere comprati meccanicamente dai dealer.
-""")
-
-    elif signal == "RISK_OFF":
-        st.error(f"""
-### 🔴 REGIME DI RISCHIO
-
-| Fattore | Stato | Dettaglio |
-|:---|:---:|:---|
-| Gamma Exposure | {gex_status} | {gex_detail} |
-| Flussi IBIT (3gg) | {flow_status} | {flow_detail} |
-| Barriere vicine | {barr_status} | {barr_detail} |
-
-**Interpretazione**: Le condizioni strutturali favoriscono volatilità
-elevata e potenziale ribasso amplificato. I movimenti al ribasso
-tendono a espandersi perché i dealer vendono sui cali.
-
-**Azione suggerita**: Ridurre leva, allargare stop, considerare
-coperture (put options o riduzione posizione).
-""")
-
-    else:  # CAUTION
-        st.warning(f"""
-### 🟡 REGIME MISTO
-
-| Fattore | Stato | Dettaglio |
-|:---|:---:|:---|
-| Gamma Exposure | {gex_status} | {gex_detail} |
-| Flussi IBIT (3gg) | {flow_status} | {flow_detail} |
-| Barriere vicine | {barr_status} | {barr_detail} |
-
-**Interpretazione**: Segnali contrastanti — alcuni fattori sono
-favorevoli, altri no. Riduci l'esposizione e monitora più frequentemente.
-Un cambiamento in uno qualsiasi dei fattori può far scattare il segnale
-in verde o rosso.
-""")
-
-    # Logica del segnale
-    with st.expander("⚙️ Come viene calcolato il segnale"):
+    with st.expander("⚙️ Come viene calcolato il segnale (4 pilastri)"):
         st.markdown("""
-Il segnale composito è una combinazione di tre fattori indipendenti:
+Ogni pilastro produce un sotto-score 0-100; il segnale finale è il **blend pesato**
+dei pilastri disponibili (i pesi si riscalano se un pilastro manca).
 
-**1. Regime GEX** (peso: 40%)
-- 🟢 se Total Net GEX > 0 (dealer stabilizzano)
-- 🔴 se Total Net GEX < 0 (dealer amplificano)
-- Il regime è il fattore più importante perché determina se
-  ogni altro shock viene assorbito o amplificato
+**1. GEX** — *Deribit options* — regime dealer gamma + contesto gamma-flip.
+GEX positivo = dealer stabilizzano (cali comprati); negativo = amplificano.
 
-**2. Flussi IBIT 3 giorni** (peso: 30%)
-- 🟢 se somma flussi > +$100M (domanda netta)
-- 🟡 se tra -$100M e +$100M (neutro)
-- 🔴 se < -$200M (deflussi significativi)
+**2. Barrier** — *note strutturate IBIT da SEC EDGAR* — livelli di hedging meccanico,
+**direzionali e pesati per notional**: knock-in *sotto* lo spot = accelerante ribasso;
+autocall *sopra* = resistenza. La vicinanza (kernel ~10%) aumenta il peso.
 
-**3. Prossimità a Barrier Level** (peso: 30%)
-- 🟢 se la barriera più vicina è > 8% dal prezzo
-- 🟡 se tra 3% e 8%
-- 🔴 se < 3% (trigger imminente)
+**3. ETF Flows** — *Farside/CoinGlass* — domanda spot istituzionale (momentum,
+accelerazione, prezzo aggiustato per volatilità + flusso 3gg).
 
-**Segnale finale**:
-- 🟢 FAVOREVOLE: tutti e 3 i fattori sono verdi
-- 🟡 MISTO: almeno un fattore è giallo/rosso
-- 🔴 RISCHIO: almeno 2 fattori sono rossi
+**4. Macro** — *CoinGlass derivati* — funding, OI, long/short, put/call, liquidazioni
+(letti in chiave contrarian).
+
+**Soglie**: score ≥ 65 → 🟢 LONG · 40-65 → 🟡 CAUTION · < 40 → 🔴 RISK_OFF.
 """)
 
     st.divider()

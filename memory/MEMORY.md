@@ -31,7 +31,8 @@
 1. 🎯 Barrier Map — visual chart of BTC barrier levels + contextual alerts
 2. 📊 GEX — gamma exposure profile, regime box, regime analysis
 3. 💰 ETF Flows — IBIT flows, KPI, alert boxes, Granger expander
-4. 🚦 Segnali — composite signal (GEX+Flows+Barriers) + backtest results
+4. 🚦 Segnali — 4-pillar composite (GEX/Barrier/ETF Flows/Macro): top-level gauge +
+   4 sub-gauges + readable table + backtest results
 5. 🔍 EDGAR Monitor — structured notes KPI, filings table, event study
 
 ## EDGAR Notes (2026-06)
@@ -45,9 +46,34 @@
 - Preliminary supplements (`is_preliminary=1`) have NULL `initial_level`/`notional` and are
   excluded from `/api/barriers`.
 
+## 4-Pillar Signal Architecture (2026-06)
+- `src/analytics/pillars.py` is the **single source of truth** for the composite signal,
+  consumed by both `/api/signals` and the Streamlit `_tab_signals`. It consolidates the
+  three previous parallel engines (binary dashboard rules, `SignalModel`, `IFIModel`).
+- Four pillars, each a 0-100 sub-score, blended with weight-rescaling
+  (`PILLAR_WEIGHTS`, sums to 1.0): **gex** (Deribit regime + gamma-flip), **barrier**
+  (EDGAR notes, directional + notional-weighted via prox kernel σ=10%), **etf_flows**
+  (reuses IFI flow_momentum/trend/price_momentum + flow_3d), **macro** (reuses
+  `signal_model` contrarian scorers: funding/oi/long-short/put-call/liquidations).
+- `CompositeSignal.compute(inputs)` = live; `.compute_series(df, active_barriers)` =
+  vectorized backtest, returns columns `*_score` + `composite_score` (preserves IFI's
+  charting capability). `Backtest.run(..., composite=...)` is the new branch; the
+  `signal_model=` and legacy branches are kept intact (do not break existing tests).
+- **Barriers are now a weighted pillar**, not just a veto. `get_active_barriers()` SELECT
+  now also returns `notional_usd` (needed for notional weighting).
+- `SignalModel` / `IFIModel` remain as **reusable scoring libraries** (their `_score_*`
+  funcs are imported by `pillars.py`); they are no longer top-level signals.
+- `/api/signals` is backward-compatible: legacy `components`/`weights`/`score`/`signal`
+  preserved (`components` = 7 legacy factors via `CompositeResult.legacy_components`),
+  new additive field `pillars`. New endpoints: `/api/pillars/series?pillar=...` (generalized
+  IFI replacement), `/api/notes` + `/api/notes/by-url` (EDGAR drill-down). `/api/ifi` is
+  soft-deprecated (tag `deprecated`) but still served.
+
 ## Important Patterns
 - `gex_to_dict()` returns both `total_net_gex` (raw USD) and `total_net_gex_m` (millions)
 - `PriceFetcher` has no `fetch_and_store()` — use `fetch(ticker)` directly
 - All Streamlit cache functions use `ttl=_REFRESH` (900s default)
-- Composite signal logic is in `_composite_signal()` in `app.py`
-- `barrier_map()` chart function added to `charts.py`
+- Composite signal logic is in `pillars.CompositeSignal`; the dashboard helper is
+  `compute_composite()` in `app.py` (the old `_composite_signal()` was removed)
+- `barrier_map()` chart function added to `charts.py`; pillar gauges:
+  `composite_gauge()` + `pillar_gauges()` in `charts.py`
