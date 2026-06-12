@@ -29,54 +29,58 @@ BTC Spot: $84,200 │ GEX: +41.5M$ │ Put Wall: $75k (-11%) │ Call Wall: $90k
 ⚠️ NEAR CALL_WALL: spot entro 2% dal call wall $75,000
 ```
 
-### Tab 1 — GEX (📊)
+### Tab 1 — Barrier Map (🎯)
+
+Mappa visuale dei barrier level delle note strutturate IBIT sul prezzo BTC:
+- Barriere knock-in (rosse), autocall (verdi), buffer (blu)
+- Linea spot corrente e distanza % dalla barriera più vicina
+- Alert contestuale: < 3% (rosso), 3-8% (giallo), > 8% (verde)
+
+### Tab 2 — GEX (📊)
 
 **Sinistra (2/3 larghezza):** Grafico a barre del profilo GEX per strike
 - Barre verdi = GEX positivo (stabilizzante)
 - Barre rosse = GEX negativo (destabilizzante)
 - Linea tratteggiata = prezzo spot corrente
 
-**Destra (1/3 larghezza):** Livelli chiave
-- Call Wall (verde)
-- Gamma Flip (blu)
-- Spot (bianco)
-- Put Wall (rosso)
+**Destra (1/3 larghezza):** Livelli chiave — Call Wall (verde), Gamma Flip (blu),
+Spot (bianco), Put Wall (rosso)
 
-**Sotto:** Metriche Gamma Flip, Max Pain, Put/Call OI ratio, N strumenti
+**Sotto:** Metriche Gamma Flip, Max Pain, Put/Call OI ratio, N strumenti +
+**Regime Analysis** (bar chart return/vol/Sharpe per regime, Welch t-test).
 
-### Tab 2 — ETF Flows (💸)
+### Tab 3 — ETF Flows (💰)
 
 Tre pannelli sincronizzati sull'asse X:
 1. **IBIT Flows** — barre verdi/rosse in M$
 2. **BTC Price** — linea continua
 3. **Correlazione rolling 30d** — tra flussi IBIT e rendimenti BTC
 
-Riepilogo ultimi 30 giorni: flusso totale, giorni inflow, rendimento BTC.
+Riepilogo ultimi 30 giorni + expander **Granger Causality** (heatmap p-values
+direzione × lag, con interpretazione testuale).
 
-### Tab 3 — Analytics (🔬)
+### Tab 4 — Segnali (🚦)
 
-**Granger Causality:**
-- Heatmap p-values (verde = significativo p<0.05, rosso = non significativo)
-- Assi: direzione (flows→returns, returns→flows) × lag (1-10 giorni)
-- Expander con interpretazione testuale completa
+Segnale composito a **4 pilastri** (vedi `docs/ANALYTICS.md` §5), calcolato dalla stessa
+`CompositeSignal` esposta da `/api/signals` (unica fonte di verità):
 
-**Regime Analysis:**
-- Bar chart comparativo: return medio, volatilità, Sharpe per regime
-- p-value del Welch t-test + etichetta "SIGNIFICATIVO" se p<0.05
-- Correlazione media GEX ↔ BTC Vol
+- **Gauge top-level** del punteggio composito 0-100 + banner regime
+  (🟢 LONG / 🟡 CAUTION / 🔴 RISK_OFF)
+- **4 sotto-gauge** dei pilastri (GEX, Barrier, ETF Flows, Macro) con peso effettivo
+- **Tabella leggibile** con score, peso e "lettura" testuale di ciascun pilastro
+- Expander "Come viene calcolato il segnale" (spiegazione dei 4 pilastri)
+- **Backtest** della strategia a 4 pilastri vs Buy & Hold BTC: equity curve, Sharpe,
+  max drawdown, win rate
 
-### Tab 4 — Backtest (📈)
+> Il pilastro **Macro** richiede CoinGlass: se la chiave non è configurata in locale,
+> appare "n/d" e i pesi si riscalano sugli altri pilastri.
 
-- Tabella performance comparativa (GEX+Flows Strategy vs Buy & Hold BTC)
-- Metriche: Delta Sharpe, giorni long, N trades
-- Equity curve + rendimenti giornalieri (2 pannelli sincronizzati)
-- Info box quando la strategia è flat (GEX storico non ancora accumulato)
+### Tab 5 — EDGAR Monitor (🔍)
 
-### Tab 5 — EDGAR Barriers (🏛️)
-
-- Tabella barriere attive con: tipo, emittente, prodotto, livello %, prezzo IBIT, prezzo BTC, scadenza, status
+- KPI note strutturate + tabella filing con tipo, emittente, prodotto, livello %, prezzo
+  IBIT, prezzo BTC, scadenza, status
 - Event Study CAR con confidence interval (quando ci sono eventi)
-- Messaggio informativo quando nessun evento viene trovato
+- Drill-down per singola nota disponibile anche via API: `/api/notes/by-url`
 
 ## Cache e performance
 
@@ -98,11 +102,14 @@ Tutte le funzioni sono pure (nessun effetto collaterale) e restituiscono `go.Fig
 
 | Funzione | Input | Output |
 |----------|-------|--------|
+| `barrier_map(barriers, spot_price)` | list[dict], float | Mappa barrier level vs spot |
 | `gex_profile(gex_by_strike, spot)` | list[dict], float | Bar chart GEX per strike |
 | `gex_walls(snapshot_dict)` | dict | Livelli chiave (put wall, call wall, flip) |
 | `flows_chart(merged_df)` | DataFrame | 3 pannelli: flows, BTC, correlazione |
 | `granger_heatmap(granger_df)` | DataFrame | Heatmap p-values Granger |
 | `regime_bars(regime_result)` | RegimeComparisonResult | Bar chart comparativo regimi |
+| `composite_gauge(score, signal)` | float, str | Gauge top-level del segnale composito |
+| `pillar_gauges(pillars)` | list[dict] | 4 sotto-gauge dei pilastri |
 | `backtest_equity(results)` | dict[str, BacktestMetrics] | Equity curve + daily returns |
 | `event_study_car(event_results)` | list[EventStudyResult] | CAR ± CI per tipo barriera |
 

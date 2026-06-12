@@ -2,7 +2,9 @@
 
 ## Panoramica
 
-Quattro test statistici per validare (o confutare) la teoria di Hayes sul legame tra dealer hedging, flussi ETF e prezzo BTC.
+Quattro test statistici per validare (o confutare) la teoria di Hayes sul legame tra
+dealer hedging, flussi ETF e prezzo BTC (§1–4), più il **segnale composito a 4 pilastri**
+che ne sintetizza i risultati in un punteggio operativo unico (§5).
 
 ---
 
@@ -167,22 +169,27 @@ print(f"Significativo: {result.significant}")
 
 ## 4. Backtest (`backtest.py`)
 
-**Domanda:** *Una strategia basata su GEX + flussi ETF batte il buy-and-hold?*
+**Domanda:** *Una strategia basata sul segnale composito batte il buy-and-hold?*
 
-### Regole di trading
+### Generazione dei segnali — tre modalità
+
+`Backtest.run()` genera i segnali in ordine di priorità:
+
+1. **`composite=CompositeSignal()` (default attuale)** — segnale a 4 pilastri (vedi §5).
+   Le barriere sono un **pilastro pesato**, non un veto. È la modalità usata da
+   `/api/signals` e dalla dashboard.
+2. **`signal_model=SignalModel()`** — scoring legacy a 7 fattori (libreria, mantenuta
+   per confronto A/B; barriere come override/veto).
+3. **Regole legacy (fallback)** — se non si passa né `composite` né `signal_model`:
 
 ```
-LONG   se: GEX > 0
-          AND ibit_flow_3d > +100M$
-          AND nessuna barriera attiva entro ±5% dal prezzo corrente
-
-SHORT  se: GEX < 0
-          AND ibit_flow_3d < -200M$
-
+LONG   se: GEX > 0 AND ibit_flow_3d > +100M$ AND nessuna barriera entro ±5%
+SHORT  se: GEX < 0 AND ibit_flow_3d < -200M$
 FLAT   altrimenti
 ```
 
-**Lag di 1 giorno:** i segnali sono applicati il giorno successivo alla loro generazione per evitare look-ahead bias.
+**Lag di 1 giorno:** i segnali sono applicati il giorno successivo alla generazione
+per evitare look-ahead bias.
 
 ```python
 signals_lagged = signals.shift(1).fillna(0)
@@ -194,8 +201,8 @@ strategy_returns = btc_returns × signals_lagged
 | Metrica | Formula |
 |---------|---------|
 | Total Return | `equity_curve[-1] - 1` |
-| Annualized Return | `(1 + total_ret)^(252/n_days) - 1` |
-| Sharpe Ratio | `annualized_return / (std_daily × √252)` |
+| Annualized Return | `(1 + total_ret)^(365/n_days) - 1` (crypto: 365gg/anno) |
+| Sharpe Ratio | `annualized_return / (std_daily × √365)` |
 | Max Drawdown | `min((equity - cummax(equity)) / cummax(equity))` |
 | Win Rate | `n_positive_days / n_total_days` |
 | Profit Factor | `sum(positive_returns) / abs(sum(negative_returns))` |
@@ -210,32 +217,82 @@ strategy_returns = btc_returns × signals_lagged
 | Win Rate | > 55% | 50-55% | < 50% |
 | Profit Factor | > 2.0 | 1.5-2.0 | < 1.5 |
 
-### Nota sul backtest attuale
+### Nota sul backtest
 
-La strategia è attualmente **flat su tutto il periodo** perché:
-1. Non ci sono dati GEX storici — solo lo snapshot odierno
-2. Le stime di flusso da yfinance (fallback) sono approssimative
-
-**Con dati storici reali** (GEX accumulato + flussi Farside reali) la strategia produrrà segnali long/short. Il confronto con il Buy & Hold BTC (-28% nell'ultimo anno con max drawdown -52%) diventerà significativo.
+Il backtest richiede dati GEX storici (accumulati via snapshot giornalieri) per
+produrre segnali significativi. Cambiando la logica barriera da veto a pilastro pesato,
+le metriche storiche del ramo `composite` non sono direttamente confrontabili con quelle
+del ramo `signal_model` legacy.
 
 ### API
 
 ```python
 from src.analytics.backtest import Backtest
+from src.analytics.pillars import CompositeSignal
 
 bt = Backtest()
+results = bt.run(merged_df, gex_series=gex_series, active_barriers=barriers,
+                 composite=CompositeSignal())   # segnale a 4 pilastri
 
-# Esegui backtest
-results = bt.run(merged_df, gex_series=gex_series, active_barriers=barriers)
-
-# Tabella comparativa
 table = bt.summary_table(results)
-print(table)
-
-# Equity curve Plotly
-fig = bt.plot(results)
-fig.show()
+fig   = bt.plot(results)
 ```
+
+---
+
+## 5. Composite Signal — 4 pilastri (`pillars.py`)
+
+**Domanda:** *Come sintetizzare GEX, barriere EDGAR, flussi ETF e macro in un unico
+segnale leggibile da chiunque?*
+
+`src/analytics/pillars.py` è l'**unica sorgente di verità** del segnale, consumata sia
+da `/api/signals` sia dalla dashboard Streamlit. Consolida i tre motori storici (regole
+binarie, `SignalModel` a 7 fattori, `IFIModel` a 6 fattori) in **4 pilastri**, ciascuno
+con un sotto-score 0-100, da cui si compone il punteggio finale.
+
+| Pilastro | Peso | Fonte | Cosa misura |
+|----------|------|-------|-------------|
+| **GEX** | 0.25 | Deribit options | regime dealer gamma + contesto gamma-flip |
+| **Barrier** | 0.25 | EDGAR note strutturate | livelli di hedging meccanico, **direzionali e pesati per notional** |
+| **ETF Flows** | 0.30 | Farside/CoinGlass | domanda spot istituzionale (momentum/trend/prezzo) |
+| **Macro** | 0.20 | CoinGlass derivati | funding, OI, long/short, put/call, liquidazioni (contrarian) |
+
+I pesi sommano a 1.0 e vengono **riscalati** sui pilastri effettivamente disponibili.
+
+### Barrier pillar (direzionale, notional-weighted)
+
+Per ogni barriera attiva con prezzo BTC e spot validi:
+
+```
+d    = (level_price_btc - spot) / spot
+prox = exp(-(d/σ)²)                  # σ = 0.10 → barriere oltre ~25% pesano ~0
+dir  = direzionalità per tipo/lato   # knock_in sotto spot = ribasso; autocall sopra = resistenza
+w    = notional / Σ notional         # equal-weight se notional assente
+score = 100 · Σ w·prox·dir / Σ w·prox
+```
+
+Nessuna barriera entro il kernel → score neutro 50.
+
+### Modalità d'uso
+
+```python
+from src.analytics.pillars import CompositeSignal, CompositeInputs
+
+cs = CompositeSignal()
+
+# Live (snapshot) → CompositeResult(score, signal, pillars, reason, ...)
+result = cs.compute(CompositeInputs(gex_usd=3e8, spot_price=85000, active_barriers=barriers, ...))
+
+# Backtest / serie storica (vettoriale) → DataFrame con *_score + composite_score
+df_scores = cs.compute_series(merged_df, active_barriers=barriers)
+```
+
+**Soglie output:** score ≥ 65 → LONG · 40-65 → CAUTION · < 40 → RISK_OFF.
+
+> `SignalModel` e `IFIModel` restano come **librerie di scoring riusabili** (le loro
+> funzioni `_score_*` sono i mattoni dei pilastri Macro/ETF), ma non sono più segnali
+> top-level. L'endpoint `/api/ifi` è soft-deprecato; il sostituto generalizzato è
+> `/api/pillars/series?pillar={composite|gex|barrier|etf_flows|macro}`.
 
 ---
 
