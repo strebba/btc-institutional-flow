@@ -175,3 +175,53 @@ class TestGetAllForRegime:
         df = db.get_all_for_regime()
         assert len(df) == 1
         assert df["regime"].iloc[0] == "positive_gamma"
+
+
+# ─── get_walls_series ─────────────────────────────────────────────────────────
+
+def _insert_dated_walls(db: GexDB, date: str, put_wall, call_wall, flip) -> None:
+    """Inserisce una riga gex_snapshots con data esplicita (insert_snapshot usa oggi)."""
+    with db._conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO gex_snapshots
+                (date, timestamp, spot_price, total_net_gex, gamma_flip_price,
+                 put_wall, call_wall, regime, created_at)
+            VALUES (?, ?, 85000, 5e8, ?, ?, ?, 'positive_gamma', ?)
+            """,
+            (date, f"{date}T16:00:00+00:00", flip, put_wall, call_wall,
+             f"{date}T16:00:00+00:00"),
+        )
+
+
+class TestGetWallsSeries:
+    def test_empty_returns_columns(self, db: GexDB) -> None:
+        df = db.get_walls_series()
+        assert isinstance(df, pd.DataFrame)
+        for col in ("put_wall", "call_wall", "gamma_flip_price"):
+            assert col in df.columns
+        assert len(df) == 0
+
+    def test_returns_dated_walls_ascending(self, db: GexDB) -> None:
+        from datetime import timedelta
+        today = datetime.now(timezone.utc).date()
+        d1 = (today - timedelta(days=2)).isoformat()
+        d2 = (today - timedelta(days=1)).isoformat()
+        _insert_dated_walls(db, d2, 81_000, 91_000, 83_000)
+        _insert_dated_walls(db, d1, 80_000, 90_000, 82_000)
+        df = db.get_walls_series()
+        assert len(df) == 2
+        assert list(df.index) == sorted(df.index)  # ordine crescente
+        assert df["put_wall"].iloc[0] == 80_000
+        assert df["call_wall"].iloc[-1] == 91_000
+
+    def test_respects_days_window(self, db: GexDB) -> None:
+        from datetime import timedelta
+        today = datetime.now(timezone.utc).date()
+        old = (today - timedelta(days=400)).isoformat()
+        recent = (today - timedelta(days=1)).isoformat()
+        _insert_dated_walls(db, old, 70_000, 100_000, 85_000)
+        _insert_dated_walls(db, recent, 80_000, 90_000, 82_000)
+        df = db.get_walls_series(days=365)
+        assert len(df) == 1
+        assert df["put_wall"].iloc[0] == 80_000

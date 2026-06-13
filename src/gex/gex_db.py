@@ -243,6 +243,44 @@ class GexDB:
         )
         return df
 
+    def get_walls_series(self, days: int = 365) -> pd.DataFrame:
+        """Restituisce la storia dei livelli GEX (wall + gamma flip) per data.
+
+        Infrastruttura per il backtest della confluenza barriere↔GEX: serve i wall
+        storici allineati al prezzo per misurare se la coincidenza barriera↔wall ha
+        potere predittivo. Richiede storia accumulata da ``cron_gex.py`` (~1/giorno).
+
+        Args:
+            days: numero di giorni passati da includere.
+
+        Returns:
+            pd.DataFrame con DatetimeIndex (tz-naive, mezzanotte) e colonne
+            put_wall, call_wall, gamma_flip_price (USD raw). Vuoto se non ci sono dati.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT date, put_wall, call_wall, gamma_flip_price
+                FROM gex_snapshots
+                WHERE date >= date('now', ? || ' days')
+                ORDER BY date ASC
+                """,
+                (f"-{days}",),
+            ).fetchall()
+
+        if not rows:
+            return pd.DataFrame(columns=["put_wall", "call_wall", "gamma_flip_price"])
+
+        index = pd.to_datetime([r["date"] for r in rows])  # tz-naive
+        return pd.DataFrame(
+            {
+                "put_wall":         [r["put_wall"] for r in rows],
+                "call_wall":        [r["call_wall"] for r in rows],
+                "gamma_flip_price": [r["gamma_flip_price"] for r in rows],
+            },
+            index=index,
+        )
+
     def count(self) -> int:
         """Conta il numero totale di snapshot nel DB."""
         with self._conn() as conn:
