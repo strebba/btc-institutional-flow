@@ -843,11 +843,46 @@ def get_barriers() -> dict:
             # Converti campi non-serializzabili
             out.append({k: v for k, v in row.items()})
 
+        # Overlay confluenza barriere↔GEX (additivo, best-effort).
+        # Identifica dove i cluster di barriere coincidono con i wall GEX:
+        # due flussi di hedging indipendenti nella stessa direzione → effetto amplificato.
+        # Non altera lo score di /api/signals; se i dati GEX non sono disponibili → liste vuote.
+        clusters_out: list[dict] = []
+        confluence_out: list[dict] = []
+        if out and spot_price and spot_price > 0:
+            try:
+                from src.edgar.barrier_utils import compute_confluence, detect_clusters
+
+                gex_data = _get_gex_data()
+                snap = gex_data["snapshot"]
+                clusters = detect_clusters(out, spot_price)
+                confluence_out = compute_confluence(
+                    clusters,
+                    put_wall=snap.put_wall,
+                    call_wall=snap.call_wall,
+                    gamma_flip=snap.gamma_flip_price,
+                )
+                clusters_out = [
+                    {
+                        "mean_price_btc": cl.mean_price_btc,
+                        "total_notional_usd": cl.total_notional_usd,
+                        "dominant_type": cl.dominant_type,
+                        "sign": cl.sign,
+                        "n_barriers": cl.n_barriers,
+                        "distance_to_spot_pct": cl.distance_to_spot_pct,
+                    }
+                    for cl in clusters
+                ]
+            except Exception as _e:
+                _log.warning("Confluenza barriere↔GEX non calcolata: %s", _e)
+
         response = _ok(
             {
                 "count": len(out),
                 "barriers": out,
                 "spot_price": spot_price,
+                "clusters": clusters_out,
+                "confluence": confluence_out,
             }
         )
         _cache_set("barriers", response)

@@ -686,6 +686,54 @@ corrente (${level:,.0f}, {issuer_str}). Monitora se il prezzo si avvicina ulteri
 prezzo corrente. Il rischio di movimenti meccanici improvvisi è basso.
 """)
 
+    # ── Overlay confluenza barriere ↔ GEX ──────────────────────────────────────
+    if valid_barriers and spot > 0:
+        from src.dashboard.charts import barrier_gex_confluence_chart
+        from src.edgar.barrier_utils import compute_confluence, detect_clusters
+
+        clusters = detect_clusters(barriers, spot)
+        confluence = compute_confluence(
+            clusters,
+            put_wall=snap.get("put_wall"),
+            call_wall=snap.get("call_wall"),
+            gamma_flip=snap.get("gamma_flip_price"),
+        )
+        if clusters:
+            st.subheader("🔗 Confluenza Barriere ↔ GEX")
+            st.markdown("""
+Quando un **cluster di barriere** delle note strutturate coincide con un **muro
+di gamma** dei dealer di opzioni (put/call wall, gamma flip), due meccanismi di
+hedging indipendenti spingono nella **stessa direzione, allo stesso prezzo**:
+l'effetto meccanico si **amplifica**.
+""")
+            st.plotly_chart(
+                barrier_gex_confluence_chart(clusters, snap, spot, confluence),
+                use_container_width=True,
+            )
+            if confluence:
+                for c in confluence:
+                    ctype = c.get("confluence_type")
+                    px = c.get("gex_level_price", 0)
+                    gex_name = c.get("gex_level_name", "")
+                    notional = c.get("cluster_notional_usd", 0)
+                    if ctype == "bearish_reinforced":
+                        st.error(
+                            f"🔴 **Ribasso rinforzato** a ${px:,.0f}: cluster di barriere "
+                            f"ribassiste sul {gex_name} (nozionale ${notional:,.0f}). "
+                            "Rottura al ribasso potenzialmente accelerata."
+                        )
+                    elif ctype == "bullish_reinforced":
+                        st.success(
+                            f"🟢 **Rialzo rinforzato** a ${px:,.0f}: cluster di barriere "
+                            f"rialziste sul {gex_name} (nozionale ${notional:,.0f}). "
+                            "Resistenza/soft-cap rafforzata."
+                        )
+            else:
+                st.info(
+                    "Nessuna confluenza diretta tra cluster di barriere e wall GEX "
+                    "ai livelli di prezzo attuali."
+                )
+
     # Expander spiegazione
     with st.expander("📖 Come leggere questo grafico"):
         st.markdown("""

@@ -165,6 +165,7 @@ class TestGex:
 
 class TestBarriers:
     def test_returns_200(self, client):
+        snap, _ = _mock_gex_snapshot()
         with (
             patch("src.edgar.structured_notes_db.StructuredNotesDB.compute_btc_prices"),
             patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=[
@@ -172,6 +173,7 @@ class TestBarriers:
             ]),
             patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError("no data")),
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
+            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
         ):
             r = client.get("/api/barriers")
         assert r.status_code == 200
@@ -184,24 +186,64 @@ class TestBarriers:
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
         ):
             data = client.get("/api/barriers").json()["data"]
-        assert "count" in data
-        assert "barriers" in data
-        assert "spot_price" in data
+        # Campi base + overlay confluenza (additivi)
+        for key in ("count", "barriers", "spot_price", "clusters", "confluence"):
+            assert key in data
 
     def test_count_matches_barriers_length(self, client):
         barriers = [
             {"id": 1, "level_price_btc": 80000.0, "barrier_type": "knock_in"},
             {"id": 2, "level_price_btc": 75000.0, "barrier_type": "knock_out"},
         ]
+        snap, _ = _mock_gex_snapshot()
         with (
             patch("src.edgar.structured_notes_db.StructuredNotesDB.compute_btc_prices"),
             patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
             patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
+            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
         ):
             data = client.get("/api/barriers").json()["data"]
         assert data["count"] == 2
         assert len(data["barriers"]) == 2
+
+    def test_confluence_bearish_reinforced_on_put_wall(self, client):
+        """Cluster di barriere ribassiste sul put wall → confluenza bearish_reinforced."""
+        # _mock_gex_snapshot ha put_wall=80_000; barriere knock_in a 80k sotto spot 85k.
+        barriers = [
+            {"id": 1, "level_price_btc": 80_000.0, "barrier_type": "knock_in", "notional_usd": 150e6},
+            {"id": 2, "level_price_btc": 80_100.0, "barrier_type": "knock_in", "notional_usd": 50e6},
+        ]
+        snap, _ = _mock_gex_snapshot()
+        with (
+            patch("src.edgar.structured_notes_db.StructuredNotesDB.compute_btc_prices"),
+            patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
+            patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
+            patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
+            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
+        ):
+            data = client.get("/api/barriers").json()["data"]
+        assert len(data["clusters"]) == 1
+        assert data["clusters"][0]["sign"] == "bearish"
+        types = {c["confluence_type"] for c in data["confluence"]}
+        assert "bearish_reinforced" in types
+
+    def test_gex_fetch_failure_keeps_endpoint_alive(self, client):
+        """Se _get_gex_data fallisce, l'endpoint resta servito con confluenza vuota."""
+        barriers = [{"id": 1, "level_price_btc": 80_000.0, "barrier_type": "knock_in"}]
+        with (
+            patch("src.edgar.structured_notes_db.StructuredNotesDB.compute_btc_prices"),
+            patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
+            patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
+            patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
+            patch("src.api.main._get_gex_data", side_effect=ConnectionError("deribit down")),
+        ):
+            r = client.get("/api/barriers")
+            data = r.json()["data"]
+        assert r.status_code == 200
+        assert data["count"] == 1
+        assert data["clusters"] == []
+        assert data["confluence"] == []
 
 
 class TestNotes:

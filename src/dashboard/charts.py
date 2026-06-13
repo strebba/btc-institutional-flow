@@ -260,6 +260,122 @@ def gex_walls(snapshot_dict: dict) -> go.Figure:
     return fig
 
 
+def barrier_gex_confluence_chart(
+    clusters: list,
+    snapshot_dict: dict,
+    spot: float,
+    confluence: Optional[list[dict]] = None,
+) -> go.Figure:
+    """Overlay confluenza: cluster di barriere vs wall GEX, con bande di confluenza.
+
+    Evidenzia i prezzi dove un cluster di barriere note-strutturate coincide con un
+    livello GEX (put/call wall, gamma flip): due flussi di hedging indipendenti nella
+    stessa direzione → effetto meccanico amplificato.
+
+    Args:
+        clusters: lista di BarrierCluster (attributi mean_price_btc, sign,
+            total_notional_usd, n_barriers, dominant_type) da detect_clusters().
+        snapshot_dict: dict GEX da GexCalculator.gex_to_dict() (put_wall/call_wall/
+            gamma_flip_price/spot_price).
+        spot: prezzo spot BTC corrente.
+        confluence: output di compute_confluence() — usato per le bande evidenziate.
+
+    Returns:
+        Figure Plotly.
+    """
+    if not clusters:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Confluenza Barriere ↔ GEX — Nessun cluster nel DB", **_LAYOUT_BASE
+        )
+        return fig
+
+    put_w = snapshot_dict.get("put_wall") or 0
+    call_w = snapshot_dict.get("call_wall") or 0
+    flip = snapshot_dict.get("gamma_flip_price") or 0
+
+    sign_color = {"bullish": _POS, "bearish": _NEG, "neutral": _MUTED}
+    fig = go.Figure()
+
+    # Bande di confluenza (sotto le linee): rosso = ribasso rinforzato, verde = rialzo
+    for c in confluence or []:
+        gex_price = c.get("gex_level_price") or 0
+        if gex_price <= 0:
+            continue
+        ctype = c.get("confluence_type", "mixed")
+        band = sign_color.get(
+            "bearish" if ctype == "bearish_reinforced"
+            else "bullish" if ctype == "bullish_reinforced"
+            else "neutral",
+            _MUTED,
+        )
+        half = gex_price * 0.005  # ±0.5% di banda visiva
+        fig.add_hrect(
+            y0=gex_price - half,
+            y1=gex_price + half,
+            fillcolor=band,
+            opacity=0.18,
+            line_width=0,
+        )
+
+    # Cluster di barriere (linea piena, spessore ∝ notional, colore per segno)
+    for cl in clusters:
+        level = getattr(cl, "mean_price_btc", 0) or 0
+        if level <= 0:
+            continue
+        sign = getattr(cl, "sign", "neutral")
+        notional = getattr(cl, "total_notional_usd", 0) or 0
+        n_bar = getattr(cl, "n_barriers", 1)
+        dtype = getattr(cl, "dominant_type", "—")
+        width = max(1.5, min(4.0, 1.5 + notional / 50e6))
+        fig.add_trace(
+            go.Scatter(
+                x=[0, 1],
+                y=[level, level],
+                mode="lines",
+                line=dict(color=sign_color.get(sign, _MUTED), width=width),
+                name=f"Cluster {dtype} ({sign})",
+                customdata=[[sign, dtype, n_bar, notional]],
+                hovertemplate=(
+                    "<b>Cluster barriere</b><br>"
+                    "Livello BTC: $%{y:,.0f}<br>"
+                    "Segno: %{customdata[0]}<br>"
+                    "Tipo dominante: %{customdata[1]}<br>"
+                    "N. barriere: %{customdata[2]}<br>"
+                    "Nozionale: $%{customdata[3]:,.0f}<br>"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    # Wall GEX (tratteggiati) + spot
+    for level, label, color in [
+        (call_w, f"Call Wall ${call_w:,.0f}", _POS),
+        (flip, f"Gamma Flip ${flip:,.0f}", _NEU),
+        (spot, f"Spot ${spot:,.0f}", _TEXT),
+        (put_w, f"Put Wall ${put_w:,.0f}", _NEG),
+    ]:
+        if level and level > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, 1],
+                    y=[level, level],
+                    mode="lines",
+                    line=dict(color=color, width=2, dash="solid" if level == spot else "dash"),
+                    name=label,
+                )
+            )
+
+    fig.update_layout(
+        title="Confluenza Barriere ↔ GEX",
+        xaxis=dict(visible=False, range=[0, 1]),
+        yaxis=_axis_style(title="Prezzo BTC ($)", tickformat="$,.0f"),
+        height=480,
+        **_LAYOUT_BASE,
+    )
+    return fig
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Composite signal — gauge a 4 pilastri
 # ──────────────────────────────────────────────────────────────────────────────
