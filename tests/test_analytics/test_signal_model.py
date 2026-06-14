@@ -15,6 +15,7 @@ from src.analytics.signal_model import (
     _score_gex,
     _score_etf_flow,
     _score_funding_rate,
+    _score_granger_lead,
     _score_oi_change,
     _score_long_short_ratio,
     _score_put_call_ratio,
@@ -59,8 +60,9 @@ class TestScoreEtfFlow:
 
 class TestScoreFundingRate:
     def test_negative_rate_bullish(self):
-        """Funding negativo = paura = contrarian bullish."""
+        """Funding negativo = paura = contrarian bullish (uguale in entrambi i regimi)."""
         assert _score_funding_rate(-5.0) > 0.7
+        assert _score_funding_rate(-5.0, positive_gamma=True) > 0.7
 
     def test_neutral(self):
         assert 0.5 < _score_funding_rate(10.0) < 0.8
@@ -73,6 +75,29 @@ class TestScoreFundingRate:
 
     def test_monotonic_decreasing(self):
         assert _score_funding_rate(-10) > _score_funding_rate(20) > _score_funding_rate(60)
+
+    def test_positive_gamma_attenuates_penalty(self):
+        """In positive gamma il funding caldo è meno penalizzante."""
+        score_neg = _score_funding_rate(200.0, positive_gamma=False)
+        score_pos = _score_funding_rate(200.0, positive_gamma=True)
+        assert score_pos > score_neg
+
+    def test_positive_gamma_extreme_floor(self):
+        """In positive gamma lo score non scende sotto 0.35 anche per funding estremo."""
+        assert _score_funding_rate(500.0, positive_gamma=True) >= 0.35
+
+
+class TestScoreGrangerLead:
+    def test_same_as_etf_flow(self):
+        """granger_lead usa la stessa curva di etf_flow."""
+        for flow in [-500e6, 0, 200e6, 800e6]:
+            assert _score_granger_lead(flow) == _score_etf_flow(flow)
+
+    def test_inflow_bullish(self):
+        assert _score_granger_lead(300e6) > 0.5
+
+    def test_outflow_bearish(self):
+        assert _score_granger_lead(-300e6) < 0.5
 
 
 class TestScoreOiChange:
@@ -201,11 +226,46 @@ class TestSignalModelCompute:
         assert result.signal == SIGNAL_CAUTION
 
     def test_components_keys(self):
-        """Il dict components ha le 7 chiavi attese."""
+        """Il dict components ha le 8 chiavi attese."""
         result = self.model.compute(SignalInputs(gex_usd=1e8))
         assert set(result.components.keys()) == {"gex", "etf_flow", "funding_rate",
                                                   "oi_change", "long_short", "put_call",
-                                                  "liquidations"}
+                                                  "liquidations", "granger_lead"}
+
+    def test_near_call_wall_clamps_score(self):
+        """In positive gamma + near call wall, score non supera 55.0."""
+        result = self.model.compute(SignalInputs(
+            gex_usd=800e6,           # positive gamma forte
+            etf_flow_3d_usd=500e6,
+            funding_rate_annualized_pct=-2.0,
+            near_call_wall=True,
+        ))
+        assert result.score <= 55.0
+        assert result.signal != SIGNAL_LONG
+
+    def test_near_call_wall_no_effect_in_negative_gamma(self):
+        """In negative gamma, near_call_wall non clampa (non c'è pinning)."""
+        result_without = self.model.compute(SignalInputs(
+            gex_usd=-800e6,          # negative gamma
+            etf_flow_3d_usd=500e6,
+            funding_rate_annualized_pct=-2.0,
+            near_call_wall=False,
+        ))
+        result_with = self.model.compute(SignalInputs(
+            gex_usd=-800e6,
+            etf_flow_3d_usd=500e6,
+            funding_rate_annualized_pct=-2.0,
+            near_call_wall=True,
+        ))
+        assert result_with.score == result_without.score
+
+    def test_granger_lead_boosts_score(self):
+        """granger_lead inflow alza lo score rispetto all'assenza del dato."""
+        base = self.model.compute(SignalInputs(gex_usd=1e8, etf_flow_3d_usd=0))
+        with_lead = self.model.compute(SignalInputs(
+            gex_usd=1e8, etf_flow_3d_usd=0, granger_lead_flow_usd=800e6,
+        ))
+        assert with_lead.score > base.score
 
     def test_partial_inputs_rescale(self):
         """Con solo 2 fattori il risultato è coerente (pesi riscalati)."""
