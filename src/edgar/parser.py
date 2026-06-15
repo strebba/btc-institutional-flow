@@ -65,7 +65,7 @@ _RE_INITIAL_LEVEL = re.compile(
     r"starting\s+(?:value|level|price)|"
     r"reference\s+(?:price|value|level))"
     r"(?:\s+(?:of|is)|\s*:\s*|\s+of\s+the\s+(?:underlying|underlier)\s+)?"
-    r"\s*\$?([\d,]+\.?\d*)",
+    r"\s*\$?\s*(\d[\d,]*(?:\.\d{1,4})?)",  # deve iniziare con una cifra (no virgola nuda)
     re.IGNORECASE,
 )
 
@@ -517,6 +517,10 @@ class ProspectusParser:
     SECTION_HINTS = [
         "key terms", "summary of terms", "hypothetical examples",
         "payoff diagram", "terms and conditions", "description of the notes",
+        # Ancore dirette all'initial level: Morgan Stanley/Goldman lo dichiarano in
+        # una riga del term sheet ("Initial level: $63.10, …") che può cadere fuori
+        # dalle finestre sopra. Garantiscono che la sezione col prezzo sia ritenuta.
+        "initial level", "initial value", "initial underlier", "strike value",
     ]
 
     def __init__(self, cfg: dict | None = None) -> None:
@@ -652,20 +656,36 @@ class ProspectusParser:
         notional      = _parse_notional(text)
         product_type  = _detect_product_type(text)
 
-        # Initial level — strategia in cascata
+        # Initial level — strategia in cascata, dal segnale più affidabile al più
+        # debole. Il prezzo legato alla chiusura del sottostante ("$X, which is the
+        # closing level…") è il più sicuro: ancora il dollaro al prezzo dell'ETF e
+        # non al taglio nominale ($100/$1.000) → evita falsi positivi tipo 100.00.
+
         initial_level: Optional[float] = None
 
-        # 1) Pattern esplicito "Initial Value: $XX"
-        m_init = _RE_INITIAL_LEVEL.search(text)
-        if m_init and m_init.group(1):
+        # 1) "$XX.XX, which is the closing level/price … on the pricing/strike date"
+        #    (Morgan Stanley, Goldman, Barclays). Massima confidenza.
+        m_cp = _RE_INITIAL_CLOSING_PRICE.search(text)
+        if m_cp:
             try:
-                val = float(m_init.group(1).replace(",", ""))
+                val = float(m_cp.group(1))
                 if 1.0 < val < 500.0:
                     initial_level = val
             except ValueError:
                 pass
 
-        # 2) Pattern alternativi: Morgan Stanley "Closing price: $XX" e varianti
+        # 2) Pattern esplicito "Initial (underlier) Value/Level: $XX"
+        if initial_level is None:
+            m_init = _RE_INITIAL_LEVEL.search(text)
+            if m_init and m_init.group(1):
+                try:
+                    val = float(m_init.group(1).replace(",", ""))
+                    if 1.0 < val < 500.0:
+                        initial_level = val
+                except ValueError:
+                    pass
+
+        # 3) Pattern alternativi: Morgan Stanley "Closing price: $XX" e varianti
         if initial_level is None:
             m_alt = _RE_INITIAL_LEVEL_ALT.search(text)
             if m_alt:
@@ -705,19 +725,7 @@ class ProspectusParser:
                 except ValueError:
                     pass
 
-        # 5) "$XX.XX, which is the closing price ... on the pricing date" (Goldman e
-        #    altri): il prezzo di chiusura alla pricing date è l'initial level.
-        if initial_level is None:
-            m_cp = _RE_INITIAL_CLOSING_PRICE.search(text)
-            if m_cp:
-                try:
-                    val = float(m_cp.group(1))
-                    if 1.0 < val < 500.0:
-                        initial_level = val
-                except ValueError:
-                    pass
-
-        # 6) "$XX.XX, YY.YY% of the initial …" (Morgan Stanley/UBS): ricava l'initial
+        # 5) "$XX.XX, YY.YY% of the initial …" (Morgan Stanley/UBS): ricava l'initial
         #    dal prezzo assoluto di una barriera e dalla sua percentuale.
         if initial_level is None:
             m_rev = _RE_BARRIER_ABS_REVERSE.search(text)

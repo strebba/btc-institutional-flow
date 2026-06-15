@@ -812,23 +812,23 @@ def get_barriers() -> dict:
         return cached
 
     try:
-        from src.edgar.structured_notes_db import StructuredNotesDB
+        from src.edgar.structured_notes_db import (
+            StructuredNotesDB,
+            refresh_barrier_btc_prices,
+        )
         from src.gex.deribit_client import DeribitClient
-        from src.flows.price_fetcher import PriceFetcher
 
         db = StructuredNotesDB()
 
-        # Calcola dinamicamente level_price_btc per le barriere che non ce l'hanno
+        # Refresh runtime di level_price_btc (best-effort): il cron lo pre-calcola
+        # già nel DB versionato, qui aggiorniamo col ratio più recente. Se fallisce
+        # usiamo i valori persistiti dal cron.
         try:
-            prices = PriceFetcher().get_all_prices()
-            latest = prices[["btc_close", "ibit_close"]].dropna().iloc[-1]
-            if latest["ibit_close"] > 0 and latest["btc_close"] > 0:
-                ratio = latest["ibit_close"] / latest["btc_close"]
-                db.compute_btc_prices(ibit_btc_ratio=ratio)
+            refresh_barrier_btc_prices(db)
         except Exception as _e:
             _log.warning("IBIT/BTC ratio fetch fallito, uso valori esistenti nel DB: %s", _e)
 
-        barriers = db.get_active_barriers()
+        all_active = db.get_active_barriers()
 
         # Spot price per calcolo prossimità
         try:
@@ -836,12 +836,18 @@ def get_barriers() -> dict:
         except Exception:
             spot_price = None
 
-        # Serializza (sqlite3.Row → dict già fatto da get_active_barriers)
-        out = []
-        for b in barriers:
-            row = dict(b)
-            # Converti campi non-serializzabili
-            out.append({k: v for k, v in row.items()})
+        # Solo le barriere con un prezzo BTC sono utilizzabili (chart, cluster,
+        # confluenza). Quelle senza prezzo (initial_level non estratto dal parser)
+        # restano fuori dalla lista ma sono contate in meta.pending_pricing.
+        out = [
+            {k: v for k, v in dict(b).items()}
+            for b in all_active
+            if b.get("level_price_btc") is not None
+        ]
+        pending_pricing = len(all_active) - len(out)
+        last_filing_date = max(
+            (b["issue_date"] for b in all_active if b.get("issue_date")), default=None
+        )
 
         # Overlay confluenza barriere↔GEX (additivo, best-effort).
         # Identifica dove i cluster di barriere coincidono con i wall GEX:
@@ -883,6 +889,12 @@ def get_barriers() -> dict:
                 "spot_price": spot_price,
                 "clusters": clusters_out,
                 "confluence": confluence_out,
+                "meta": {
+                    "total_active": len(all_active),
+                    "priced": len(out),
+                    "pending_pricing": pending_pricing,
+                    "last_filing_date": last_filing_date,
+                },
             }
         )
         _cache_set("barriers", response)
