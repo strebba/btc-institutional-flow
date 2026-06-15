@@ -18,7 +18,7 @@ from rich.table import Table
 
 from src.edgar.search import EdgarEftsSearcher
 from src.edgar.parser import ProspectusParser
-from src.edgar.structured_notes_db import StructuredNotesDB
+from src.edgar.structured_notes_db import StructuredNotesDB, refresh_barrier_btc_prices
 from src.config import setup_logging
 
 console = Console()
@@ -115,6 +115,14 @@ def main() -> None:
     console.print("\n[bold]Step 3: Salvataggio nel DB...[/bold]")
     db  = StructuredNotesDB()
     ids = db.upsert_notes(notes)
+
+    # Pre-calcola e persiste level_price_btc per le barriere IBIT (vedi cron_edgar).
+    try:
+        n_priced = refresh_barrier_btc_prices(db)
+        console.print(f"  Prezzi BTC barriere aggiornati: [green]{n_priced}[/green]")
+    except Exception as exc:
+        console.print(f"  [yellow]Calcolo prezzi BTC barriere fallito (proseguo): {exc}[/yellow]")
+
     db.checkpoint()   # forza il WAL nel .db (DB versionato in git)
     console.print(f"  Salvate {len(ids)} note (id: {ids[:5]}...)")
 

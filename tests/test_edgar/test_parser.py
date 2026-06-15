@@ -277,6 +277,22 @@ class TestParsePreliminaryVsFinal:
         note = self._parse_html(monkeypatch, html, filing_date="2026-04-20")
         assert note.initial_level == 42.73
 
+    def test_initial_morgan_stanley_level_beats_denomination(self, monkeypatch):
+        # Formato Morgan Stanley: "Initial level: $63.10, which is the closing level
+        # of the underlier on the strike date". Il taglio nominale ($100 per security)
+        # presente altrove NON deve essere preso (regressione: prima vinceva 100.00).
+        html = (
+            "<html><body>PRICING SUPPLEMENT August 29, 2025. "
+            "Notes Linked to the iShares Bitcoin Trust ETF. "
+            "Stated principal amount: $1,000 per security. "
+            "Estimated value on the pricing date: $933.20 per security. "
+            "Initial level: $63.10, which is the closing level of the underlier on the "
+            "strike date. Downside threshold: 70.00% of the initial level."
+            "</body></html>"
+        )
+        note = self._parse_html(monkeypatch, html, filing_date="2025-08-29")
+        assert note.initial_level == 63.10
+
     def test_initial_from_reverse_barrier(self, monkeypatch):
         # Formato Morgan Stanley: "$31.41, 84.90% of the initial underlying value"
         # → initial = 31.41 / 0.849 ≈ 37.0.

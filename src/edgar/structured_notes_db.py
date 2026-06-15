@@ -321,7 +321,7 @@ class StructuredNotesDB:
         with self._conn() as conn:
             rows = conn.execute(
                 """
-                SELECT b.*, n.issuer, n.product_type, n.maturity_date,
+                SELECT b.*, n.issuer, n.product_type, n.issue_date, n.maturity_date,
                        n.initial_level, n.notional_usd, n.filing_url, n.underlying
                 FROM barrier_levels b
                 JOIN notes n ON b.note_id = n.id
@@ -527,3 +527,35 @@ class StructuredNotesDB:
             "by_product_type": by_type,
             "by_issuer": by_issuer,
         }
+
+
+# ─── BTC price backfill helper ────────────────────────────────────────────────
+
+
+def refresh_barrier_btc_prices(db: StructuredNotesDB) -> int:
+    """Calcola e persiste ``level_price_btc`` per le barriere IBIT.
+
+    Recupera il rapporto IBIT/BTC corrente (fetch fresco via ``PriceFetcher``,
+    che popola anche il DB prezzi) e delega a
+    :meth:`StructuredNotesDB.compute_btc_prices`. Pensato per essere chiamato
+    sia dal cron/CLI EDGAR sia dall'endpoint ``/api/barriers``: così il valore è
+    già persistito nel DB versionato e resta valido anche se il fetch runtime in
+    produzione fallisce (il ratio IBIT/BTC è ~costante).
+
+    Args:
+        db: istanza ``StructuredNotesDB`` su cui scrivere.
+
+    Returns:
+        int: numero di barriere aggiornate.
+
+    Raises:
+        RuntimeError: se non è possibile determinare un rapporto IBIT/BTC valido.
+    """
+    from src.flows.price_fetcher import PriceFetcher  # lazy: evita coupling al load
+
+    pf = PriceFetcher()
+    pf.get_all_prices()  # fetch+store freschi di BTC/IBIT nel DB prezzi
+    ratio = pf.get_ibit_btc_ratio()  # lookup robusto nearest-date dal DB
+    if not ratio or ratio <= 0:
+        raise RuntimeError("Impossibile determinare un rapporto IBIT/BTC valido")
+    return db.compute_btc_prices(ibit_btc_ratio=ratio)

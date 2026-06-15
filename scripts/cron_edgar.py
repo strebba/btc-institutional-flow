@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import setup_logging
 from src.edgar.parser import ProspectusParser
 from src.edgar.search import EdgarEftsSearcher
-from src.edgar.structured_notes_db import StructuredNotesDB
+from src.edgar.structured_notes_db import StructuredNotesDB, refresh_barrier_btc_prices
 
 _log = setup_logging("cron_edgar")
 
@@ -65,6 +65,16 @@ def main() -> None:
 
     db  = StructuredNotesDB()
     ids = db.upsert_notes(notes)
+
+    # Pre-calcola e persiste level_price_btc: così il DB versionato committato dal
+    # workflow contiene già i prezzi BTC, anche se il PriceFetcher runtime in
+    # produzione fallisce. Non bloccante: un errore qui non deve far fallire il refresh.
+    try:
+        n_priced = refresh_barrier_btc_prices(db)
+        _log.info("Aggiornati prezzi BTC per %d barriere", n_priced)
+    except Exception as exc:
+        _log.warning("Calcolo prezzi BTC barriere fallito (proseguo): %s", exc)
+
     db.checkpoint()   # forza il WAL nel .db prima del commit git nel workflow
     stats = db.summary()
 

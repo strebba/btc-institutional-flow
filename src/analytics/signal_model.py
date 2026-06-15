@@ -1,7 +1,7 @@
 """Modello di segnale multi-fattore per BTC istituzionale.
 
 Sostituisce le 3 regole binarie del backtest originale con uno scoring
-ponderato a 7 fattori (0-100). Ogni fattore è normalizzato 0-1 prima
+ponderato a 8 fattori (0-100). Ogni fattore è normalizzato 0-1 prima
 di essere pesato; il punteggio finale è convertito in etichetta:
 
   score ≥ 65 → LONG
@@ -11,6 +11,15 @@ di essere pesato; il punteggio finale è convertito in etichetta:
 Progettato per essere usato sia dal segnale live (/api/signals) sia
 dal backtest storico: accetta sia valori singoli (live) sia pd.Series
 (backtest vectorizzato).
+
+Override meccanici (non componenti con peso):
+  - near_active_barrier: clampa score sotto LONG_THRESHOLD se vicini
+    a una barriera EDGAR strutturata.
+  - near_call_wall (positive gamma): clampa score a 55.0 se siamo
+    entro 2% dal call wall Deribit in regime positive gamma — il
+    pinning meccanico del dealer impedisce un segnale LONG affidabile.
+  - funding_rate in positive gamma: curva appiattita — il funding
+    caldo in positive gamma è squeeze fuel, non trigger short.
 """
 from __future__ import annotations
 
@@ -33,16 +42,19 @@ SIGNAL_RISK_OFF = "RISK_OFF"
 LONG_THRESHOLD     = 65.0
 RISK_OFF_THRESHOLD = 40.0
 
-# ─── Pesi dei 7 fattori (devono sommare a 1.0) ────────────────────────────────
+# ─── Pesi degli 8 fattori (devono sommare a 1.0) ─────────────────────────────
+# granger_lead = ETF flow di 5gg fa come leading indicator (lag Granger documentato).
+# I 7 fattori originali sono scalati a 0.90 per fare spazio al nuovo componente (0.10).
 
 WEIGHTS: dict[str, float] = {
-    "gex":            0.15,
-    "etf_flow":       0.15,
-    "funding_rate":   0.20,
-    "oi_change":      0.15,
-    "long_short":     0.15,
-    "put_call":       0.10,
-    "liquidations":   0.10,
+    "gex":            0.135,
+    "etf_flow":       0.135,
+    "funding_rate":   0.180,
+    "oi_change":      0.135,
+    "long_short":     0.135,
+    "put_call":       0.090,
+    "liquidations":   0.090,
+    "granger_lead":   0.100,
 }
 
 assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9, "Pesi non sommano a 1.0"
@@ -66,8 +78,12 @@ class SignalInputs:
         put_call_ratio: Rapporto put OI / call OI da Deribit.
         liquidations_long_24h_usd: Liquidazioni long nelle ultime 24h in USD.
         liquidations_short_24h_usd: Liquidazioni short nelle ultime 24h in USD.
+        granger_lead_flow_usd: Flusso ETF IBIT aggregato 5 giorni fa (leading indicator
+            Granger documentato; lag 5-7gg, p≈0.03).
         spot_price: Prezzo spot BTC (usato per proximity check barriere).
-        near_active_barrier: True se il prezzo è entro 5% da una barriera.
+        near_active_barrier: True se il prezzo è entro 5% da una barriera EDGAR.
+        near_call_wall: True se spot è entro 2% dal call wall Deribit in positive gamma
+            (override meccanico: clampa score a 55.0 — pinning dealer).
     """
 
     gex_usd:                       Optional[float] = None
@@ -78,8 +94,10 @@ class SignalInputs:
     put_call_ratio:                Optional[float] = None
     liquidations_long_24h_usd:     Optional[float] = None
     liquidations_short_24h_usd:    Optional[float] = None
+    granger_lead_flow_usd:         Optional[float] = None
     spot_price:                    Optional[float] = None
     near_active_barrier:           bool = False
+    near_call_wall:                bool = False
 
 
 # ─── Output model ────────────────────────────────────────────────────────────
@@ -120,17 +138,27 @@ def _score_etf_flow(flow_3d_usd: float) -> float:
     return (v + 1e9) / 2e9  # 0.0 (−1B) → 1.0 (+1B)
 
 
-def _score_funding_rate(rate_ann_pct: float) -> float:
+def _score_funding_rate(rate_ann_pct: float, positive_gamma: bool = False) -> float:
     """Funding rate annualizzato: alto = mercato surriscaldato = bearish contrarian.
 
     Funding negativo = paura/hedging → segnale contrarian rialzista.
+
+    In positive gamma il funding caldo è attenuato: il dealer pin comprime la
+    volatilità e il funding alto diventa squeeze fuel (long pagano gli short che
+    coprono), non un trigger direzionale short.
     """
-    if rate_ann_pct < 0:      return 0.80  # mercato in paura/shorting aggressivo
-    if rate_ann_pct < 15:     return 0.70  # neutro bullish
-    if rate_ann_pct < 30:     return 0.55  # moderatamente surriscaldato
-    if rate_ann_pct < 50:     return 0.35  # surriscaldato
-    if rate_ann_pct < 75:     return 0.20  # molto surriscaldato
-    return 0.10                             # estremo (>75% ann.) = top signal
+    if positive_gamma:
+        if rate_ann_pct < 0:    return 0.80  # short pagano: squeeze pressure
+        if rate_ann_pct < 50:   return 0.60  # caldo ma compresso dal pin gamma
+        if rate_ann_pct < 150:  return 0.45  # molto caldo, attenuato dal regime
+        return 0.35                           # estremo: flush imminente poi up
+    # Negative gamma o neutro: curva standard
+    if rate_ann_pct < 0:      return 0.80
+    if rate_ann_pct < 15:     return 0.70
+    if rate_ann_pct < 30:     return 0.55
+    if rate_ann_pct < 50:     return 0.35
+    if rate_ann_pct < 75:     return 0.20
+    return 0.10                               # estremo (>75% ann.) = top signal
 
 
 def _score_oi_change(oi_change_7d_pct: float) -> float:
@@ -159,6 +187,15 @@ def _score_put_call_ratio(pcr: float) -> float:
     if pcr > 0.9:    return 0.50  # neutro
     if pcr > 0.6:    return 0.32
     return 0.15                    # complacency (poca copertura) = top segnale
+
+
+def _score_granger_lead(flow_5d_ago_usd: float) -> float:
+    """ETF flow di 5gg fa come leading indicator (lag Granger documentato).
+
+    Usa la stessa curva di etf_flow (lineare ±1B) perché il segnale è lo stesso,
+    solo sfasato nel tempo. Inflow 5gg fa → bias up sull'orizzonte attuale (5-7gg).
+    """
+    return _score_etf_flow(flow_5d_ago_usd)
 
 
 def _score_liquidations(long_usd: float, short_usd: float) -> float:
@@ -214,6 +251,7 @@ class SignalModel:
             SignalResult con score, signal, components, weights_used, reason.
         """
         raw: dict[str, Optional[float]] = {}
+        positive_gamma = inputs.gex_usd is not None and inputs.gex_usd > 0
 
         # Calcola raw score 0-1 per ogni fattore disponibile
         if inputs.gex_usd is not None:
@@ -223,7 +261,9 @@ class SignalModel:
             raw["etf_flow"] = _score_etf_flow(inputs.etf_flow_3d_usd)
 
         if inputs.funding_rate_annualized_pct is not None:
-            raw["funding_rate"] = _score_funding_rate(inputs.funding_rate_annualized_pct)
+            raw["funding_rate"] = _score_funding_rate(
+                inputs.funding_rate_annualized_pct, positive_gamma=positive_gamma
+            )
 
         if inputs.oi_change_7d_pct is not None:
             raw["oi_change"] = _score_oi_change(inputs.oi_change_7d_pct)
@@ -240,6 +280,9 @@ class SignalModel:
                 inputs.liquidations_long_24h_usd,
                 inputs.liquidations_short_24h_usd,
             )
+
+        if inputs.granger_lead_flow_usd is not None:
+            raw["granger_lead"] = _score_granger_lead(inputs.granger_lead_flow_usd)
 
         # Riscala pesi per i fattori disponibili
         available_weight = sum(self._weights[k] for k in raw)
@@ -260,9 +303,13 @@ class SignalModel:
         score_01 = sum(raw[k] * scaled_weights[k] for k in raw)
         score = round(score_01 * 100.0, 1)
 
-        # Override: barriera attiva → abbassa score se siamo vicini al LONG threshold
+        # Override 1: barriera EDGAR attiva → blocca LONG
         if inputs.near_active_barrier and score >= LONG_THRESHOLD:
             score = LONG_THRESHOLD - 1.0
+
+        # Override 2: call wall Deribit in positive gamma → pinning meccanico → clampa a CAUTION
+        if inputs.near_call_wall and positive_gamma and score > 55.0:
+            score = 55.0
 
         # Etichetta
         signal = _score_to_signal(score)
@@ -306,25 +353,27 @@ class SignalModel:
                     return df[n]
             return None
 
-        gex_s    = _col("total_net_gex", "_gex", "total_gex")
-        flow_s   = _col("ibit_flow_3d")
-        fund_s   = _col("funding_rate")
-        oi_s     = _col("oi_change_7d_pct")
-        ls_s     = _col("long_short_ratio")
-        pcr_s    = _col("put_call_ratio")
-        liq_l_s  = _col("liquidations_long_24h")
-        liq_s_s  = _col("liquidations_short_24h")
+        gex_s      = _col("total_net_gex", "_gex", "total_gex")
+        flow_s     = _col("ibit_flow_3d")
+        fund_s     = _col("funding_rate")
+        oi_s       = _col("oi_change_7d_pct")
+        ls_s       = _col("long_short_ratio")
+        pcr_s      = _col("put_call_ratio")
+        liq_l_s    = _col("liquidations_long_24h")
+        liq_s_s    = _col("liquidations_short_24h")
+        granger_s  = _col("granger_lead_flow", "ibit_flow_5d_ago")
 
         for i in range(len(df)):
             inputs = SignalInputs(
-                gex_usd                     = float(gex_s.iloc[i])   if gex_s  is not None and not _isnan(gex_s.iloc[i])   else None,
-                etf_flow_3d_usd             = float(flow_s.iloc[i])  if flow_s is not None and not _isnan(flow_s.iloc[i])  else None,
-                funding_rate_annualized_pct = float(fund_s.iloc[i])  if fund_s is not None and not _isnan(fund_s.iloc[i])  else None,
-                oi_change_7d_pct            = float(oi_s.iloc[i])    if oi_s   is not None and not _isnan(oi_s.iloc[i])    else None,
-                long_short_ratio            = float(ls_s.iloc[i])    if ls_s   is not None and not _isnan(ls_s.iloc[i])    else None,
-                put_call_ratio              = float(pcr_s.iloc[i])   if pcr_s  is not None and not _isnan(pcr_s.iloc[i])   else None,
-                liquidations_long_24h_usd   = float(liq_l_s.iloc[i]) if liq_l_s is not None and not _isnan(liq_l_s.iloc[i]) else None,
-                liquidations_short_24h_usd  = float(liq_s_s.iloc[i]) if liq_s_s is not None and not _isnan(liq_s_s.iloc[i]) else None,
+                gex_usd                     = float(gex_s.iloc[i])      if gex_s     is not None and not _isnan(gex_s.iloc[i])     else None,
+                etf_flow_3d_usd             = float(flow_s.iloc[i])     if flow_s    is not None and not _isnan(flow_s.iloc[i])    else None,
+                funding_rate_annualized_pct = float(fund_s.iloc[i])     if fund_s    is not None and not _isnan(fund_s.iloc[i])    else None,
+                oi_change_7d_pct            = float(oi_s.iloc[i])       if oi_s      is not None and not _isnan(oi_s.iloc[i])      else None,
+                long_short_ratio            = float(ls_s.iloc[i])       if ls_s      is not None and not _isnan(ls_s.iloc[i])      else None,
+                put_call_ratio              = float(pcr_s.iloc[i])      if pcr_s     is not None and not _isnan(pcr_s.iloc[i])     else None,
+                liquidations_long_24h_usd   = float(liq_l_s.iloc[i])   if liq_l_s   is not None and not _isnan(liq_l_s.iloc[i])   else None,
+                liquidations_short_24h_usd  = float(liq_s_s.iloc[i])   if liq_s_s   is not None and not _isnan(liq_s_s.iloc[i])   else None,
+                granger_lead_flow_usd       = float(granger_s.iloc[i])  if granger_s is not None and not _isnan(granger_s.iloc[i]) else None,
             )
             result = self.compute(inputs)
             scores.iloc[i] = result.score
@@ -400,6 +449,9 @@ def _build_reason(inputs: SignalInputs, raw: dict[str, float], score: float) -> 
 
     if inputs.near_active_barrier:
         parts.append("⚠ vicino a barriera attiva")
+
+    if inputs.near_call_wall:
+        parts.append("📌 NEAR CALL_WALL (pin gamma)")
 
     signal = _score_to_signal(score)
     return f"{signal} [{score:.0f}/100] — " + " | ".join(parts) if parts else f"{signal} [{score:.0f}/100]"

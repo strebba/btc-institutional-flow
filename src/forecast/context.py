@@ -38,6 +38,8 @@ class DealerFlowContext:
     long_short_ratio: Optional[float] = None
     liquidations_long: Optional[float] = None
     liquidations_short: Optional[float] = None
+    near_call_wall: bool = False
+    ibit_flow_5d_ago: Optional[float] = None
 
 
 def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> DealerFlowContext:
@@ -74,12 +76,22 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
         raise DataUnavailable(f"Fetch flussi fallito: {exc}") from exc
 
     ibit_flow_3d = 0.0
+    ibit_flow_5d_ago: Optional[float] = None
     if not merged.empty and "ibit_flow_3d" in merged.columns:
         vals = merged["ibit_flow_3d"].dropna()
         if not vals.empty:
             ibit_flow_3d = float(vals.iloc[-1])
+    # Granger lead: flusso aggregato di 5 giorni fa (colonna ibit_flow se presente)
+    if not merged.empty:
+        flow_col = "ibit_flow" if "ibit_flow" in merged.columns else None
+        if flow_col is None and "ibit_flow_3d" in merged.columns:
+            flow_col = "ibit_flow_3d"
+        if flow_col is not None:
+            flow_vals = merged[flow_col].dropna()
+            if len(flow_vals) >= 6:
+                ibit_flow_5d_ago = float(flow_vals.iloc[-6])
 
-    # ── Barriere ──────────────────────────────────────────────────────────────
+    # ── Barriere EDGAR ────────────────────────────────────────────────────────
     try:
         active_barriers = StructuredNotesDB().get_active_barriers()
     except Exception:
@@ -91,6 +103,17 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
             if bp > 0 and abs(spot - bp) / spot < _BARRIER_EXCLUSION_PCT:
                 near_barrier = True
                 break
+
+    # ── Call wall proximity (positive gamma) ──────────────────────────────────
+    _CALL_WALL_PIN_PCT = 0.02  # entro 2% = pinning meccanico
+    near_call_wall = False
+    if (
+        spot > 0
+        and total_gex > 0
+        and snapshot.call_wall is not None
+        and abs(spot - snapshot.call_wall) / spot < _CALL_WALL_PIN_PCT
+    ):
+        near_call_wall = True
 
     # ── Macro CoinGlass (opzionali) ────────────────────────────────────────────
     funding_rate_ann = oi_change_7d_pct = long_short_ratio = None
@@ -138,7 +161,9 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
         put_call_ratio=snapshot.put_call_ratio,
         liquidations_long_24h_usd=liquidations_long,
         liquidations_short_24h_usd=liquidations_short,
+        granger_lead_flow_usd=ibit_flow_5d_ago,
         near_active_barrier=near_barrier,
+        near_call_wall=near_call_wall,
     )
     result = SignalModel(weights=weights).compute(inputs)
 
@@ -148,4 +173,5 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
         funding_rate_ann=funding_rate_ann, oi_change_7d_pct=oi_change_7d_pct,
         long_short_ratio=long_short_ratio,
         liquidations_long=liquidations_long, liquidations_short=liquidations_short,
+        near_call_wall=near_call_wall, ibit_flow_5d_ago=ibit_flow_5d_ago,
     )

@@ -207,6 +207,30 @@ class TestBarriers:
         assert data["count"] == 2
         assert len(data["barriers"]) == 2
 
+    def test_excludes_unpriced_barriers_and_reports_meta(self, client):
+        """Le barriere senza level_price_btc sono escluse ma contate in meta."""
+        barriers = [
+            {"id": 1, "level_price_btc": 80000.0, "barrier_type": "knock_in", "issue_date": "2025-01-10"},
+            {"id": 2, "level_price_btc": None, "barrier_type": "knock_in", "issue_date": "2025-03-20"},
+        ]
+        snap, _ = _mock_gex_snapshot()
+        with (
+            patch("src.edgar.structured_notes_db.StructuredNotesDB.compute_btc_prices"),
+            patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
+            patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
+            patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
+            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
+        ):
+            data = client.get("/api/barriers").json()["data"]
+        assert data["count"] == 1
+        assert len(data["barriers"]) == 1
+        assert data["meta"] == {
+            "total_active": 2,
+            "priced": 1,
+            "pending_pricing": 1,
+            "last_filing_date": "2025-03-20",
+        }
+
     def test_confluence_bearish_reinforced_on_put_wall(self, client):
         """Cluster di barriere ribassiste sul put wall → confluenza bearish_reinforced."""
         # _mock_gex_snapshot ha put_wall=80_000; barriere knock_in a 80k sotto spot 85k.
