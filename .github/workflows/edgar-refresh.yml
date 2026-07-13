@@ -56,7 +56,7 @@ jobs:
             git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add data/structured_notes.db
-            git commit -m "chore(edgar): refresh settimanale automatico [skip ci]"
+            git commit -m "chore(edgar): refresh settimanale automatico"
             git push
           else
             echo "Nessuna modifica al DB — niente da committare."
