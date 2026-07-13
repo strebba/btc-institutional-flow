@@ -34,6 +34,7 @@ ALERT_DAILY_RECAP = "daily_recap"
 ALERT_FLOW_SINGLE_DAY = "etf_flow_single_day"
 ALERT_FLOW_CUMULATIVE = "etf_flow_cumulative_7d"
 ALERT_FLOW_STREAK = "etf_flow_streak"
+ALERT_ERROR = "error_notification"
 
 
 # ─── Helper functions (pure, testabili in isolamento) ────────────────────────
@@ -184,6 +185,39 @@ class GexAlertMonitor:
 
     # ─── Daily recap ─────────────────────────────────────────────────────────
 
+    async def send_startup_message(self) -> bool:
+        """Invia un messaggio di avvio per confermare che il bot è operativo."""
+        if self._telegram is None:
+            return False
+
+        recap_cfg = self._cfg.get("daily_recap", {})
+        hour = int(recap_cfg.get("hour_utc", 7))
+        minute = int(recap_cfg.get("minute_utc", 0))
+
+        msg = (
+            "🟢 <b>BTC Institutional Flow — Bot avviato</b>\n"
+            f"<i>Daily recap schedulato alle {hour:02d}:{minute:02d} UTC</i>\n\n"
+            "Alert configurati:\n"
+            f"• ETF Flow check ogni {self._cfg.get('etf_flow_check', {}).get('interval_hours', 4)}h\n"
+            "• Single-day ≥ $500M | 7d cumul ≥ $2B | Streak ≥ 3gg"
+        )
+        return await self._telegram.send_message(msg)
+
+    async def send_error_notification(self, error_msg: str) -> bool:
+        """Invia una notifica di errore via Telegram con cooldown 6h."""
+        if self._telegram is None:
+            return False
+
+        cooldown_h = float(self._cfg.get("error_cooldown_hours", 6))
+        if self._alert_db.within_cooldown(ALERT_ERROR, hours=cooldown_h):
+            return False
+
+        msg = f"⚠️ <b>BTC Institutional Flow — Errore</b>\n<i>{error_msg}</i>"
+        sent = await self._telegram.send_message(msg)
+        if sent:
+            self._alert_db.record_sent(ALERT_ERROR, msg)
+        return sent
+
     async def build_recap_message(self) -> Optional[str]:
         """Raccoglie GEX + flows + IFI e genera il messaggio HTML.
 
@@ -245,6 +279,11 @@ class GexAlertMonitor:
 
         message = await self.build_recap_message()
         if message is None:
+            _log.warning("send_daily_recap: nessun dato GEX disponibile")
+            await self.send_error_notification(
+                "Impossibile generare il daily recap: nessuno snapshot GEX nel database. "
+                "Verificare che cron_gex.py sia in esecuzione."
+            )
             return False
 
         sent = await self._telegram.send_message(message)
@@ -306,8 +345,7 @@ class GexAlertMonitor:
                 ev.spot_price = snap.spot_price
             # Regime dal DB (ultimo snapshot)
             if snap is not None:
-                # regime stringa nel DB non è esposta su GexSnapshot; la rileggiamo dalla row
-                ev.gex_regime = self._last_regime_label()
+                ev.gex_regime = self._gex_db.get_last_regime_label()
 
             message = format_etf_flow_alert(ev)
             if self._alert_db.is_duplicate(alert_type, message):
@@ -320,14 +358,3 @@ class GexAlertMonitor:
                 _log.info("flow alert inviato: type=%s", alert_type)
 
         return sent_count
-
-    def _last_regime_label(self) -> Optional[str]:
-        """Legge la colonna regime dell'ultimo snapshot dal DB."""
-        try:
-            with self._gex_db._conn() as conn:
-                row = conn.execute(
-                    "SELECT regime FROM gex_snapshots ORDER BY date DESC LIMIT 1"
-                ).fetchone()
-            return row["regime"] if row else None
-        except Exception:
-            return None

@@ -274,8 +274,52 @@
 
 6. **Test**: 582/582 pass, ruff clean.
 
+## Telegram Bot Hardening (session 2026-07-13)
+
+1. **HTML escaping**: Tutti i valori dinamici nei template (`_esc()` via `html.escape`)
+   applicati a regime, IFI, ticker, alert text. Previene break del formato HTML se
+   dati contengono `<`, `>`, `&`.
+
+2. **Startup/heartbeat message**: All'avvio scheduler il bot invia
+   `🟢 BTC Institutional Flow — Bot avviato` con orario recap e soglie configurate.
+   Metodo `send_startup_message()` in `GexAlertMonitor`.
+
+3. **Error notification via Telegram**: Se `send_daily_recap()` fallisce per mancanza
+   dati GEX, il bot invia un alert errore (`ALERT_ERROR = "error_notification"`)
+   con cooldown 6h. L'utente non resta più al buio quando la pipeline dati è rotta.
+
+4. **`GexDB.get_last_regime_label()`**: Metodo pubblico (sostituisce accesso a
+   `_conn()` privato da `GexAlertMonitor._last_regime_label()`).
+
+5. **Retry + truncation in `TelegramClient`**: `_post_with_retry()` con 3 tentativi
+   a exponential backoff (1s, 2s, 4s) su `send_message` e `send_to`. Truncation
+   automatica a 4000 char (`_TELEGRAM_MAX_LENGTH`) con `…` per evitare errori 400.
+
+6. **Webhook riutilizza `_alert_monitor`**: Il webhook handler non crea più istanze
+   nuove di `GexAlertMonitor` e `TelegramClient` a ogni `/recap`. Usa l'istanza
+   globale salvata da `_start_alert_scheduler()`.
+
+7. **Comandi `/status` e `/help`**: `/status` → ultimo recap, n° snapshot GEX,
+   regime corrente, prossimo recap. `/help` → lista comandi.
+
+8. **`scripts/notify_telegram.py`**: Script CLI condiviso per notifiche da CI/CD.
+   Sostituisce il `curl` raw nei workflow GitHub Actions. Accetta messaggio da
+   argomenti o stdin.
+
+9. **CI notification su `ci.yml`**: Aggiunta notifica Telegram su fallimento
+   (prima assente). Entrambi i workflow (`ci.yml`, `edgar-refresh.yml`) ora usano
+   `scripts/notify_telegram.py`.
+
+10. **Test**: 125/125 core tests passati (56 alerts + 69 api/gex). Lint ruff pulito.
+
 ## Useful Commands (aggiuntivi)
 - `make test` — 582 test in ~25s
 - `.venv/bin/ruff check src/ tests/ scripts/` — lint
 - `pip install -e ".[dev]"` — ora installa anche FastAPI/uvicorn grazie al sync
 - `gh workflow run "edgar-refresh.yml" -f lookback_days=60 --ref main` — catch-up manuale
+- `python3 scripts/notify_telegram.py "test message"` — notifica Telegram da CLI
+
+## Telegram Bot Commands
+- `/recap` — Recap GEX + IFI + ETF flows aggiornato (anche da webhook in gruppo)
+- `/status` — Stato bot: ultimo recap, snapshot GEX, regime, prossimo recap
+- `/help` — Lista comandi disponibili

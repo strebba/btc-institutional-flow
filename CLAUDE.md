@@ -34,7 +34,7 @@ entrambi i repo.
 | `src/analytics/` | Segnale composito a 4 pilastri (GEX+Barrier+ETF+Macro) + backtest + IFI + Granger + regime analysis |
 | `src/dashboard/` | Dashboard Streamlit (`app.py`, `charts.py`) |
 | `src/api/` | FastAPI app (`src.api.main:app`) servita da `run_api.py` |
-| `src/alerts/` | Alert Telegram (ETF flow check, daily recap) via `apscheduler` + GEX alert monitor |
+| `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |
 
 DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignorato). Config: `config/settings.yaml` +

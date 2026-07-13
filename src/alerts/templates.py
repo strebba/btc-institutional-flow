@@ -6,6 +6,7 @@ Due template:
 """
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -33,6 +34,11 @@ _IFI_READING = {
     "Distribution": "Segnali di distribuzione — indebolimento strutturale, flussi in calo",
     "Outflow": "Deflusso istituzionale marcato — pressione ribassista strutturale dominante",
 }
+
+
+def _esc(text: str) -> str:
+    """Escape HTML entities nei valori dinamici inseriti nei template."""
+    return html.escape(text, quote=False)
 
 
 def _fmt_money(v: Optional[float]) -> str:
@@ -138,7 +144,7 @@ def format_daily_recap(
     lines.append("")
 
     # ── GEX block ──
-    lines.append(f"{emoji} <b>Regime</b>: {regime.regime.upper().replace('_', ' ')}")
+    lines.append(f"{emoji} <b>Regime</b>: {_esc(regime.regime.upper().replace('_', ' '))}")
     lines.append(f"Spot: <b>{_fmt_price(snapshot.spot_price)}</b>")
 
     gex_line = f"Net GEX: <b>{_fmt_signed_money(snapshot.total_net_gex)}</b>"
@@ -165,11 +171,11 @@ def format_daily_recap(
     else:
         ifi_emoji = _IFI_EMOJI.get(ifi.regime, "⚪")
         lines.append(
-            f"Score: <b>{ifi.score:.0f}/100</b>  ·  {ifi_emoji} <b>{ifi.regime}</b>"
+            f"Score: <b>{ifi.score:.0f}/100</b>  ·  {ifi_emoji} <b>{_esc(ifi.regime)}</b>"
         )
         reading = _IFI_READING.get(ifi.regime, "")
         if reading:
-            lines.append(f"<i>{reading}</i>")
+            lines.append(f"<i>{_esc(reading)}</i>")
         factors = []
         if ifi.flow_score is not None:
             factors.append(f"Flows {_mini_bar(ifi.flow_score)} {ifi.flow_score:.2f}")
@@ -196,7 +202,7 @@ def format_daily_recap(
             reverse=True,
         )[:3]
         if top:
-            parts = [f"{tk} {_fmt_signed_money(v)}" for tk, v in top if v != 0]
+            parts = [f"{_esc(tk)} {_fmt_signed_money(v)}" for tk, v in top if v != 0]
             if parts:
                 lines.append("Top: " + " · ".join(parts))
 
@@ -212,7 +218,7 @@ def format_daily_recap(
         lines.append("")
         lines.append("⚠️  <b>Alert</b>")
         for a in regime.alerts:
-            lines.append(f"• {a}")
+            lines.append(f"• {_esc(a)}")
 
     return "\n".join(lines)
 
@@ -284,7 +290,7 @@ def format_etf_flow_alert(
     for tk, v in top:
         if v == 0:
             continue
-        lines.append(f"  {tk}: {_fmt_signed_money(v)}")
+        lines.append(f"  {_esc(tk)}: {_fmt_signed_money(v)}")
 
     lines.append("")
     lines.append(f"7d cumulativo: <b>{_fmt_signed_money(event.cumul_7d_usd)}</b>")
@@ -298,6 +304,6 @@ def format_etf_flow_alert(
         if event.spot_price is not None:
             lines.append(f"BTC Spot: {_fmt_price(event.spot_price)}")
         if event.gex_regime is not None:
-            lines.append(f"GEX regime: {event.gex_regime}")
+            lines.append(f"GEX regime: {_esc(event.gex_regime)}")
 
     return "\n".join(lines)

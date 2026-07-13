@@ -44,3 +44,19 @@ jobs:
           name: coverage
           path: .coverage
           if-no-files-found: ignore
+
+      - name: Notify Telegram on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONPATH: .
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "Telegram secrets non configurati — skip notifica"
+            exit 0
+          fi
+          python3 scripts/notify_telegram.py "⚠️ <b>CI FALLITO</b>
+          Run: <a href='${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}'>${GITHUB_RUN_ID}</a>
+          Data: $(date -u +'%Y-%m-%d %H:%M UTC')
+          Branch: ${GITHUB_REF_NAME}"

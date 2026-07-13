@@ -36,6 +36,7 @@ _log = setup_logging("api.main")
 # ─── Alert scheduler (lazy init, graceful degrade) ─────────────────────────────
 
 _alert_scheduler = None  # type: ignore[var-annotated]
+_alert_monitor = None   # type: ignore[var-annotated]  # GexAlertMonitor riutilizzato dal webhook
 _ifi_scheduler = None  # type: ignore[var-annotated]
 
 # ─── In-memory TTL cache ───────────────────────────────────────────────────────
@@ -165,7 +166,9 @@ async def _start_alert_scheduler() -> None:
 
         from src.alerts.gex_alert_monitor import GexAlertMonitor
 
-        monitor = GexAlertMonitor()
+        global _alert_monitor
+        _alert_monitor = GexAlertMonitor()
+        monitor = _alert_monitor
         scheduler = AsyncIOScheduler(timezone="UTC")
 
         recap_cfg = cfg.get("daily_recap", {})
@@ -216,6 +219,7 @@ async def _start_alert_scheduler() -> None:
 
         asyncio.create_task(_catch_up_daily_recap(monitor, recap_cfg))
         asyncio.create_task(_register_telegram_webhook(monitor._telegram))
+        asyncio.create_task(monitor.send_startup_message())
     except Exception:
         _log.exception("[alerts] scheduler startup failed")
 
@@ -229,6 +233,8 @@ async def _register_telegram_webhook(telegram: Any) -> None:
     await telegram.set_webhook(f"{webhook_url}/api/telegram/webhook", secret_token=secret)
     await telegram.set_commands([
         {"command": "recap", "description": "Invia il recap GEX + IFI aggiornato"},
+        {"command": "status", "description": "Stato del bot e freschezza dati"},
+        {"command": "help", "description": "Mostra tutti i comandi disponibili"},
     ])
 
 
@@ -432,27 +438,82 @@ async def telegram_webhook(request: Request) -> JSONResponse:
     text: str = msg.get("text", "")
     chat_id = str(msg.get("chat", {}).get("id", ""))
 
-    if not text.startswith("/recap") or not chat_id:
+    if not text or not chat_id:
         return JSONResponse({"ok": True})
 
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
+    global _alert_monitor
+    monitor = _alert_monitor
+    if monitor is None:
+        from src.alerts.gex_alert_monitor import GexAlertMonitor
+        monitor = GexAlertMonitor()
+
+    def _help_message() -> str:
+        return (
+            "<b>BTC Institutional Flow — Comandi disponibili</b>\n\n"
+            "/recap — Invia il recap GEX + IFI + ETF flows aggiornato\n"
+            "/status — Stato del bot (ultimo recap, freschezza dati)\n"
+            "/help — Mostra questo messaggio"
+        )
+
+    async def _status_message(monitor: Any) -> str:
+        from src.alerts.alert_db import AlertDB
+
+        alert_db = AlertDB()
+        last = alert_db.get_last_sent("daily_recap")
+        lines: list[str] = []
+        lines.append("📡 <b>BTC Institutional Flow — Stato</b>")
+        now = datetime.now(timezone.utc)
+        lines.append(f"<i>{now.strftime('%Y-%m-%d · %H:%M UTC')}</i>")
+        lines.append("")
+
+        if last:
+            ts_str = last[0].strftime("%Y-%m-%d %H:%M UTC")
+            lines.append(f"Ultimo daily recap: {ts_str}")
+        else:
+            lines.append("Nessun daily recap ancora inviato")
+
+        gex_db = monitor._gex_db
+        count = await asyncio.to_thread(gex_db.count)
+        lines.append(f"Snapshot GEX nel DB: {count}")
+        last_regime = await asyncio.to_thread(gex_db.get_last_regime_label)
+        if last_regime:
+            lines.append(f"Regime corrente: {last_regime.replace('_', ' ')}")
+
+        upcoming_recap_cfg = monitor._cfg.get("daily_recap", {})
+        recap_hour = int(upcoming_recap_cfg.get("hour_utc", 7))
+        recap_min = int(upcoming_recap_cfg.get("minute_utc", 0))
+        lines.append(f"Prossimo recap: {recap_hour:02d}:{recap_min:02d} UTC")
+
+        return "\n".join(lines)
+
+    cmd = text.split()[0].split("@")[0]
+
+    if cmd == "/help":
+        if monitor._telegram is not None:
+            await monitor._telegram.send_to(chat_id, _help_message())
+        return JSONResponse({"ok": True})
+
+    if cmd == "/status":
+        if monitor._telegram is not None:
+            await monitor._telegram.send_to(chat_id, await _status_message(monitor))
+        return JSONResponse({"ok": True})
+
+    if cmd != "/recap":
         return JSONResponse({"ok": True})
 
     try:
-        from src.alerts.gex_alert_monitor import GexAlertMonitor
-        from src.alerts.telegram_client import TelegramClient
-
-        monitor = GexAlertMonitor()
         message = await monitor.build_recap_message()
         if message:
-            client = TelegramClient(bot_token=token, chat_id=chat_id)
-            await client.send_to(chat_id, message)
-            _log.info("[webhook] /recap inviato a chat %s", chat_id)
+            if monitor._telegram is not None:
+                await monitor._telegram.send_to(chat_id, message)
+                _log.info("[webhook] /recap inviato a chat %s", chat_id)
+            else:
+                _log.warning("[webhook] /recap impossibile: telegram non configurato")
         else:
-            await TelegramClient(bot_token=token, chat_id=chat_id).send_to(
-                chat_id, "<i>Nessun dato GEX disponibile al momento.</i>"
-            )
+            if monitor._telegram is not None:
+                await monitor._telegram.send_to(
+                    chat_id, "<i>Nessun dato GEX disponibile al momento.</i>"
+                )
     except Exception:
         _log.exception("[webhook] errore gestione /recap")
 

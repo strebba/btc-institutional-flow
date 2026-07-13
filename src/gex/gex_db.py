@@ -13,7 +13,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 
 import pandas as pd
 
@@ -285,3 +285,11 @@ class GexDB:
         """Conta il numero totale di snapshot nel DB."""
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM gex_snapshots").fetchone()[0]
+
+    def get_last_regime_label(self) -> Optional[str]:
+        """Restituisce il regime dell'ultimo snapshot, o None se DB vuoto."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT regime FROM gex_snapshots ORDER BY date DESC LIMIT 1"
+            ).fetchone()
+        return row["regime"] if row else None

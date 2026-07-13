@@ -234,7 +234,8 @@ class TestDailyRecapIntegration:
             fetch_flows=lambda: [], config={"cooldown_hours": 24},
         )
         assert run(mon.send_daily_recap()) is False
-        assert tg.sent == []
+        assert len(tg.sent) == 1
+        assert "Errore" in tg.sent[0]
 
     def test_sends_when_snapshot_exists(self, gex_db: GexDB, alert_db: AlertDB) -> None:
         gex_db.insert_snapshot(_snap(date(2026, 4, 22)), regime="positive_gamma")
