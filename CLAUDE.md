@@ -30,13 +30,15 @@ entrambi i repo.
 |--------|-------|
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
-| `src/flows/` | ETF flow tracker (Farside + yfinance), price fetcher BTC/IBIT, correlazioni |
-| `src/analytics/` | Segnale composito (GEX+Flows+Barriers) + backtest |
+| `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT |
+| `src/analytics/` | Segnale composito a 4 pilastri (GEX+Barrier+ETF+Macro) + backtest + IFI + Granger + regime analysis |
 | `src/dashboard/` | Dashboard Streamlit (`app.py`, `charts.py`) |
 | `src/api/` | FastAPI app (`src.api.main:app`) servita da `run_api.py` |
+| `src/alerts/` | Alert Telegram (ETF flow check, daily recap) via `apscheduler` + GEX alert monitor |
+| `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |
 
-DB: SQLite in `data/` (note, barrier_levels, prices). Config: `config/settings.yaml` via
-`src.config.get_settings()`. Scheduler/cron in `scripts/` (`cron_gex.py`, `cron_signal.py`, ecc.).
+DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignorato). Config: `config/settings.yaml` +
+`config/weights.yaml` via `src.config.get_settings()`. Scheduler/cron in `scripts/` (16 script).
 
 ## Deploy
 

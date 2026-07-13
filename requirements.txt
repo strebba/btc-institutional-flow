@@ -1,8 +1,8 @@
 # HTTP & scraping
 requests>=2.31
+curl_cffi>=0.5.9      # Chrome TLS fingerprint — bypassa Cloudflare su Farside
 beautifulsoup4>=4.12
 lxml>=5.0
-curl_cffi>=0.5.9    # Chrome TLS fingerprint — bypassa Cloudflare su Farside
 
 # Data
 yfinance>=0.2.40
@@ -26,9 +26,9 @@ rich>=13.7
 # API server
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
-apscheduler>=3.10.4  # scheduler per alert Telegram (daily recap + ETF flow check)
+apscheduler>=3.10.4
 
 # Testing
 pytest>=8.2
 pytest-cov>=5.0
-httpx>=0.27.0       # TestClient per FastAPI integration tests
+httpx>=0.27.0            # TestClient + mock httpx per Telegram client tests
