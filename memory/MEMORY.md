@@ -215,4 +215,39 @@
 3. **Doppio messaggio "nessuna barriera"**: Quando le barriere esistevano ma senza
    `level_price_btc`, apparivano due messaggi informativi ridondanti. Unificati in
    un unico messaggio contestuale (barriere assenti vs prezzo BTC non calcolabile)
-   con `return` dopo ciascuno. `app.py:688`.
+    con `return` dopo ciascuno. `app.py:688`.
+
+## Housekeeping (session 2026-07-13)
+
+1. **Commit Phase 5**: 20 file unstaged + 1 untracked (`cron_snapshot_barriers.py`)
+   committati in `9da2515`. Include barrier snapshots (DB v3), freshness indicators,
+   thread-safe cache, NumpyEncoder/`_sanitize()` unificata, ecc.
+
+2. **Sync `pyproject.toml` ↔ `requirements.txt`**: `pyproject.toml` mancava
+   `fastapi`, `uvicorn[standard]`, `apscheduler`, `httpx`. Aggiunti a production
+   deps. `responses>=0.25` rimosso da dev deps (0 import nel codebase).
+   `requirements.txt` allineato.
+
+3. **Bug fix**: `get_latest_shares_outstanding()` in `edgar_nport.py:370` referenziava
+   `EdgarNPortFetcher()` (classe inesistente). Corretto in `EdgarNportClient()`.
+
+4. **File obsoleti rimossi**: `.DS_Store` (x2, root + `src/`), `farside_2026-03-05.csv`,
+   `farside_cache.html`, log stantii (`dashboard.log`, `streamlit.log`, `forecast_api.out`,
+   `ngrok.log`). Tag `archive/barrier-gex-confluence` rimosso.
+
+5. **CLAUDE.md**: aggiunti moduli `src/alerts/` e `src/forecast/` mancanti dalla
+   tabella architettura.
+
+6. **Lint fix** (15 violazioni ruff → 0):
+   - `structured_notes_db.py`: `import pandas as pd` mancante (F821)
+   - `edgar_nport.py`: `EdgarNPortFetcher` → `EdgarNportClient` (F821)
+   - `run_gex.py`, `api/main.py`: `import json` inutilizzato rimosso (F401)
+   - `reparse_goldman.py`: E402 + F841 + F541 fix
+   - `run_flows.py`: F541 f-string vuoto
+
+7. **Test**: 582/582 passati, ruff pulito (0 errori).
+
+## Useful Commands (aggiuntivi)
+- `make test` — 582 test in ~25s
+- `.venv/bin/ruff check src/ tests/ scripts/` — lint
+- `pip install -e ".[dev]"` — ora installa anche FastAPI/uvicorn grazie al sync
