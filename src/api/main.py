@@ -354,6 +354,56 @@ def health() -> dict:
     return _ok({"service": "btc-institutional-flow", "healthy": True})
 
 
+@app.get("/api/health/edgar", tags=["meta"])
+def health_edgar() -> dict:
+    """Health check EDGAR: freschezza dati e statistiche DB note strutturate."""
+    try:
+        from datetime import date
+
+        from src.edgar.structured_notes_db import StructuredNotesDB
+
+        db = StructuredNotesDB()
+        with db._conn() as conn:
+            last = conn.execute(
+                "SELECT MAX(created_at) FROM notes"
+            ).fetchone()[0]
+            total_notes = conn.execute(
+                "SELECT COUNT(*) FROM notes"
+            ).fetchone()[0]
+            total_barriers = conn.execute(
+                "SELECT COUNT(*) FROM barrier_levels"
+            ).fetchone()[0]
+            active_barriers = conn.execute(
+                "SELECT COUNT(*) FROM barrier_levels WHERE status='active'"
+            ).fetchone()[0]
+
+        stale_days = None
+        if last:
+            last_date = date.fromisoformat(last[:10])
+            stale_days = (date.today() - last_date).days
+            healthy = stale_days <= 14
+        else:
+            healthy = False
+
+        return _ok({
+            "service": "btc-institutional-flow",
+            "healthy": healthy,
+            "edgar": {
+                "last_update": last,
+                "total_notes": total_notes,
+                "total_barriers": total_barriers,
+                "active_barriers": active_barriers,
+                "stale_days": stale_days,
+            },
+        })
+    except Exception as exc:
+        return _ok({
+            "service": "btc-institutional-flow",
+            "healthy": False,
+            "edgar": {"error": str(exc)},
+        })
+
+
 # ─── /api/telegram/webhook ────────────────────────────────────────────────────
 
 

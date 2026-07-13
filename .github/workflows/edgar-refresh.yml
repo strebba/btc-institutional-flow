@@ -5,15 +5,20 @@ name: EDGAR refresh (settimanale)
 # di DigitalOcean App Platform è effimero, quindi la fonte di verità è il DB
 # versionato nel repo; il push su main triggera il deploy).
 #
-# PREREQUISITO: creare la Repository variable EDGAR_USER_AGENT in
-#   Settings → Secrets and variables → Actions → Variables, es.
-#   ibit-gamma-tracker/1.0 (strebba90@gmail.com)
-# Senza, il job fallisce di proposito (per non rischiare il ban IP dalla SEC).
+# Lo User-Agent SEC è in config/settings.yaml (email reale), quindi non servono
+# variabili esterne. Override opzionale via env var EDGAR_USER_AGENT.
 
 on:
   schedule:
-    - cron: "30 6 * * 1"   # lunedì 06:30 UTC
-  workflow_dispatch:        # trigger manuale dalla tab Actions
+    - cron: "30 6 * * 1"   # lunedì 06:30 UTC — primario
+    - cron: "30 6 * * 3"   # mercoledì 06:30 UTC — backup (recupera se lunedì fallisce)
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: "Giorni di lookback (default 30 per il run schedulato)"
+        required: false
+        default: "30"
+        type: string
 
 permissions:
   contents: write           # per committare il DB aggiornato
@@ -30,16 +35,6 @@ jobs:
         with:
           ref: main
 
-      - name: Guard EDGAR_USER_AGENT
-        env:
-          EDGAR_USER_AGENT: ${{ vars.EDGAR_USER_AGENT }}
-        run: |
-          if [[ -z "$EDGAR_USER_AGENT" || "$EDGAR_USER_AGENT" == *example.com* ]]; then
-            echo "::error::Repository variable EDGAR_USER_AGENT non configurata (o placeholder)."
-            echo "Impostala in Settings → Secrets and variables → Actions → Variables."
-            exit 1
-          fi
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -52,7 +47,7 @@ jobs:
         env:
           PYTHONPATH: .
           EDGAR_USER_AGENT: ${{ vars.EDGAR_USER_AGENT }}
-          EDGAR_LOOKBACK_DAYS: "14"   # overlap > cadenza settimanale
+          EDGAR_LOOKBACK_DAYS: ${{ inputs.lookback_days || '30' }}
         run: python scripts/cron_edgar.py
 
       - name: Commit DB if changed
@@ -66,3 +61,23 @@ jobs:
           else
             echo "Nessuna modifica al DB — niente da committare."
           fi
+
+      - name: Notify Telegram on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "Telegram secrets non configurati — skip notifica"
+            exit 0
+          fi
+          MSG="⚠️ <b>EDGAR refresh FALLITO</b>%0A"
+          MSG+="Run: <a href='${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}'>${GITHUB_RUN_ID}</a>%0A"
+          MSG+="Data: $(date -u +'%Y-%m-%d %H:%M UTC')%0A"
+          MSG+="Branch: ${GITHUB_REF_NAME}"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "parse_mode=HTML" \
+            -d "disable_web_page_preview=true" \
+            -d "text=${MSG}" > /dev/null

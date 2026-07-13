@@ -12,12 +12,9 @@ database:
 # ─── SEC EDGAR ──────────────────────────────────────────────────────────────────
 edgar:
   base_url: https://efts.sec.gov/LATEST/search-index
-  # PLACEHOLDER — NON usare così com'è: SEC EDGAR richiede un'email reale nei ToS
-  # (https://www.sec.gov/os/accessing-edgar-data); un indirizzo fittizio rischia il ban IP.
-  # In locale: env var / .env  EDGAR_USER_AGENT="ibit-gamma-tracker/1.0 (tua@email.com)"
-  # In CI: Repository variable EDGAR_USER_AGENT (vedi .github/workflows/edgar-refresh.yml).
-  # Se resta un placeholder *example.com*, get_settings() logga un WARNING.
-  user_agent: "ibit-gamma-tracker/1.0 (you@example.com)"
+  # User-Agent reale richiesto dai ToS SEC EDGAR.
+  # Override via env var EDGAR_USER_AGENT (es. CI) se serve cambiarlo senza toccare il codice.
+  user_agent: "ibit-gamma-tracker/1.0 (strebba90@gmail.com)"
   rate_limit_rps: 8          # max 10/s → usiamo 8 per sicurezza
   max_retries: 3
   retry_delay_s: 1.0
