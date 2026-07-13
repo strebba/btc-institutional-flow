@@ -18,10 +18,9 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC))
 
-from src.edgar.parser import ProspectusParser
-from src.edgar.search import EdgarEftsSearcher
-from src.edgar.structured_notes_db import StructuredNotesDB
-from src.config import get_settings, setup_logging
+from src.config import get_settings, setup_logging  # noqa: E402
+from src.edgar.parser import ProspectusParser  # noqa: E402
+from src.edgar.structured_notes_db import StructuredNotesDB  # noqa: E402
 
 _log = setup_logging("reparse")
 
@@ -51,7 +50,6 @@ def main():
     print(f"Found {len(target_notes)} {args.issuer} notes to re-parse")
 
     # Re-fetch and re-parse each
-    searcher = EdgarEftsSearcher(cfg["edgar"])
     reparser = ProspectusParser(cfg["edgar"])
 
     updated = 0
@@ -89,10 +87,10 @@ def main():
                 new_note.id = note.id
                 new_note.filing_url = note.filing_url
                 db.upsert_note(new_note)
-                print(f"    → UPSERTED")
+                print("    → UPSERTED")
         else:
             unchanged += 1
-            print(f"    → No change")
+            print("    → No change")
 
     print(f"\n{'='*60}")
     print(f"Done: {updated} updated, {unchanged} unchanged, {len(target_notes)} total")

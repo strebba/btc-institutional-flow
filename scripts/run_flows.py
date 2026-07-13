@@ -116,7 +116,7 @@ def main() -> None:
         )
 
     # Rolling correlations
-    console.print(f"\n[bold]Rolling correlations (ultima settimana):[/bold]")
+    console.print("\n[bold]Rolling correlations (ultima settimana):[/bold]")
     roll_corrs = corr_engine.rolling_correlations(merged, windows=[30, 60, 90])
     corr_table = Table()
     corr_table.add_column("Finestra", style="cyan")

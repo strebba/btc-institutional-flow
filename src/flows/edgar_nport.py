@@ -367,7 +367,7 @@ def get_latest_shares_outstanding() -> float | None:
     mensilmente per tutti gli ETF registrati SEC.
     """
     try:
-        fetcher = EdgarNPortFetcher()
+        fetcher = EdgarNportClient()
 
         # Fetch l'indice dei filing N-PORT più recenti (ultimi 3 mesi bastano)
         lookback = 3
