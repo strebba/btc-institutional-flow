@@ -20,6 +20,13 @@ Avvio:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Aggiunge la root del progetto al sys.path (necessario quando il package
+# non e' installato in editable mode)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 

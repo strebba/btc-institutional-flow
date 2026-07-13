@@ -1,5 +1,43 @@
 # ibit-gamma-tracker — Project Memory
 
+## Codebase Restructuring (session 2026-07-13 — comprehensive refactor)
+
+**513 test passing** dopo il refactor completo (12 pre-existing lxml failures in ambiente locale).
+
+### Domain Modeling
+- `CONTEXT.md` creato con glossario di 30+ termini canonici del dominio
+- `RegimeState` → `GammaRegime` (src/gex/models.py + 10 file aggiornati)
+- `signal_model.py` → `factor_scorers.py` (18 file aggiornati, rename + import propagate)
+- `signal_model` rimane come alias di scoring library riusata da `pillars.py`
+
+### API Splitting (src/api/)
+- `main.py`: 1932 → 225 righe (-88%)
+- Nuovi moduli: `auth.py`, `cache.py`, `helpers.py`, `scheduler.py`, `schemas.py`
+- 6 router in `routers/`: `health.py`, `gex.py`, `flows.py`, `barriers.py`, `signals.py`, `forecast.py`
+- `GET /api/health/scheduler` — nuovo endpoint per monitorare stato APScheduler
+- Cache + lock anti-concorrenza spostati in `cache.py` con interfaccia pubblica
+
+### Dashboard Splitting (src/dashboard/)
+- `app.py`: 1615 → 220 righe (-86%), ora orchestratore puro
+- Nuovi moduli: `data_loader.py` (9 `@st.cache_data`), `tabs/` (5 moduli: barrier_map, gex, flows, signals, edgar), `header.py`, `sidebar.py`, `static/style.css`
+- CSS estratto da inline `st.markdown` a `static/style.css`
+- `sys.path.insert` mantenuto in `app.py` (pip vecchio in venv non supporta editable install)
+
+### Test
+- `tests/conftest.py`: aggiunto `_clear_settings_cache` autouse fixture per `lru_cache`
+- `tests/integration/test_contract_signal.py`: nuovo contract test API↔Dashboard (3 test)
+- Test count: 513 passing (582 total con quelli esclusi per lxml)
+
+### CI/CD + Quality
+- `.pre-commit-config.yaml`: ruff check + format
+- `Makefile`: aggiunti `test-unit`, `test-integration`, `lint`, `typecheck`
+- `.gitignore`: aggiunti `.agents/`, `skills-lock.json`
+
+### Key renames
+- `RegimeState` → `GammaRegime` (src/gex/models.py)
+- `signal_model.py` → `factor_scorers.py` (src/analytics/)
+- `_get_gex_data` → `src.api.routers.gex._get_gex_data()` + re-exported in `barriers.py`
+
 ## Architecture
 - **Language**: Python 3.9+, Streamlit dashboard
 - **DB**: SQLite at `data/structured_notes.db` (notes + barrier_levels + prices tables),

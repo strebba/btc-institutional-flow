@@ -3,8 +3,10 @@
 Toolkit Python per l'impatto del **dealer hedging** su note strutturate IBIT sul prezzo BTC
 (tesi Arthur Hayes). Espone un **backend FastAPI** + una dashboard Streamlit.
 
-> Esiste già una `memory/MEMORY.md` nel repo con dettagli di architettura e bug-fix storici della
+> Esiste una `memory/MEMORY.md` nel repo con dettagli di architettura e bug-fix storici della
 > dashboard Streamlit — leggerla per il dettaglio, **non duplicarla** qui.
+>
+> Esiste `CONTEXT.md` (root) con il glossario dei termini canonici del dominio.
 
 ## Comandi essenziali (Makefile)
 
@@ -12,11 +14,14 @@ Toolkit Python per l'impatto del **dealer hedging** su note strutturate IBIT sul
 make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
-make test           # pytest tests/ -v  (~506 test)
+make test           # pytest tests/ -v  (~513 test)
+make test-unit      # pytest tests/unit/ -v -q (esclude integration)
+make lint           # ruff check src/ tests/
 make update-all     # update-gex + update-flows + update-edgar (cron data refresh)
 ```
 
-Lint/type: `ruff` (configurato in `pyproject.toml`). Venv locale in `.venv`.
+Lint/type: `ruff` (configurato in `pyproject.toml`), `.pre-commit-config.yaml`.
+Venv locale in `.venv`.
 
 ## Ruolo nell'ecosistema
 
@@ -31,9 +36,9 @@ entrambi i repo.
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT |
-| `src/analytics/` | Segnale composito a 4 pilastri (GEX+Barrier+ETF+Macro) + backtest + IFI + Granger + regime analysis |
-| `src/dashboard/` | Dashboard Streamlit (`app.py`, `charts.py`) |
-| `src/api/` | FastAPI app (`src.api.main:app`) servita da `run_api.py` |
+| `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest + IFI + Granger + regime analysis |
+| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (5 moduli), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
+| `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (6 file: health, gex, flows, barriers, signals, forecast), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`, `schemas.py` |
 | `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |
 
@@ -43,7 +48,8 @@ DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignora
 ## Deploy
 
 `Procfile` → `python run_api.py --host 0.0.0.0 --port 8000`. `Dockerfile` + `docker-compose.yml`
-disponibili. Git repo attivo (branch `main`).
+disponibili. Git repo attivo (branch `main`). La dashboard Streamlit gira in locale
+(`make run-dashboard`), non deployata su DO.
 
 ## Refresh dati EDGAR (note IBIT)
 
