@@ -355,3 +355,47 @@ def _avg(a: float | None, b: float | None) -> float:
     if a is not None and b is not None:
         return (a + b) / 2
     return a if a is not None else (b or 0.0)
+
+
+def get_latest_shares_outstanding() -> float | None:
+    """Recupera le quote in circolazione IBIT dall'ultimo filing N-PORT SEC.
+
+    Restituisce il ``sharesOutstanding`` più recente disponibile nei filing
+    N-PORT EDGAR di IBIT (CIK 0001980994), o None se non disponibile.
+
+    È l'unica fonte ufficiale e gratuita: i filing N-PORT sono obbligatori
+    mensilmente per tutti gli ETF registrati SEC.
+    """
+    try:
+        fetcher = EdgarNPortFetcher()
+
+        # Fetch l'indice dei filing N-PORT più recenti (ultimi 3 mesi bastano)
+        lookback = 3
+        filings = fetcher._fetch_nport_index(lookback)
+        if not filings:
+            return None
+
+        # Prendi il filing più recente
+        latest = max(filings, key=lambda f: f["date"])
+
+        # Costruisci URL archivio EDGAR
+        cik_padded = str(fetcher._cik).zfill(10)
+        accession = latest["accession"]
+        clean_acc = accession.replace("-", "")
+        base_url = f"https://www.sec.gov/Archives/edgar/data/{cik_padded}/{clean_acc}/"
+
+        # Scarica e parsa l'XML
+        xml_text = fetcher._try_index_fetch(str(fetcher._cik), accession, base_url)
+        if not xml_text:
+            xml_text = fetcher._try_candidate_files(base_url, accession)
+
+        if not xml_text:
+            return None
+
+        data = fetcher._parse_nport_xml_text(xml_text, latest["date"])
+        if data and data.get("shares_outstanding"):
+            return float(data["shares_outstanding"])
+
+        return None
+    except Exception:
+        return None

@@ -379,17 +379,28 @@ def run_regime(merged_df: pd.DataFrame, gex_today: float):
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
 def run_backtest(merged_df: pd.DataFrame, barriers: list[dict]):
-    """Esegue il backtest a 4 pilastri con serie GEX storica dal DB."""
+    """Esegue il backtest a 4 pilastri con serie GEX storica dal DB e storico barriere."""
     from src.analytics.backtest import Backtest
     from src.analytics.pillars import CompositeSignal
+    from src.edgar.structured_notes_db import StructuredNotesDB
     from src.gex.gex_db import GexDB
 
     gex_series = GexDB().get_series(days=365)
+    # Carica storico barriere se disponibile; fallback a barriere correnti
+    barrier_history = None
+    try:
+        bh = StructuredNotesDB().get_barrier_history(days=365)
+        if not bh.empty:
+            barrier_history = bh
+    except Exception:
+        pass
+
     bt = Backtest()
     return bt, bt.run(
         merged_df,
         gex_series=gex_series if not gex_series.empty else None,
         active_barriers=barriers if barriers else None,
+        barrier_history=barrier_history,
         composite=CompositeSignal(),
     )
 
@@ -459,7 +470,7 @@ def compute_composite(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _sidebar(snap: dict, merged_df: pd.DataFrame) -> bool:
+def _sidebar(snap: dict, merged_df: pd.DataFrame, barriers: list[dict]) -> bool:
     """Renderizza sidebar. Restituisce True se si richiede refresh manuale."""
     with st.sidebar:
         st.markdown(
@@ -484,22 +495,33 @@ def _sidebar(snap: dict, merged_df: pd.DataFrame) -> bool:
             f"""
 <p style="font-size:10px;font-weight:700;text-transform:uppercase;
           letter-spacing:0.07em;color:{_TEXT_MUTED};margin:0 0 0.4rem">
-  Ultimo aggiornamento
+  Stato dati
 </p>
 """,
             unsafe_allow_html=True,
         )
 
         btc_price = snap.get("spot_price") or 0
-        ts_now = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-        st.text(f"GEX:    {ts_now}")
-        st.text(f"Prezzo BTC: ${btc_price:,.0f}")
+        ts_now = pd.Timestamp.now().strftime("%H:%M:%S")
+        gex_ok = snap.get("total_net_gex", 0) != 0 or snap.get("n_instruments", 0) > 0
+        flows_ok = not merged_df.empty
+        barriers_ok = len(barriers) > 0
 
-        if not merged_df.empty:
-            last_flow_date = merged_df.index.max()
-            st.text(
-                f"Flussi: {last_flow_date.strftime('%Y-%m-%d') if hasattr(last_flow_date, 'strftime') else last_flow_date}"
-            )
+        def _status(ok: bool) -> str:
+            return f'<span style="color:{_theme["positive"]}">OK</span>' if ok else \
+                   f'<span style="color:{_theme["negative"]}">—</span>'
+
+        st.markdown(
+            f"""
+<small style="color:{_TEXT_MUTED};line-height:1.6">
+  GEX ({ts_now}) {_status(gex_ok)}<br>
+  Flussi {_status(flows_ok)}<br>
+  Barriere {_status(barriers_ok)}<br>
+  BTC: ${btc_price:,.0f}
+</small>
+""",
+            unsafe_allow_html=True,
+        )
 
         st.divider()
 
@@ -622,32 +644,59 @@ aspettati movimenti meccanici e improvvisi — non guidati dal sentiment,
 ma dalla gestione del rischio dei dealer.
 """)
 
-    # Legenda colori
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(
-            "🔴 **Knock-In Barrier** — Se BTC scende sotto questo livello, "
-            "i dealer devono vendere aggressivamente per coprire il rischio. "
-            "Effetto: accelerazione del ribasso."
-        )
-    with col2:
-        st.markdown(
-            "🟢 **Auto-Call Trigger** — Se BTC sale sopra questo livello, "
-            "la nota viene rimborsata e il dealer chiude l'hedge. "
-            "Effetto: pressione di vendita temporanea, poi rilascio."
-        )
-    with col3:
-        st.markdown(
-            "🔵 **Buffer Zone** — Zona di protezione parziale. "
-            "Il dealer modifica gradualmente il suo hedge qui. "
-            "Effetto: attrito sui movimenti, volatilità ridotta."
-        )
+    # Legenda colori condizionale (con conteggi reali)
+    type_counts: dict[str, int] = {}
+    type_notional: dict[str, float] = {}
+    for b in barriers:
+        t = b.get("barrier_type", "unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+        type_notional[t] = type_notional.get(t, 0) + (b.get("notional_usd") or 0)
 
-    if not barriers:
-        st.info(
-            "Nessuna barriera attiva nel DB. "
-            "Esegui `scripts/run_edgar.py` per scansionare i filing SEC e popolare il database."
+    has_any = False
+    if type_counts.get("knock_in", 0) > 0:
+        has_any = True
+        n = type_counts["knock_in"]
+        noz = type_notional.get("knock_in", 0) / 1e6
+        st.markdown(
+            f"🔴 **Knock-In** ({n} barriere, ${noz:,.0f}M nozionale) — "
+            "Rottura al ribasso → dealer vendono aggressivamente."
         )
+    if type_counts.get("autocall", 0) > 0:
+        has_any = True
+        n = type_counts["autocall"]
+        noz = type_notional.get("autocall", 0) / 1e6
+        st.markdown(
+            f"🟢 **Auto-Call** ({n} barriere, ${noz:,.0f}M nozionale) — "
+            "Superamento rialzo → rimborso nota + chiusura hedge."
+        )
+    if type_counts.get("buffer", 0) > 0:
+        has_any = True
+        n = type_counts["buffer"]
+        noz = type_notional.get("buffer", 0) / 1e6
+        st.markdown(
+            f"🔵 **Buffer Zone** ({n} barriere, ${noz:,.0f}M nozionale) — "
+            "Protezione parziale, hedging graduale."
+        )
+    if type_counts.get("knock_out", 0) > 0:
+        has_any = True
+        n = type_counts["knock_out"]
+        noz = type_notional.get("knock_out", 0) / 1e6
+        st.markdown(
+            f"🟣 **Knock-Out** ({n} barriere, ${noz:,.0f}M nozionale) — "
+            "Estinzione automatica al superamento."
+        )
+    if not has_any:
+        if not barriers:
+            st.info(
+                "Nessuna barriera attiva nel DB. "
+                "Esegui `scripts/run_edgar.py` per scansionare i filing SEC e popolare il database."
+            )
+        else:
+            st.info(
+                "Nessuna barriera con prezzo BTC calcolabile — "
+                "il ratio IBIT/BTC potrebbe non essere disponibile. "
+                "Esegui `make update-edgar` per ricalcolare i prezzi."
+            )
         return
 
     # Grafico barrier map
@@ -882,14 +931,9 @@ l'intensità dell'effetto. La linea verticale è il prezzo spot corrente.
 """)
     with col2:
         st.plotly_chart(gex_walls(snap), use_container_width=True)
-
-    # Metriche aggiuntive
-    st.subheader("Statistiche GEX")
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    mc1.metric("Gamma Flip", f"${snap.get('gamma_flip_price') or 0:,.0f}")
-    mc2.metric("Max Pain", f"${snap.get('max_pain') or 0:,.0f}")
-    mc3.metric("Put/Call OI", f"{snap.get('put_call_ratio') or 0:.2f}")
-    mc4.metric("Strumenti BTC", f"{snap.get('n_instruments') or 0}")
+        mc1, mc2 = st.columns(2)
+        mc1.metric("Max Pain", f"${snap.get('max_pain') or 0:,.0f}")
+        mc2.metric("Strumenti BTC", f"{snap.get('n_instruments') or 0}")
 
     # Expander tecnico
     with st.expander("🔬 Dettaglio tecnico: come calcoliamo il GEX"):
@@ -930,7 +974,8 @@ Sufficiente per identificare i regimi macro e le zone di concentrazione principa
                             f"Correlazione media GEX ↔ BTC Vol (rolling 30d): **{corr_mean:.3f}**"
                         )
             except Exception as e:
-                _log.debug("Regime analysis non disponibile: %s", e)
+                _log.warning("Regime analysis non disponibile: %s", e)
+                st.info("Regime analysis non disponibile: dati storici GEX insufficienti.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -968,7 +1013,7 @@ dal mercato ogni giorno. Il mercato include ora 10+ ETF spot BTC.
         ibit_col = merged_df["ibit_flow"].dropna()
         if not ibit_col.empty:
             today_flow = float(ibit_col.iloc[-1]) / 1e6
-        week_flow = float(ibit_col.last("7D").sum()) / 1e6 if not ibit_col.empty else 0.0
+        week_flow = float(ibit_col[ibit_col.index >= ibit_col.index.max() - pd.Timedelta(days=7)].sum()) / 1e6 if not ibit_col.empty else 0.0
 
     if "total_flow" in merged_df.columns:
         total_col = merged_df["total_flow"].dropna()
@@ -1003,40 +1048,40 @@ dal mercato ogni giorno. Il mercato include ora 10+ ETF spot BTC.
                     else:
                         n_outflow += 1
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric(
+    # KPI row a 3 colonne per leggibilità su tutti gli schermi
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
         "IBIT Flusso Oggi",
         f"${today_flow:+,.0f}M",
         help="Flusso netto IBIT nelle ultime 24h di trading",
     )
-    c2.metric(
+    col1.metric(
         "IBIT Flusso 7gg",
         f"${week_flow:+,.0f}M",
         help="Flusso netto cumulativo ultimi 7 giorni di borsa",
     )
-    c3.metric(
+    col2.metric(
         "Tutti gli ETF Oggi",
         f"${total_today:+,.0f}M",
         help="Flusso netto aggregato di tutti gli ETF spot BTC",
     )
-    c4.metric(
-        "ETF con Inflow",
-        str(n_inflow),
-        help=f"Numero di ETF con flusso positivo oggi (su {len(etf_tickers)})",
-    )
-    c5.metric(
-        "ETF con Outflow",
-        str(n_outflow),
-        help=f"Numero di ETF con flusso negativo oggi (su {len(etf_tickers)})",
-    )
-    c6.metric(
+    col2.metric(
         "Correlazione 30gg",
         f"{corr_30d:.2f}",
-        help="Correlazione rolling 30gg tra flussi IBIT e rendimenti BTC del giorno successivo. "
-        "Valori > 0.3 indicano potere predittivo.",
+        help="Correlazione rolling 30gg flussi IBIT ↔ BTC return next-day",
+    )
+    col3.metric(
+        "ETF con Inflow",
+        str(n_inflow),
+        help=f"ETF con flusso positivo oggi (su {len(etf_tickers)})",
+    )
+    col3.metric(
+        "ETF con Outflow",
+        str(n_outflow),
+        help=f"ETF con flusso negativo oggi (su {len(etf_tickers)})",
     )
 
-    # Per-ticker KPI strip
+    # Per-ticker KPI strip (layout a griglia adattivo)
     if etf_tickers:
         st.markdown(
             f"""
@@ -1047,14 +1092,20 @@ dal mercato ogni giorno. Il mercato include ora 10+ ETF spot BTC.
 """,
             unsafe_allow_html=True,
         )
-        cols = st.columns(min(len(etf_tickers), 6))
-        for i, tk in enumerate(etf_tickers):
-            col = f"{tk.lower()}_flow"
-            if col in merged_df.columns:
-                last_val = merged_df[col].dropna()
-                if not last_val.empty:
-                    val_m = float(last_val.iloc[-1]) / 1e6
-                    cols[i % 6].metric(tk, f"${val_m:+,.0f}M")
+        cols_per_row = 6
+        for row_start in range(0, len(etf_tickers), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for i in range(cols_per_row):
+                idx = row_start + i
+                if idx >= len(etf_tickers):
+                    break
+                tk = etf_tickers[idx]
+                col = f"{tk.lower()}_flow"
+                if col in merged_df.columns:
+                    last_val = merged_df[col].dropna()
+                    if not last_val.empty:
+                        val_m = float(last_val.iloc[-1]) / 1e6
+                        cols[i].metric(tk, f"${val_m:+,.0f}M")
 
     # Alert contestuale flussi
     if "ibit_flow_3d" in merged_df.columns:
@@ -1122,7 +1173,7 @@ Verde = inflow, Rosso = outflow. Utile per vedere quale emittente guida il fluss
 
     # Riepilogo 30gg
     st.subheader("Riepilogo ultimi 30 giorni")
-    r30 = merged_df.last("30D")
+    r30 = merged_df[merged_df.index >= merged_df.index.max() - pd.Timedelta(days=30)]
     rc1, rc2, rc3 = st.columns(3)
     if "ibit_flow" in r30.columns:
         total_30 = r30["ibit_flow"].sum() / 1e6
@@ -1206,7 +1257,16 @@ performance futura.
 
     # Calcola il segnale composito (stessa logica di /api/signals)
     macro = load_macro()
-    result = compute_composite(snap, merged_df, barriers, macro)
+    try:
+        result = compute_composite(snap, merged_df, barriers, macro)
+    except Exception as e:
+        _log.warning("compute_composite fallito: %s", e)
+        st.warning(f"Segnale composito temporaneamente non disponibile: {e}")
+        st.info(
+            "Verifica che i dati GEX, flussi e barriere siano caricati. "
+            "Se il problema persiste, prova il refresh manuale dalla sidebar."
+        )
+        return
     signal = result.signal
     pillars = [
         {"name": p.name, "score": p.score, "weight": p.weight, "reason": p.reason}
@@ -1461,31 +1521,42 @@ Un pattern non casuale (con asterischi ***) suggerisce un effetto meccanico real
 
 
 def main() -> None:
-    # ── Caricamento dati ──────────────────────────────────────────────────────
-    with st.spinner("Carico GEX live da Deribit..."):
-        try:
-            snap, gex_by_strike = load_gex()
-        except Exception as e:
-            st.warning(f"GEX non disponibile: {e}")
-            snap = {"spot_price": 0, "total_net_gex": 0, "regime": "unknown", "alerts": []}
-            gex_by_strike = []
+    # ── Caricamento dati parallelo ────────────────────────────────────────────
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    with st.spinner("Carico prezzi e flussi ETF..."):
-        try:
-            merged_df = load_prices_and_flows()
-        except Exception as e:
-            st.error(f"Errore caricamento prezzi/flussi: {e}")
-            merged_df = pd.DataFrame()
+    snap: dict = {"spot_price": 0, "total_net_gex": 0, "regime": "unknown", "alerts": []}
+    gex_by_strike: list[dict] = []
+    merged_df = pd.DataFrame()
+    barriers: list[dict] = []
 
-    with st.spinner("Carico barriere EDGAR..."):
-        try:
-            barriers = load_barriers()
-        except Exception as e:
-            st.warning(f"Barriere non disponibili: {e}")
-            barriers = []
+    with st.spinner("Caricamento dati in parallelo (GEX · Flussi · Barriere)..."):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(load_gex): "gex",
+                pool.submit(load_prices_and_flows): "flows",
+                pool.submit(load_barriers): "barriers",
+            }
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    if key == "gex":
+                        st.warning(f"GEX non disponibile: {e}")
+                    elif key == "flows":
+                        st.error(f"Errore caricamento prezzi/flussi: {e}")
+                    else:
+                        st.warning(f"Barriere non disponibili: {e}")
+                    continue
+                if key == "gex":
+                    snap, gex_by_strike = result
+                elif key == "flows":
+                    merged_df = result
+                else:
+                    barriers = result
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
-    manual_refresh = _sidebar(snap, merged_df)
+    manual_refresh = _sidebar(snap, merged_df, barriers)
 
     if manual_refresh:
         for fn in [
@@ -1493,6 +1564,7 @@ def main() -> None:
             load_gex,
             load_barriers,
             load_db_summary,
+            load_macro,
             run_granger,
             run_regime,
             run_backtest,

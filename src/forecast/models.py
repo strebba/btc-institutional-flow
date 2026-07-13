@@ -78,6 +78,7 @@ class Prediction:
     score_ref: Optional[float] = None
     components: dict[str, Optional[float]] = field(default_factory=dict)
     weights_version: Optional[int] = None
+    model_version: str = "v1"
     status: str = STATUS_OPEN
     id: Optional[int] = None
 
@@ -117,6 +118,7 @@ class Prediction:
             "score_ref": self.score_ref,
             "components": json.dumps(self.components, ensure_ascii=False),
             "weights_version": self.weights_version,
+            "model_version": self.model_version,
             "status": self.status,
         }
 
@@ -137,6 +139,7 @@ class Prediction:
             score_ref=row.get("score_ref"),
             components=json.loads(row["components"]) if row.get("components") else {},
             weights_version=row.get("weights_version"),
+            model_version=row.get("model_version") or "v1",
             status=row.get("status", STATUS_OPEN),
         )
 

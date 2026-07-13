@@ -21,6 +21,26 @@ _log = setup_logging("edgar.db")
 
 # ─── DDL ─────────────────────────────────────────────────────────────────────
 
+_DDL_BARRIER_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS barrier_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    barrier_id      INTEGER NOT NULL,
+    level_price_btc REAL,
+    level_price_ibit REAL,
+    status          TEXT    DEFAULT 'active',
+    notional_usd    REAL,
+    issuer          TEXT,
+    barrier_type    TEXT,
+    snapshot_date   TEXT    NOT NULL DEFAULT (date('now')),
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(barrier_id, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_barrier_snapshots_date
+    ON barrier_snapshots(snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_barrier_snapshots_barrier
+    ON barrier_snapshots(barrier_id);
+"""
+
 _DDL_NOTES = """
 CREATE TABLE IF NOT EXISTS notes (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,7 +127,7 @@ class StructuredNotesDB:
     def _init_schema(self) -> None:
         """Crea le tabelle, gli indici e applica le migrazioni incrementali."""
         with self._conn() as conn:
-            conn.executescript(_DDL_NOTES + _DDL_BARRIERS + _DDL_IDX)
+            conn.executescript(_DDL_NOTES + _DDL_BARRIERS + _DDL_BARRIER_SNAPSHOTS + _DDL_IDX)
             self._migrate(conn)
         _log.info("Schema inizializzato: %s", self._path)
 
@@ -131,6 +151,11 @@ class StructuredNotesDB:
                 conn.execute("ALTER TABLE notes ADD COLUMN is_preliminary INTEGER DEFAULT 0")
             conn.execute("PRAGMA user_version = 2")
             _log.debug("DB migrato a versione 2 (is_preliminary)")
+        if ver < 3:
+            # v3: tabella barrier_snapshots per storico barriere
+            conn.executescript(_DDL_BARRIER_SNAPSHOTS)
+            conn.execute("PRAGMA user_version = 3")
+            _log.debug("DB migrato a versione 3 (barrier_snapshots)")
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -527,6 +552,79 @@ class StructuredNotesDB:
             "by_product_type": by_type,
             "by_issuer": by_issuer,
         }
+
+    # ─── Barrier snapshots (historical tracking) ───────────────────────────────
+
+    def snapshot_active_barriers(self) -> int:
+        """Salva un'istantanea delle barriere attive correnti in ``barrier_snapshots``.
+
+        Chiamato giornalmente dal cron per costruire lo storico barriere
+        necessario al backtest accurato del pilastro Barrier.
+
+        Returns:
+            int: numero di barriere salvate nello snapshot.
+        """
+        active = self.get_active_barriers()
+        if not active:
+            return 0
+
+        today = date.today().isoformat()
+        now = self._now()
+        inserted = 0
+        with self._conn() as conn:
+            for b in active:
+                try:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO barrier_snapshots
+                            (barrier_id, level_price_btc, level_price_ibit, status,
+                             notional_usd, issuer, barrier_type, snapshot_date, created_at)
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            b.get("id"), b.get("level_price_btc"),
+                            b.get("level_price_ibit"), b.get("status", "active"),
+                            b.get("notional_usd"), b.get("issuer"),
+                            b.get("barrier_type"), today, now,
+                        ),
+                    )
+                    inserted += 1
+                except Exception:
+                    pass
+        _log.info("Snapshot barriere: %d barriere salvate per %s", inserted, today)
+        return inserted
+
+    def get_barrier_history(self, days: int = 365) -> pd.DataFrame:
+        """Restituisce lo storico delle barriere attive giornaliere.
+
+        Args:
+            days: numero di giorni passati da includere.
+
+        Returns:
+            DataFrame con colonne: snapshot_date, barrier_id, level_price_btc,
+            issuer, barrier_type, notional_usd. Indice DatetimeIndex.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT snapshot_date, barrier_id, level_price_btc, issuer,
+                       barrier_type, notional_usd
+                FROM barrier_snapshots
+                WHERE snapshot_date >= date('now', ?)
+                ORDER BY snapshot_date ASC, barrier_id ASC
+                """,
+                (f"-{days}",),
+            ).fetchall()
+
+        if not rows:
+            return pd.DataFrame(
+                columns=["snapshot_date", "barrier_id", "level_price_btc",
+                         "issuer", "barrier_type", "notional_usd"],
+            )
+
+        df = pd.DataFrame([dict(r) for r in rows])
+        df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
+        return df
 
 
 # ─── BTC price backfill helper ────────────────────────────────────────────────

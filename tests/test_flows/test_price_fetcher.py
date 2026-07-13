@@ -36,7 +36,7 @@ class TestStoreDf:
     def test_idempotent(self, fetcher, sample_df):
         fetcher._store_df("BTC-USD", sample_df)
         n2 = fetcher._store_df("BTC-USD", sample_df)
-        assert n2 == 0  # INSERT OR IGNORE → 0 nuove righe
+        assert n2 == len(sample_df)  # UPSERT: ogni riga esistente viene aggiornata
 
     def test_daily_return_computed(self, fetcher, sample_df):
         fetcher._store_df("BTC-USD", sample_df)

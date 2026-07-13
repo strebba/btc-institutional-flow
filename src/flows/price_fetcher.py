@@ -125,9 +125,13 @@ class PriceFetcher:
                 try:
                     cur = conn.execute(
                         """
-                        INSERT OR IGNORE INTO prices
+                        INSERT INTO prices
                             (ticker, date, open, high, low, close, volume, daily_return, created_at)
                         VALUES (?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(ticker, date) DO UPDATE SET
+                            open=excluded.open, high=excluded.high, low=excluded.low,
+                            close=excluded.close, volume=excluded.volume,
+                            daily_return=excluded.daily_return, created_at=excluded.created_at
                         """,
                         (
                             ticker, d.isoformat(),

@@ -64,6 +64,7 @@ def build_dealer_flow_predictions(
     asset: str = "BTC",
     created_at: Optional[str] = None,
     weights_version: Optional[int] = None,
+    model_version: str = "v1",
 ) -> list[Prediction]:
     """Costruisce le previsioni dealer-flow da un SignalResult e dai livelli GEX."""
     if not spot_price or spot_price <= 0:
@@ -77,6 +78,7 @@ def build_dealer_flow_predictions(
         score_ref=result.score,
         components=result.components,
         weights_version=weights_version,
+        model_version=model_version,
     )
     if created_at is not None:
         common["created_at"] = created_at

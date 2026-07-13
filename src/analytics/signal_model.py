@@ -344,9 +344,11 @@ class SignalModel:
 
         Returns:
             pd.Series di score float (0-100) con stesso DatetimeIndex di df.
-        """
-        scores = pd.Series(50.0, index=df.index, dtype=float)
 
+        Note:
+            Per backtest ad alte performance, preferire ``CompositeSignal.compute_series()``
+            che è completamente vettorializzato (operazioni NumPy native).
+        """
         def _col(name: str, *aliases: str) -> Optional[pd.Series]:
             for n in (name, *aliases):
                 if n in df.columns:
@@ -363,7 +365,7 @@ class SignalModel:
         liq_s_s    = _col("liquidations_short_24h")
         granger_s  = _col("granger_lead_flow", "ibit_flow_5d_ago")
 
-        for i in range(len(df)):
+        def _compute_row(i: int) -> float:
             inputs = SignalInputs(
                 gex_usd                     = float(gex_s.iloc[i])      if gex_s     is not None and not _isnan(gex_s.iloc[i])     else None,
                 etf_flow_3d_usd             = float(flow_s.iloc[i])     if flow_s    is not None and not _isnan(flow_s.iloc[i])    else None,
@@ -375,9 +377,14 @@ class SignalModel:
                 liquidations_short_24h_usd  = float(liq_s_s.iloc[i])   if liq_s_s   is not None and not _isnan(liq_s_s.iloc[i])   else None,
                 granger_lead_flow_usd       = float(granger_s.iloc[i])  if granger_s is not None and not _isnan(granger_s.iloc[i]) else None,
             )
-            result = self.compute(inputs)
-            scores.iloc[i] = result.score
+            return self.compute(inputs).score
 
+        scores = pd.Series(
+            [_compute_row(i) for i in range(len(df))],
+            index=df.index,
+            dtype=float,
+        )
+        scores = scores.fillna(50.0)
         return scores
 
     def score_to_signal(self, score: float) -> str:

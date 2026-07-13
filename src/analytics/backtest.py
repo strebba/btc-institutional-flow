@@ -79,6 +79,7 @@ class Backtest:
         merged_df: pd.DataFrame,
         gex_series: Optional[pd.Series] = None,
         active_barriers: Optional[list[dict]] = None,
+        barrier_history: Optional[pd.DataFrame] = None,
         signal_model: Optional["SignalModel"] = None,
         composite: Optional["CompositeSignal"] = None,
     ) -> pd.Series:
@@ -129,7 +130,9 @@ class Backtest:
         # ── Modalità Composite (4 pilastri) ────────────────────────────────────
         # Le barriere sono un PILASTRO pesato: nessun override/veto separato.
         if composite is not None:
-            scores = composite.compute_series(df, active_barriers=active_barriers)["composite_score"]
+            scores = composite.compute_series(
+                df, active_barriers=active_barriers, barrier_history=barrier_history,
+            )["composite_score"]
             signals = composite.signals_from_scores(scores)
             _log.info(
                 "Composite — long=%d, risk_off=%d, flat=%d",
@@ -270,6 +273,7 @@ class Backtest:
         merged_df: pd.DataFrame,
         gex_series: Optional[pd.Series] = None,
         active_barriers: Optional[list[dict]] = None,
+        barrier_history: Optional[pd.DataFrame] = None,
         signal_model: Optional["SignalModel"] = None,
         composite: Optional["CompositeSignal"] = None,
     ) -> dict[str, BacktestMetrics]:
@@ -278,7 +282,9 @@ class Backtest:
         Args:
             merged_df: DataFrame con btc_return, ibit_flow, btc_close.
             gex_series: serie GEX totale (opzionale).
-            active_barriers: barriere attive dal DB (opzionale).
+            active_barriers: barriere attive dal DB (opzionale, fallback).
+            barrier_history: storico barriere da StructuredNotesDB (opzionale,
+                prioritario su active_barriers per backtest accurato).
             signal_model: SignalModel per scoring multi-fattore (opzionale).
             composite: CompositeSignal a 4 pilastri (opzionale, ha priorità).
                 Se né composite né signal_model sono forniti usa le regole legacy.
@@ -293,7 +299,7 @@ class Backtest:
 
         # Genera segnali (lag=1 per evitare look-ahead bias)
         signals = self._generate_signals(
-            df, gex_series, active_barriers, signal_model, composite
+            df, gex_series, active_barriers, barrier_history, signal_model, composite
         )
         signals_lagged = signals.shift(1).fillna(0)
 

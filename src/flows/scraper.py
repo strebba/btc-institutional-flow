@@ -98,6 +98,61 @@ def _parse_farside_date(text: str, year_hint: int = 2024) -> Optional[date]:
         return None
 
 
+def _get_ibit_shares_outstanding() -> int:
+    """Recupera le quote in circolazione IBIT per il fallback yfinance.
+
+    Ordine di priorità:
+      1. EDGAR N-PORT (filing SEC ufficiale) — più preciso
+      2. yfinance Ticker.info — gratuito, aggiornato in tempo reale
+      3. 50M — fallback conservativo
+
+    Il valore viene cache-ato per 7 giorni (le quote cambiano lentamente).
+    """
+    import time as _time
+    import yfinance as _yf
+
+    now = _time.time()
+    if (
+        _get_ibit_shares_outstanding._cached_at
+        and (now - _get_ibit_shares_outstanding._cached_at) < 7 * 86400
+        and _get_ibit_shares_outstanding._cached_val
+    ):
+        return _get_ibit_shares_outstanding._cached_val
+
+    shares = 0
+
+    # 1) EDGAR N-PORT (dato ufficiale SEC)
+    try:
+        from src.flows.edgar_nport import get_latest_shares_outstanding
+        val = get_latest_shares_outstanding()
+        if val and val > 0:
+            shares = int(val)
+    except Exception:
+        pass
+
+    # 2) yfinance (sempre disponibile)
+    if not shares:
+        try:
+            info = _yf.Ticker("IBIT").info
+            val = info.get("sharesOutstanding")
+            if val and val > 0:
+                shares = int(val)
+        except Exception:
+            pass
+
+    # 3) Fallback conservativo
+    if not shares:
+        shares = 50_000_000
+
+    _get_ibit_shares_outstanding._cached_at = now
+    _get_ibit_shares_outstanding._cached_val = shares
+    return shares
+
+
+_get_ibit_shares_outstanding._cached_at = 0.0  # type: ignore[attr-defined]
+_get_ibit_shares_outstanding._cached_val = 0  # type: ignore[attr-defined]
+
+
 class FarsideScraper:
     """Scarica e parsa i flussi ETF Bitcoin da Farside Investors.
 
@@ -338,9 +393,10 @@ class FarsideScraper:
           - IBIT sovraperforma BTC → pressione acquisto → inflow
           - IBIT sottoperforma BTC → pressione vendita → outflow
 
-        ``flow ≈ (ibit_ret - btc_ret) × (close × 50_000_000) × 0.5``
+        ``flow ≈ (ibit_ret - btc_ret) × (close × shares_outstanding) × 0.5``
 
-        Se il download di BTC-USD fallisce, ritorna lista vuota
+        shares_outstanding è recuperato in ordine da: EDGAR N-PORT (SEC, ufficiale)
+        → yfinance → fallback 50M.
         piuttosto che produrre dati spurii.
 
         Returns:
@@ -374,7 +430,9 @@ class FarsideScraper:
             ibit_ret = ibit_df["Close"].pct_change()
             btc_ret  = btc_df["Close"].reindex(ibit_df.index).pct_change()
 
-            shares_outstanding = 50_000_000  # stima quote IBIT in circolazione
+            # ── shares_outstanding dinamico ──────────────────────────────────
+            # Ordine: 1) EDGAR N-PORT (ufficiale SEC)  2) yfinance  3) hardcoded
+            shares_outstanding = _get_ibit_shares_outstanding()
 
             flows: list[EtfFlowData] = []
             for idx in ibit_df.index[1:]:

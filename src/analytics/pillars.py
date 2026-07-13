@@ -508,6 +508,7 @@ class CompositeSignal:
         self,
         df: pd.DataFrame,
         active_barriers: Optional[list[dict]] = None,
+        barrier_history: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Calcola i sotto-score dei pilastri per ogni giorno + il composito.
 
@@ -515,8 +516,8 @@ class CompositeSignal:
           GEX:    total_net_gex | _gex | total_gex
           ETF:    total_flow_usd | total_flow, btc_close, btc_vol_7d
           MACRO:  funding_rate, oi_usd | oi_change_7d_pct, long_short_ratio
-        Barrier: applica le barriere correnti (active_barriers) su btc_close storico
-                 (limitazione: storico barriere non disponibile).
+        Barrier: usa ``barrier_history`` (storico) se fornito, altrimenti applica
+        ``active_barriers`` (correnti) su tutto lo storico prezzi.
 
         Returns:
             DataFrame con colonne gex_score, barrier_score, etf_flows_score,
@@ -564,8 +565,8 @@ class CompositeSignal:
             macro_parts["long_short"] = _ifi._score_ls_squeeze(ls)
         out["macro_score"] = self._weighted_row(macro_parts, MACRO_FACTOR_WEIGHTS) * 100
 
-        # BARRIER (barriere correnti su prezzo storico)
-        out["barrier_score"] = self._barrier_series(btc_close, active_barriers)
+        # BARRIER (barriere correnti o storico su prezzo storico)
+        out["barrier_score"] = self._barrier_series(btc_close, active_barriers, barrier_history)
 
         # Composito: blend pesato per riga con rescaling sui pilastri disponibili
         pillar_scores = out[["gex_score", "barrier_score", "etf_flows_score", "macro_score"]] / 100
@@ -591,18 +592,77 @@ class CompositeSignal:
         self,
         btc_close: Optional[pd.Series],
         active_barriers: Optional[list[dict]],
+        barrier_history: Optional[pd.DataFrame] = None,
     ) -> pd.Series:
-        """Serie del barrier score applicando le barriere correnti al prezzo storico."""
+        """Serie del barrier score: barriere correnti o storico su prezzo storico.
+
+        Args:
+            btc_close: serie prezzi BTC.
+            active_barriers: barriere attive correnti (usate se manca storico).
+            barrier_history: storico barriere da StructuredNotesDB.get_barrier_history().
+                Se fornito, per ogni data storica recupera le barriere attive in quel
+                giorno invece di applicare quelle correnti.
+
+        Returns:
+            Serie 0-100 con stesso indice di btc_close.
+        """
         if btc_close is None:
             return pd.Series(dtype=float)
-        if not active_barriers:
+        if not active_barriers and barrier_history is None:
             return pd.Series(50.0, index=btc_close.index)
+
+        # Se abbiamo lo storico, per ogni data recuperiamo le barriere di quel giorno
+        if barrier_history is not None and not barrier_history.empty:
+            return self._barrier_series_from_history(btc_close, barrier_history)
+
+        # Fallback: barriere correnti su tutto lo storico
         return btc_close.apply(
             lambda p: (
                 score_barrier_pillar(active_barriers=active_barriers, spot_price=float(p)).score
                 if pd.notna(p) and p > 0 else np.nan
             )
         )
+
+    def _barrier_series_from_history(
+        self,
+        btc_close: pd.Series,
+        barrier_history: pd.DataFrame,
+    ) -> pd.Series:
+        """Calcola il barrier score usando lo storico barriere per ogni data."""
+        # Raggruppa barriere per snapshot_date
+        history_by_date: dict[pd.Timestamp, list[dict]] = {}
+        for _, row in barrier_history.iterrows():
+            d = row["snapshot_date"]
+            history_by_date.setdefault(d, []).append({
+                "barrier_type": row["barrier_type"],
+                "level_price_btc": row["level_price_btc"],
+                "notional_usd": row["notional_usd"],
+                "issuer": row["issuer"],
+            })
+
+        scores = pd.Series(np.nan, index=btc_close.index, dtype=float)
+        for ts, price in btc_close.items():
+            if pd.isna(price) or price <= 0:
+                continue
+            # Cerca la data di snapshot più vicina (entro 1 giorno)
+            if ts in history_by_date:
+                barriers = history_by_date[ts]
+            else:
+                # Nearest neighbor: giorno prima o dopo
+                candidates = sorted(history_by_date.keys())
+                nearest = min(candidates, key=lambda d: abs((d - ts).days), default=None)
+                if nearest is None or abs((nearest - ts).days) > 1:
+                    scores[ts] = 50.0
+                    continue
+                barriers = history_by_date[nearest]
+
+            if barriers:
+                result = score_barrier_pillar(active_barriers=barriers, spot_price=float(price))
+                scores[ts] = result.score if result.score is not None else 50.0
+            else:
+                scores[ts] = 50.0
+
+        return scores.fillna(50.0)
 
     def signals_from_scores(self, scores: pd.Series) -> pd.Series:
         """Converte score 0-100 in segnali +1/0/-1 (riusa la convenzione signal_model)."""

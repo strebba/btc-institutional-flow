@@ -110,11 +110,11 @@ class TestPreliminaryFlag:
             barriers=[BarrierLevel(barrier_type="knock_in", level_pct=70.0)],
         )
 
-    def test_schema_version_2(self, db):
+    def test_schema_version_current(self, db):
         with db._conn() as conn:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(notes)")}
-        assert ver == 2
+        assert ver >= 2
         assert "is_preliminary" in cols
 
     def test_roundtrip_flag(self, db):

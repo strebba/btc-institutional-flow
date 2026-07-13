@@ -91,10 +91,12 @@ def detect_clusters(
     spot_price: float,
     proximity_pct: Optional[float] = None,
 ) -> list[BarrierCluster]:
-    """Raggruppa barriere vicine tra loro in cluster.
+    """Raggruppa barriere vicine tra loro in cluster (deterministico).
 
-    Ogni barriera viene assegnata al primo cluster il cui prezzo medio
-    dista meno di ``proximity_pct``% dal suo ``level_price_btc``.
+    Algoritmo: ordina le barriere per prezzo, poi esegue una scansione
+    lineare. Barriere adiacenti con distanza < ``proximity_pct``% (rispetto
+    al prezzo medio) vengono fuse nello stesso cluster. L'algoritmo è
+    deterministico e non dipende dall'ordine di input.
 
     Args:
         barriers: lista di dict da StructuredNotesDB.get_active_barriers().
@@ -112,19 +114,25 @@ def detect_clusters(
     valid = [b for b in barriers if (b.get("level_price_btc") or 0) > 0]
     valid.sort(key=lambda b: b["level_price_btc"])
 
-    clusters: list[list[dict]] = []
+    if not valid:
+        return []
 
-    for b in valid:
-        price = b["level_price_btc"]
-        placed = False
-        for cl in clusters:
-            mean_p = sum(c["level_price_btc"] for c in cl) / len(cl)
-            if mean_p > 0 and abs(price - mean_p) / mean_p * 100 < pct:
-                cl.append(b)
-                placed = True
-                break
-        if not placed:
-            clusters.append([b])
+    # Scansione lineare: barriere adiacenti entro pct% → stesso cluster
+    clusters: list[list[dict]] = []
+    current = [valid[0]]
+
+    for i in range(1, len(valid)):
+        prev_price = valid[i - 1]["level_price_btc"]
+        curr_price = valid[i]["level_price_btc"]
+        mid = (prev_price + curr_price) / 2
+
+        if mid > 0 and abs(curr_price - prev_price) / mid * 100 < pct:
+            current.append(valid[i])
+        else:
+            clusters.append(current)
+            current = [valid[i]]
+
+    clusters.append(current)
 
     result: list[BarrierCluster] = []
     for cl in clusters:

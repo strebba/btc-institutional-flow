@@ -204,7 +204,8 @@ def run_calibration(db, source: str = DEALER_FLOW, *, days: int = 180,
     priors = cfg.get("priors", dict(DEFAULT_WEIGHTS))
     min_scored = int(cfg.get("calibration", {}).get("min_scored", 30))
 
-    rows = db.get_with_outcomes(days=days, source=source)
+    model_version = cfg.get("governance", {}).get("model_version", "v1")
+    rows = db.get_with_outcomes(days=days, source=source, model_version=model_version)
     metrics = compute_source_metrics(rows)
 
     active_pair = db.get_active_weights(source)

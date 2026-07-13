@@ -174,26 +174,34 @@ class GexCalculator:
         """Trova il prezzo di gamma flip (dove il GEX cumulativo cambia segno).
 
         Il gamma flip è calcolato cumulando il GEX dagli strike più bassi
-        verso quelli più alti e cercando il cambio di segno.
+        verso quelli più alti e cercando il cambio di segno. Quando il segno
+        cambia tra due strike, viene interpolato linearmente per maggiore
+        precisione.
 
         Args:
             gex_by_strike: lista di GexByStrike ordinata per strike crescente.
 
         Returns:
-            float | None: strike del gamma flip.
+            float | None: prezzo interpolato del gamma flip.
         """
         if not gex_by_strike:
             return None
 
         cumulative = 0.0
-        prev_sign  = None
+        prev_sign = None
+        last_strike = gex_by_strike[0].strike if gex_by_strike else None
 
         for gs in gex_by_strike:
+            prev_cum = cumulative
             cumulative += gs.net_gex
-            curr_sign   = 1 if cumulative >= 0 else -1
+            curr_sign = 1 if cumulative >= 0 else -1
             if prev_sign is not None and curr_sign != prev_sign:
+                if abs(prev_cum) + abs(cumulative) > 0:
+                    ratio = abs(prev_cum) / (abs(prev_cum) + abs(cumulative))
+                    return last_strike + (gs.strike - last_strike) * ratio
                 return gs.strike
             prev_sign = curr_sign
+            last_strike = gs.strike
 
         return None
 

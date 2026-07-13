@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     score_ref        REAL,
     components       TEXT,                   -- JSON componenti normalizzate
     weights_version  INTEGER,
+    model_version    TEXT NOT NULL DEFAULT 'v1',
     status           TEXT NOT NULL DEFAULT 'open',
     UNIQUE(created_at, source, target_type, horizon_days)
 );
@@ -77,7 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_wv_source_active ON weight_versions(source, activ
 _PRED_COLS = (
     "created_at, date, source, asset, target_type, target_spec, horizon_days, "
     "confidence, rationale, counter_analysis, human_overlay, score_ref, "
-    "components, weights_version, status"
+    "components, weights_version, model_version, status"
 )
 
 
@@ -116,6 +117,17 @@ class PredictionDB:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_wv_source_status ON weight_versions(source, status)"
             )
+            # Migrazione: aggiunge model_version e classifica retroattivamente le predizioni
+            # prodotte con modelli precedenti (v0=7 componenti, v0b=barrier_confluence transitorio).
+            pred_cols = {r["name"] for r in conn.execute("PRAGMA table_info(predictions)")}
+            if "model_version" not in pred_cols:
+                conn.execute(
+                    "ALTER TABLE predictions ADD COLUMN model_version TEXT NOT NULL DEFAULT 'v1'"
+                )
+                conn.execute("UPDATE predictions SET model_version = 'v0' WHERE id <= 8")
+                conn.execute(
+                    "UPDATE predictions SET model_version = 'v0b' WHERE id BETWEEN 9 AND 11"
+                )
             # Dedup per-GIORNO: un solo set (source, target_type, horizon) per data.
             # Evita doppioni quando run manuale e schedulato girano lo stesso giorno o al riavvio.
             conn.execute(
@@ -180,8 +192,17 @@ class PredictionDB:
             ).fetchall()
         return [Prediction.from_row(dict(r)) for r in rows]
 
-    def get_with_outcomes(self, days: int = 180, source: Optional[str] = None) -> list[dict]:
-        """Join predictions+outcomes (left) per la calibrazione e i report."""
+    def get_with_outcomes(
+        self,
+        days: int = 180,
+        source: Optional[str] = None,
+        model_version: Optional[str] = None,
+    ) -> list[dict]:
+        """Join predictions+outcomes (left) per la calibrazione e i report.
+
+        model_version: se specificato, filtra per escludere predizioni di modelli eterogenei
+        (es. 'v1' per usare solo dati prodotti con il SignalModel a 8 componenti).
+        """
         q = (
             "SELECT p.*, o.hit, o.realized_return, o.realized_price, o.signed_error, "
             "       o.brier, o.detail AS outcome_detail, o.scored_at "
@@ -192,6 +213,9 @@ class PredictionDB:
         if source:
             q += "AND p.source = ? "
             params.append(source)
+        if model_version:
+            q += "AND p.model_version = ? "
+            params.append(model_version)
         q += "ORDER BY p.created_at ASC"
         with self._conn() as conn:
             rows = conn.execute(q, params).fetchall()

@@ -97,7 +97,12 @@ def barrier_map(barriers: list[dict], spot_price: float) -> go.Figure:
 
     fig = go.Figure()
 
-    for b in barriers:
+    # Assegna a ogni barriera una posizione x unica per evitare sovrapposizione
+    # (l'asse x è nascosto, serve solo a separare le linee visualmente)
+    n = len(barriers)
+    spacing = 1.0 / max(n, 1)
+
+    for i, b in enumerate(barriers):
         level = b.get("level_price_btc") or 0.0
         if level <= 0:
             continue
@@ -109,10 +114,12 @@ def barrier_map(barriers: list[dict], spot_price: float) -> go.Figure:
         color = color_map.get(btype, _TEXT)
         # Line width proportional to notional size (1–4 px)
         width = max(1.5, min(4.0, 1.5 + notional / 50e6))
+        x0 = i * spacing
+        x1 = (i + 0.85) * spacing  # 85% della cella, lascia spazio tra barriere
 
         fig.add_trace(
             go.Scatter(
-                x=[0, 1],
+                x=[x0, x1],
                 y=[level, level],
                 mode="lines",
                 line=dict(color=color, width=width, dash="dot" if btype == "buffer" else "solid"),
@@ -574,25 +581,28 @@ def flows_stacked_chart(merged_df: pd.DataFrame, etf_tickers: list[str]) -> go.F
     """
     fig = go.Figure()
 
+    # Colori noti per branding, fallback a cycle automatico
+    from plotly.colors import qualitative
+    _cycle = qualitative.Plotly
     colors_map = {
         "IBIT": _POS,
-        "FBTC": "#0052FF",
-        "GBTC": "#6C5CE7",
-        "BITB": "#F39C12",
-        "ARKB": "#E74C3C",
-        "BTCO": "#1ABC9C",
-        "EZBC": "#3498DB",
-        "BRRR": "#9B59B6",
-        "HODL": "#E67E22",
-        "BTCW": "#2ECC71",
+        "FBTC": _cycle[0],
+        "GBTC": _cycle[1],
+        "BITB": _cycle[2],
+        "ARKB": _cycle[3],
+        "BTCO": _cycle[4],
+        "EZBC": _cycle[5],
+        "BRRR": _cycle[6],
+        "HODL": _cycle[7],
+        "BTCW": _cycle[8],
     }
 
-    for tk in etf_tickers:
+    for i, tk in enumerate(etf_tickers):
         col = f"{tk.lower()}_flow"
         if col not in merged_df.columns:
             continue
         series = merged_df[col].fillna(0) / 1e6
-        color = colors_map.get(tk, _MUTED)
+        color = colors_map.get(tk, _cycle[i % len(_cycle)])
         fig.add_trace(
             go.Bar(
                 x=series.index,
@@ -605,14 +615,14 @@ def flows_stacked_chart(merged_df: pd.DataFrame, etf_tickers: list[str]) -> go.F
 
     fig.add_hline(y=0, line_dash="dot", line_color=_GRID)
     fig.update_layout(
+        **_LAYOUT_BASE,
         title="Flussi ETF Bitcoin per Emittente (M$)",
         barmode="relative",
         height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis=_axis_style(),
         yaxis=_axis_style(title="Flusso (M$)"),
-        **_LAYOUT_BASE,
     )
+    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig
 
 
@@ -823,9 +833,6 @@ def event_study_car(event_results: list) -> Optional[go.Figure]:
             continue
         color = colors[i % len(colors)]
         car_vals = [res.car_by_day.get(d, 0.0) for d in days]
-        ci_spread = (res.ci_upper - res.ci_lower) / 2
-        ci_upper = [v + ci_spread for v in car_vals]
-        ci_lower = [v - ci_spread for v in car_vals]
         label = f"{res.barrier_type} (n={res.n_events})"
         if res.significant:
             label += " ***"
@@ -839,17 +846,21 @@ def event_study_car(event_results: list) -> Optional[go.Figure]:
                 line=dict(color=color, width=2),
             )
         )
-        fig.add_trace(
-            go.Scatter(
-                x=days + days[::-1],
-                y=ci_upper + ci_lower[::-1],
-                fill="toself",
-                fillcolor=color,
-                opacity=0.15,
-                line=dict(color="rgba(0,0,0,0)"),
-                showlegend=False,
+        # Error bar al giorno finale (±1.96 SE, 95% CI)
+        if res.n_events >= 2 and res.car_std > 0 and res.ci_upper > res.ci_lower:
+            fig.add_trace(
+                go.Scatter(
+                    x=[w, w],
+                    y=[res.ci_lower, res.ci_upper],
+                    mode="lines",
+                    line=dict(color=color, width=3),
+                    showlegend=False,
+                    hovertemplate=(
+                        f"95% CI: [{res.ci_lower:.4f}, {res.ci_upper:.4f}]"
+                        f"<extra></extra>"
+                    ),
+                )
             )
-        )
 
     fig.add_hline(y=0, line_dash="dash", line_color=_BORDER)
     fig.add_vline(

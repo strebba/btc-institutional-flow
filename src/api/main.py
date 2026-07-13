@@ -25,6 +25,7 @@ import os
 import time
 
 import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -41,6 +42,7 @@ _ifi_scheduler = None  # type: ignore[var-annotated]
 # ─── In-memory TTL cache ───────────────────────────────────────────────────────
 
 _cache: dict[str, tuple[float, Any]] = {}  # key → (timestamp, payload)
+_cache_lock = threading.Lock()
 
 _TTL = {
     "gex":            300,   # 5 min  — opzioni Deribit, ~90s fetch
@@ -51,6 +53,7 @@ _TTL = {
     "signals":        300,   # 5 min  — dipende da gex + flows
     "macro":          3600,  # 1 ora  — dati CoinGlass giornalieri
     "ifi":            900,   # 15 min — serie giornaliera, cambia lentamente
+    "pillars_series": 900,   # 15 min — compute_series + Farside scrape (costoso)
 }
 
 # Lock che impedisce fetch Deribit concorrenti: il secondo richiedente attende
@@ -59,14 +62,16 @@ _gex_fetch_lock = threading.Lock()
 
 
 def _cache_get(key: str) -> Any | None:
-    entry = _cache.get(key)
-    if entry and (time.time() - entry[0]) < _TTL.get(key, 300):
-        return entry[1]
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and (time.time() - entry[0]) < _TTL.get(key, 300):
+            return entry[1]
     return None
 
 
 def _cache_set(key: str, payload: Any) -> None:
-    _cache[key] = (time.time(), payload)
+    with _cache_lock:
+        _cache[key] = (time.time(), payload)
 
 
 app = FastAPI(
@@ -293,32 +298,28 @@ async def _stop_alert_scheduler() -> None:
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-class _NumpyEncoder(json.JSONEncoder):
-    """Serializza tipi numpy e float NaN/Inf in tipi Python JSON-compatibili."""
-
-    def default(self, obj: Any) -> Any:
-        if isinstance(obj, np.bool_):
-            return bool(obj)
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return None if np.isnan(obj) else float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
-
-    def iterencode(self, obj: Any, _one_shot: bool = False):
-        # Converte float NaN/Inf nativi Python in None prima della serializzazione
-        obj = _sanitize(obj)
-        return super().iterencode(obj, _one_shot)
-
-
 def _sanitize(obj: Any) -> Any:
-    """Converte ricorsivamente float NaN/Inf in None per JSON compliance."""
+    """Converte ricorsivamente numpy types e NaN/Inf in tipi JSON-compatibili.
+
+    Gestisce: np.integer -> int, np.floating -> float (NaN/Inf -> None),
+    np.bool_ -> bool, np.ndarray -> list, pd.Timestamp -> str,
+    dict -> dict, list -> list.
+    """
     import math
 
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        val = float(obj)
+        return None if (math.isnan(val) or math.isinf(val)) else val
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, (np.ndarray,)):
+        return [_sanitize(v) for v in obj.tolist()]
     if isinstance(obj, float):
         return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, (pd.Timestamp,)):
+        return obj.isoformat()
     if isinstance(obj, dict):
         return {k: _sanitize(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -328,11 +329,16 @@ def _sanitize(obj: Any) -> Any:
 
 def _ok(data: Any) -> JSONResponse:
     payload = {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat(), "data": data}
-    return JSONResponse(content=json.loads(json.dumps(payload, cls=_NumpyEncoder)))
+    return JSONResponse(content=_sanitize(payload))
 
 
-def _error(msg: str, code: int = 500) -> HTTPException:
+def _http_error(msg: str, code: int = 500) -> HTTPException:
+    """Genera un'HTTPException con il messaggio e codice specificati."""
     return HTTPException(status_code=code, detail=msg)
+
+
+# Backward-compat alias: leva il deprecation warning in future
+_error = _http_error
 
 
 # ─── /api/health ──────────────────────────────────────────────────────────────
@@ -950,7 +956,7 @@ def get_notes(underlying: str = "IBIT", limit: int = 200) -> dict:
 
         db = StructuredNotesDB()
         notes = [n for n in db.get_all_notes()
-                 if (n.underlying or "IBIT") == underlying][:limit]
+                 if (n.underlying or "IBIT").upper() == underlying.upper()][:limit]
         return _ok({"count": len(notes), "notes": [_note_to_dict(n) for n in notes]})
     except Exception as exc:
         traceback.print_exc()
