@@ -48,12 +48,15 @@ disponibili. Git repo attivo (branch `main`).
 ## Refresh dati EDGAR (note IBIT)
 
 Il DB `data/structured_notes.db` è **versionato** (fonte di verità: filesystem DO effimero).
-Refresh incrementale: `scripts/cron_edgar.py` (env `EDGAR_LOOKBACK_DAYS`, default 14); full:
-`make update-edgar`. Automazione: `.github/workflows/edgar-refresh.yml` (lunedì, committa il DB su
-`main` → deploy). **Richiede** la Repository variable `EDGAR_USER_AGENT` (email reale) — senza, il
-job fallisce di proposito (ToS SEC). In locale usare la stessa env var (placeholder `example.com` →
-WARNING in `get_settings()`). I supplement *preliminari* hanno `is_preliminary=1` e `initial_level`/
-`notional` = NULL; `/api/barriers` mostra solo i finali.
+Refresh incrementale: `scripts/cron_edgar.py` (env `EDGAR_LOOKBACK_DAYS`, default 30); full:
+`make update-edgar`. Automazione: `.github/workflows/edgar-refresh.yml` (lunedì + backup
+mercoledì 06:30 UTC, committa il DB su `main` → deploy DO). Lo User-Agent SEC è in
+`config/settings.yaml` (email reale) — non servono variabili esterne. Override opzionale
+via env var `EDGAR_USER_AGENT`. In caso di fallimento, il workflow invia una notifica
+Telegram (richiede `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` nei Repository secrets).
+Endpoint di monitoraggio: `GET /api/health/edgar` (freschezza DB, conteggi).
+I supplement *preliminari* hanno `is_preliminary=1` e `initial_level`/`notional` = NULL;
+`/api/barriers` mostra solo i finali.
 
 I search terms includono anche FBTC/BITB/ARKB: il parser estrae il ticker reale del sottostante
 (`_detect_underlying`, colonna `notes.underlying`), ma `get_active_barriers()`,

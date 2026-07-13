@@ -247,7 +247,35 @@
 
 7. **Test**: 582/582 passati, ruff pulito (0 errori).
 
+## EDGAR Workflow Hardening (session 2026-07-13)
+
+1. **Root cause**: 5 workflow consecutivi falliti (15 giu → 13 lug) perché
+   `EDGAR_USER_AGENT` Repository variable era assente. DB fermo a 633 note.
+
+2. **User-Agent in `settings.yaml`**: Sostituito placeholder `you@example.com` con email
+   reale. Il workflow non dipende più da variabili esterne; override opzionale via env
+   `EDGAR_USER_AGENT`. `config.py` warning ammorbidito (non bloccante).
+
+3. **Workflow `edgar-refresh.yml` riscritto**:
+   - Rimosso guard step `exit 1` (non più necessario).
+   - Lookback default 30gg (da 14) — recupera fino a 4 settimane di buchi.
+   - Backup cron mercoledì 06:30 UTC (oltre al lunedì).
+   - `workflow_dispatch` con input `lookback_days` per catch-up manuale.
+   - Step `Notify Telegram on failure` via `curl` + Bot API (richiede
+     `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` nei Repository secrets).
+   - Rimosso `[skip ci]` dal messaggio di commit automatico — bloccava il deploy DO.
+
+4. **Endpoint `/api/health/edgar`**: Nuovo health check con `last_update`,
+   `total_notes`, `total_barriers`, `active_barriers`, `stale_days`.
+   `healthy = stale_days <= 14`.
+
+5. **Catch-up**: Workflow eseguito con `lookback_days=60` → DB recuperato:
+   655 note (+22), 682 barriere (+25), ultima issue_date 2026-07-06.
+
+6. **Test**: 582/582 pass, ruff clean.
+
 ## Useful Commands (aggiuntivi)
 - `make test` — 582 test in ~25s
 - `.venv/bin/ruff check src/ tests/ scripts/` — lint
 - `pip install -e ".[dev]"` — ora installa anche FastAPI/uvicorn grazie al sync
+- `gh workflow run "edgar-refresh.yml" -f lookback_days=60 --ref main` — catch-up manuale
