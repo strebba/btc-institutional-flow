@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.analytics.signal_model import WEIGHTS as DEFAULT_WEIGHTS
+from src.analytics.factor_scorers import WEIGHTS as DEFAULT_WEIGHTS
 from src.forecast.calibration import (
     binomial_p_value,
     compute_source_metrics,

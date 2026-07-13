@@ -1,0 +1,133 @@
+/* ibit-gamma-tracker — Wagmi Lab dark theme */
+/* Importato via st.html() in app.py */
+
+/* ── Global ────────────────────────────────────────────────── */
+.stApp {
+    font-family: 'Proxima Nova', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.main .block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 2rem;
+    max-width: 1400px;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────── */
+section[data-testid="stSidebar"] {
+    border-right: 1px solid var(--border);
+}
+section[data-testid="stSidebar"] .stButton button {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--positive);
+    border-radius: 8px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+section[data-testid="stSidebar"] .stButton button:hover {
+    border-color: var(--positive);
+    color: var(--positive);
+    background: var(--surface);
+    box-shadow: 0 0 10px var(--positive-glow);
+}
+
+/* ── Metrics ──────────────────────────────────────────────── */
+[data-testid="metric-container"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    transition: border-color 0.15s;
+}
+[data-testid="metric-container"]:hover {
+    border-color: var(--positive-trans);
+}
+[data-testid="stMetricValue"] {
+    font-size: 22px !important;
+    font-weight: 600;
+    color: var(--text) !important;
+}
+[data-testid="stMetricDelta"] svg { display: none; }
+[data-testid="stMetricDelta"] > div {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 12px !important;
+}
+
+/* ── Tabs ──────────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    background-color: var(--surface);
+    border-radius: 10px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    gap: 2px;
+}
+.stTabs [data-baseweb="tab"] {
+    background: transparent;
+    border-radius: 7px;
+    border: none;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 14px;
+    padding: 8px 18px;
+    transition: all 0.15s;
+}
+.stTabs [aria-selected="true"] {
+    background: var(--border) !important;
+    color: var(--positive) !important;
+    text-shadow: 0 0 8px var(--positive-glow);
+}
+.stTabs [data-baseweb="tab"]:hover {
+    color: var(--text) !important;
+    background: rgba(0,255,157,0.06) !important;
+}
+.stTabs [data-baseweb="tab-highlight"] { display: none; }
+
+/* ── Typography ────────────────────────────────────────────── */
+h1 {
+    font-size: 1.75rem !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
+    color: var(--text) !important;
+}
+h2, h3 {
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.07em !important;
+    color: var(--text-muted) !important;
+}
+
+/* ── Misc ──────────────────────────────────────────────────── */
+hr {
+    border-color: var(--border) !important;
+    margin: 1.25rem 0 !important;
+}
+[data-testid="stDataFrame"] {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.stAlert { border-radius: 8px !important; }
+.stCaptionContainer p {
+    color: var(--text-muted) !important;
+    font-size: 0.78rem !important;
+}
+
+/* ── Regime badge ──────────────────────────────────────────── */
+.regime-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.regime-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}

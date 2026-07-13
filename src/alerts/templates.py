@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from src.gex.models import GexSnapshot, RegimeState
+from src.gex.models import GexSnapshot, GammaRegime
 
 _REGIME_EMOJI = {
     "positive_gamma": "🟢",
@@ -116,7 +116,7 @@ class FlowsSummary:
 def format_daily_recap(
     snapshot: GexSnapshot,
     prev_snapshot: Optional[GexSnapshot],
-    regime: RegimeState,
+    regime: GammaRegime,
     flows: Optional[FlowsSummary],
     *,
     ifi: Optional[IFISummary] = None,
@@ -127,7 +127,7 @@ def format_daily_recap(
     Args:
         snapshot: GexSnapshot più recente.
         prev_snapshot: snapshot del giorno precedente (per delta %), può essere None.
-        regime: RegimeState corrente da RegimeDetector.detect().
+        regime: GammaRegime corrente da RegimeDetector.detect().
         flows: sintesi flussi ETF, può essere None se il fetch è fallito.
         ifi: sintesi IFI, può essere None se il DB è vuoto.
         now: sovrascrive datetime.now() per test deterministici.

@@ -18,7 +18,7 @@ import pandas as pd
 from src.config import get_settings, setup_logging
 
 if TYPE_CHECKING:
-    from src.analytics.signal_model import SignalModel
+    from src.analytics.factor_scorers import SignalModel
     from src.analytics.pillars import CompositeSignal
 
 _log = setup_logging("analytics.backtest")

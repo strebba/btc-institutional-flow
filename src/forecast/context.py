@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from src.analytics.signal_model import SignalInputs, SignalModel, SignalResult
+from src.analytics.factor_scorers import SignalInputs, SignalModel, SignalResult
 from src.config import setup_logging
 from src.gex.models import GexSnapshot
 

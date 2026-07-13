@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from src.config import get_settings, setup_logging
-from src.gex.models import GexSnapshot, RegimeState
+from src.gex.models import GexSnapshot, GammaRegime
 
 _log = setup_logging("gex.regime")
 
@@ -60,14 +60,14 @@ class RegimeDetector:
         """
         self._history.append(snapshot)
 
-    def detect(self, snapshot: GexSnapshot) -> RegimeState:
+    def detect(self, snapshot: GexSnapshot) -> GammaRegime:
         """Classifica il regime e genera alert per lo snapshot corrente.
 
         Args:
             snapshot: snapshot GEX corrente.
 
         Returns:
-            RegimeState: regime classificato con alert.
+            GammaRegime: regime classificato con alert.
         """
         threshold = self._cfg.get("gex_threshold_usd", 1_000_000)
         proximity = self._alert_cfg.get("barrier_proximity_pct", 3.0)
@@ -128,7 +128,7 @@ class RegimeDetector:
             for a in alerts:
                 _log.warning("ALERT: %s", a)
 
-        state = RegimeState(
+        state = GammaRegime(
             timestamp=snapshot.timestamp,
             regime=regime,
             total_net_gex=gex,
@@ -145,11 +145,11 @@ class RegimeDetector:
 
         return state
 
-    def summary(self, state: RegimeState) -> str:
+    def summary(self, state: GammaRegime) -> str:
         """Genera una stringa di riepilogo leggibile del regime corrente.
 
         Args:
-            state: RegimeState corrente.
+            state: GammaRegime corrente.
 
         Returns:
             str: summary formattato.

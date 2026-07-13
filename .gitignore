@@ -17,3 +17,5 @@ data/runtime.db
 logs/
 .claude/
 .DS_Store
+.agents/
+skills-lock.json

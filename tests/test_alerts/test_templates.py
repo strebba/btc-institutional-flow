@@ -9,7 +9,7 @@ from src.alerts.templates import (
     format_daily_recap,
     format_etf_flow_alert,
 )
-from src.gex.models import GexSnapshot, RegimeState
+from src.gex.models import GexSnapshot, GammaRegime
 
 
 def _snap(
@@ -34,8 +34,8 @@ def _regime(
     label: str = "positive_gamma",
     alerts: list[str] | None = None,
     percentile: float | None = 55.0,
-) -> RegimeState:
-    return RegimeState(
+) -> GammaRegime:
+    return GammaRegime(
         timestamp=datetime(2026, 4, 22, 7, 0, tzinfo=timezone.utc),
         regime=label,
         total_net_gex=300e6,

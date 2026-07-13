@@ -75,8 +75,8 @@ class GexSnapshot:
 
 
 @dataclass
-class RegimeState:
-    """Stato del regime di gamma in un dato momento.
+class GammaRegime:
+    """Classificazione del regime di gamma in un dato momento.
 
     Attributes:
         timestamp: istante di rilevazione.

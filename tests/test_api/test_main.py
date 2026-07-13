@@ -17,8 +17,8 @@ from fastapi.testclient import TestClient
 @pytest.fixture()
 def client():
     """TestClient con cache pulita ad ogni test."""
-    from src.api import main as api_module
-    api_module._cache.clear()
+    from src.api import cache
+    cache.cache_clear()
     from src.api.main import app
     return TestClient(app, raise_server_exceptions=False)
 
@@ -27,10 +27,8 @@ def client():
 def authed_client(monkeypatch):
     """TestClient con API_KEY configurata."""
     monkeypatch.setenv("API_KEY", "test-secret")
-    from src.api import main as api_module
-    api_module._cache.clear()
-    # Ricrea _API_KEY leggendo l'env var aggiornata
-    api_module._API_KEY = "test-secret"
+    from src.api import cache
+    cache.cache_clear()
     from src.api.main import app
     return TestClient(app, raise_server_exceptions=False)
 
@@ -61,7 +59,7 @@ class TestHealth:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _mock_gex_snapshot():
-    from src.gex.models import GexSnapshot, GexByStrike, RegimeState
+    from src.gex.models import GexSnapshot, GexByStrike, GammaRegime
     from datetime import datetime, timezone
     snap = GexSnapshot(
         timestamp=datetime.now(timezone.utc),
@@ -77,7 +75,7 @@ def _mock_gex_snapshot():
         total_call_oi=1000.0,
         total_put_oi=800.0,
     )
-    regime = RegimeState(
+    regime = GammaRegime(
         timestamp=datetime.now(timezone.utc),
         regime="positive_gamma",
         total_net_gex=500_000_000.0,
@@ -173,7 +171,7 @@ class TestBarriers:
             ]),
             patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError("no data")),
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
-            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
+            patch("src.api.routers.barriers._get_gex_data", return_value={"snapshot": snap}),
         ):
             r = client.get("/api/barriers")
         assert r.status_code == 200
@@ -201,7 +199,7 @@ class TestBarriers:
             patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
             patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
-            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
+            patch("src.api.routers.barriers._get_gex_data", return_value={"snapshot": snap}),
         ):
             data = client.get("/api/barriers").json()["data"]
         assert data["count"] == 2
@@ -219,7 +217,7 @@ class TestBarriers:
             patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
             patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
-            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
+            patch("src.api.routers.barriers._get_gex_data", return_value={"snapshot": snap}),
         ):
             data = client.get("/api/barriers").json()["data"]
         assert data["count"] == 1
@@ -244,7 +242,7 @@ class TestBarriers:
             patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
             patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
-            patch("src.api.main._get_gex_data", return_value={"snapshot": snap}),
+            patch("src.api.routers.barriers._get_gex_data", return_value={"snapshot": snap}),
         ):
             data = client.get("/api/barriers").json()["data"]
         assert len(data["clusters"]) == 1
@@ -260,7 +258,7 @@ class TestBarriers:
             patch("src.edgar.structured_notes_db.StructuredNotesDB.get_active_barriers", return_value=barriers),
             patch("src.flows.price_fetcher.PriceFetcher.get_all_prices", side_effect=RuntimeError),
             patch("src.gex.deribit_client.DeribitClient.get_spot_price", return_value=85_000.0),
-            patch("src.api.main._get_gex_data", side_effect=ConnectionError("deribit down")),
+            patch("src.api.routers.barriers._get_gex_data", side_effect=ConnectionError("deribit down")),
         ):
             r = client.get("/api/barriers")
             data = r.json()["data"]
@@ -360,7 +358,7 @@ class TestResponseEnvelope:
     def test_nan_values_serialized_as_null(self, client):
         """NaN float nei dati devono diventare null nel JSON."""
         import numpy as np
-        from src.api.main import _ok
+        from src.api.helpers import ok as _ok
         resp = _ok({"value": float("nan"), "nested": {"x": np.nan}})
         body = resp.body
         import json

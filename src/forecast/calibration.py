@@ -17,7 +17,7 @@ from typing import Optional
 import numpy as np
 import yaml
 
-from src.analytics.signal_model import WEIGHTS as DEFAULT_WEIGHTS
+from src.analytics.factor_scorers import WEIGHTS as DEFAULT_WEIGHTS
 from src.config import setup_logging
 from src.forecast.models import TARGET_DIRECTION, TARGET_LEVEL, TARGET_PROB
 from src.forecast.sources.dealer_flow import SOURCE as DEALER_FLOW

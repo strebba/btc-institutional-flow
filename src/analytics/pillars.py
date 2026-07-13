@@ -38,7 +38,7 @@ import pandas as pd
 
 from src.config import setup_logging
 from src.analytics import ifi as _ifi
-from src.analytics import signal_model as _sm
+from src.analytics import factor_scorers as _sm
 
 _log = setup_logging("analytics.pillars")
 

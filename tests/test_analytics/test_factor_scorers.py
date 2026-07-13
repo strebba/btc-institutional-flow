@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.analytics.signal_model import (
+from src.analytics.factor_scorers import (
     SignalModel,
     SignalInputs,
     SignalResult,

@@ -15,7 +15,7 @@ from typing import Generator, Optional
 
 import pandas as pd
 
-from src.analytics.signal_model import SignalResult
+from src.analytics.factor_scorers import SignalResult
 from src.config import get_settings, setup_logging
 
 _log = setup_logging("analytics.signal_db")

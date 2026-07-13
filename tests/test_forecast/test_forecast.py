@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pytest
 
-from src.analytics.signal_model import (
+from src.analytics.factor_scorers import (
     SIGNAL_LONG,
     SIGNAL_RISK_OFF,
     SignalResult,
