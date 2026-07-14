@@ -4,7 +4,6 @@ Usato per validazione automatica delle risposte e generazione OpenAPI docs.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel

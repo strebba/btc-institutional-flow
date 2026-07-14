@@ -8,8 +8,13 @@ from src.dashboard.charts import flows_chart, flows_stacked_chart, granger_heatm
 
 from src.dashboard.data_loader import run_granger
 
+from src.config import get_settings
+
+_settings = get_settings()
+_theme = _settings["dashboard"]["theme"]
+_TEXT_MUTED = _theme.get("text_muted", "#888888")
+
 def _tab_flows(merged_df: pd.DataFrame) -> None:
-    from src.dashboard.charts import flows_chart, flows_stacked_chart
 
     st.header("💰 Flussi ETF Bitcoin")
     st.markdown("""
@@ -179,7 +184,7 @@ Controlla il **flusso totale aggregato** per il quadro completo.
 """)
 
     # Grafico principale
-    st.plotly_chart(flows_chart(merged_df), use_container_width=True)
+    st.plotly_chart(flows_chart(merged_df), width="stretch")
     st.caption("""
 📉 **Correlazione Flussi-Prezzo**: Questo grafico mostra quanto i flussi ETF
 "predicono" il rendimento di BTC il giorno successivo. Una correlazione alta
@@ -190,7 +195,7 @@ La correlazione tende ad aumentare durante i periodi di stress.
     # Stacked bar chart per tutti gli ETF
     if etf_tickers:
         st.subheader("Flussi per ETF (Stacked)")
-        st.plotly_chart(flows_stacked_chart(merged_df, etf_tickers), use_container_width=True)
+        st.plotly_chart(flows_stacked_chart(merged_df, etf_tickers), width="stretch")
         st.caption("""
 📊 **Stacked Bar**: Ogni barra mostra il contributo di ogni ETF al flusso totale giornaliero.
 Verde = inflow, Rosso = outflow. Utile per vedere quale emittente guida il flusso netto.
@@ -232,16 +237,14 @@ Verde = inflow, Rosso = outflow. Utile per vedere quale emittente guida il fluss
                         }
                     )
         if ticker_rows:
-            st.dataframe(pd.DataFrame(ticker_rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(ticker_rows), width="stretch")
 
     # Granger expander
     with st.expander("📊 Test Statistico: i flussi ETF predicono il prezzo?"):
         with st.spinner("Calcolo Granger causality..."):
             try:
                 _, granger_df, granger_text = run_granger(merged_df)
-                from src.dashboard.charts import granger_heatmap
-
-                st.plotly_chart(granger_heatmap(granger_df), use_container_width=True)
+                st.plotly_chart(granger_heatmap(granger_df), width="stretch")
 
                 # Tabella p-values formattata
                 if not granger_df.empty:
@@ -258,6 +261,3 @@ statisticamente significativo con quel ritardo.
                 st.info(f"Granger causality non disponibile: {e}")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 4: Segnali Operativi
-# ──────────────────────────────────────────────────────────────────────────────

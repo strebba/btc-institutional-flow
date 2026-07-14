@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import traceback
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from src.api.cache import cache_get, cache_set, _gex_fetch_lock, _TTL
+from src.api.cache import cache_get, cache_set, _gex_fetch_lock
 from src.api.helpers import ok, http_error
 
 router = APIRouter(prefix="/api/gex", tags=["gex"])

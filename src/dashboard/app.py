@@ -183,7 +183,7 @@ st.markdown(
 # Imports dai moduli estratti
 # ──────────────────────────────────────────────────────────────────────────────
 
-from src.dashboard.data_loader import (
+from src.dashboard.data_loader import (  # noqa: E402
     load_prices_and_flows,
     load_gex,
     load_barriers,
@@ -193,15 +193,14 @@ from src.dashboard.data_loader import (
     run_regime,
     run_backtest,
     run_event_study,
-    compute_composite,
 )
-from src.dashboard.header import _render_header
-from src.dashboard.sidebar import _sidebar
-from src.dashboard.tabs.barrier_map import _tab_barrier_map
-from src.dashboard.tabs.gex import _tab_gex
-from src.dashboard.tabs.flows import _tab_flows
-from src.dashboard.tabs.signals import _tab_signals
-from src.dashboard.tabs.edgar import _tab_edgar_monitor
+from src.dashboard.header import _render_header  # noqa: E402
+from src.dashboard.sidebar import _sidebar  # noqa: E402
+from src.dashboard.tabs.barrier_map import _tab_barrier_map  # noqa: E402
+from src.dashboard.tabs.gex import _tab_gex  # noqa: E402
+from src.dashboard.tabs.flows import _tab_flows  # noqa: E402
+from src.dashboard.tabs.signals import _tab_signals  # noqa: E402
+from src.dashboard.tabs.edgar import _tab_edgar_monitor  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────────────────

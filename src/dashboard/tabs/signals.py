@@ -6,13 +6,13 @@ import streamlit as st
 
 from src.dashboard.charts import composite_gauge, pillar_gauges, backtest_equity
 
+from src.config import setup_logging
 from src.dashboard.data_loader import compute_composite, run_backtest
-from src.dashboard.data_loader import load_macro, run_event_study
+from src.dashboard.data_loader import load_macro
+
+_log = setup_logging("dashboard.tabs.signals")
 
 def _tab_signals(snap: dict, merged_df: pd.DataFrame, barriers: list[dict]) -> None:
-    from src.dashboard.charts import backtest_equity
-
-    from src.dashboard.charts import composite_gauge, pillar_gauges
 
     st.header("🚦 Segnali Operativi")
     st.markdown("""
@@ -47,7 +47,7 @@ performance futura.
     # ── Gauge top-level + banner ───────────────────────────────────────────────
     g1, g2 = st.columns([1, 1])
     with g1:
-        st.plotly_chart(composite_gauge(result.score, signal), use_container_width=True)
+        st.plotly_chart(composite_gauge(result.score, signal), width="stretch")
     with g2:
         if signal == "LONG":
             st.success(
@@ -69,7 +69,7 @@ performance futura.
             )
 
     # ── Sotto-gauge dei 4 pilastri ─────────────────────────────────────────────
-    st.plotly_chart(pillar_gauges(pillars), use_container_width=True)
+    st.plotly_chart(pillar_gauges(pillars), width="stretch")
 
     # ── Tabella leggibile dei pilastri ─────────────────────────────────────────
     def _emoji(score):
@@ -169,11 +169,11 @@ accelerazione, prezzo aggiustato per volatilità + flusso 3gg).
 
     # Tabella comparativa
     table = bt.summary_table(results)
-    st.dataframe(table, use_container_width=True)
+    st.dataframe(table, width="stretch")
 
     # Equity curve
     st.subheader("Equity Curve")
-    st.plotly_chart(backtest_equity(results), use_container_width=True)
+    st.plotly_chart(backtest_equity(results), width="stretch")
 
     st.caption("""
 ⚠️ Il backtest ha limitazioni significative: lo storico è breve (dal Nov 2024),
@@ -189,6 +189,3 @@ Usa i risultati come indicazione direzionale, non come garanzia di performance.
         )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 5: EDGAR Monitor
-# ──────────────────────────────────────────────────────────────────────────────

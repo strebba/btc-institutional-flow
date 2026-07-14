@@ -4,10 +4,13 @@ import pandas as pd
 import streamlit as st
 
 
+from src.config import setup_logging
 from src.dashboard.charts import gex_profile, gex_walls, regime_bars
+from src.dashboard.data_loader import run_regime
+
+_log = setup_logging("dashboard.tabs.gex")
 
 def _tab_gex(snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame) -> None:
-    from src.dashboard.charts import gex_profile, gex_walls
 
     spot = snap.get("spot_price") or 0
     gex_m = (snap.get("total_net_gex") or 0) / 1e6
@@ -90,7 +93,7 @@ Il regime può cambiare rapidamente; monitora i prossimi movimenti.
     # Charts
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.plotly_chart(gex_profile(gex_by_strike, spot), use_container_width=True)
+        st.plotly_chart(gex_profile(gex_by_strike, spot), width="stretch")
         st.caption("""
 📊 **Come leggere l'istogramma**: Ogni barra rappresenta il GEX netto ad uno
 strike price. Barre verdi = zona stabilizzante (il dealer compra sui cali,
@@ -98,7 +101,7 @@ vende sui rialzi). Barre rosse = zona amplificante. L'altezza della barra indica
 l'intensità dell'effetto. La linea verticale è il prezzo spot corrente.
 """)
     with col2:
-        st.plotly_chart(gex_walls(snap), use_container_width=True)
+        st.plotly_chart(gex_walls(snap), width="stretch")
         mc1, mc2 = st.columns(2)
         mc1.metric("Max Pain", f"${snap.get('max_pain') or 0:,.0f}")
         mc2.metric("Strumenti BTC", f"{snap.get('n_instruments') or 0}")
@@ -132,10 +135,8 @@ Sufficiente per identificare i regimi macro e le zone di concentrazione principa
             try:
                 regime_result = run_regime(merged_df, gex_today)
                 if regime_result.positive_stats or regime_result.negative_stats:
-                    from src.dashboard.charts import regime_bars
-
                     st.subheader("Regime Analysis: Gamma Positivo vs Negativo")
-                    st.plotly_chart(regime_bars(regime_result), use_container_width=True)
+                    st.plotly_chart(regime_bars(regime_result), width="stretch")
                     if regime_result.gex_vol_correlation is not None:
                         corr_mean = regime_result.gex_vol_correlation.dropna().mean()
                         st.info(

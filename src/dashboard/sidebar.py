@@ -26,7 +26,7 @@ def _sidebar(snap: dict, merged_df: pd.DataFrame, barriers: list[dict]) -> bool:
             unsafe_allow_html=True,
         )
 
-        refresh = st.button("🔄 Aggiorna dati", use_container_width=True)
+        refresh = st.button("🔄 Aggiorna dati", width="stretch")
 
         st.divider()
 

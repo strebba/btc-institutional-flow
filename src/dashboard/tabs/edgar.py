@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from src.dashboard.charts import barrier_map, event_study_car
+from src.dashboard.charts import event_study_car
 from src.dashboard.data_loader import load_db_summary, run_event_study
 
 
@@ -66,7 +66,7 @@ dei derivati piuttosto che dal sentiment.
             "Scadenza": b.get("maturity_date", ""),
             "Status": b.get("status", ""),
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch")
 
     st.subheader("Event Study — CAR intorno ai Barrier Levels")
     with st.spinner("Calcolo event study..."):
@@ -74,7 +74,7 @@ dei derivati piuttosto che dal sentiment.
 
     fig = event_study_car(event_results)
     if fig:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("""
 📊 **Cumulative Abnormal Returns**: mostra il rendimento anomalo cumulativo
 di BTC nei giorni intorno al momento in cui il prezzo si avvicina a una barriera.

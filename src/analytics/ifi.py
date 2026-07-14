@@ -114,7 +114,7 @@ def _score_price_momentum(btc_close: pd.Series, btc_vol_7d: pd.Series) -> pd.Ser
     Rendimento alto con vol bassa → segnale forte. Normalizzato per volatilità
     annualizzata convertita a orizzonte 30gg: vol_ann * sqrt(30/252).
     """
-    ret_30d = btc_close.pct_change(30)
+    ret_30d = btc_close.pct_change(30, fill_method=None)
     vol_adj = btc_vol_7d.replace(0, np.nan).fillna(0.40)
     vol_30d = vol_adj * (30 / 252) ** 0.5
     sharpe_like = ret_30d / vol_30d.replace(0, 0.10)
@@ -135,7 +135,7 @@ def _score_oi_momentum(oi_usd: pd.Series) -> pd.Series:
 
     +15% cambio in 30gg ≈ 1σ tipico → z=1.
     """
-    oi_change = oi_usd.pct_change(30)
+    oi_change = oi_usd.pct_change(30, fill_method=None)
     z = oi_change / 0.15
     return pd.Series(_sigmoid(z.fillna(0.0).to_numpy()), index=oi_usd.index)
 

@@ -4,7 +4,6 @@ Garantisce che _tab_signals (Streamlit) e /api/signals (FastAPI) non divergano.
 """
 from __future__ import annotations
 
-from unittest.mock import patch
 
 import pytest
 

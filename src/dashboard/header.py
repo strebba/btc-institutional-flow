@@ -7,6 +7,7 @@ from src.config import get_settings
 
 _settings = get_settings()
 _theme = _settings["dashboard"]["theme"]
+_TEXT_MUTED = _theme.get("text_muted", "#888888")
 
 def _render_header(snap: dict, merged_df: pd.DataFrame) -> None:
     regime = snap.get("regime", "unknown")

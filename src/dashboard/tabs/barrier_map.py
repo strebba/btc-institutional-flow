@@ -9,7 +9,6 @@ from src.dashboard.charts import barrier_map as _barrier_map_chart, barrier_gex_
 from src.edgar.barrier_utils import compute_confluence, detect_clusters
 
 def _tab_barrier_map(barriers: list[dict], snap: dict) -> None:
-    from src.dashboard.charts import barrier_map as _barrier_map_chart
 
     spot = snap.get("spot_price") or 0.0
 
@@ -79,7 +78,7 @@ ma dalla gestione del rischio dei dealer.
 
     # Grafico barrier map
     fig = _barrier_map_chart(barriers, spot)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Alert contestuale basato su distanza
     valid_barriers = [b for b in barriers if (b.get("level_price_btc") or 0) > 0 and spot > 0]
@@ -115,8 +114,6 @@ prezzo corrente. Il rischio di movimenti meccanici improvvisi è basso.
 
     # ── Overlay confluenza barriere ↔ GEX ──────────────────────────────────────
     if valid_barriers and spot > 0:
-        from src.dashboard.charts import barrier_gex_confluence_chart
-        from src.edgar.barrier_utils import compute_confluence, detect_clusters
 
         clusters = detect_clusters(barriers, spot)
         confluence = compute_confluence(
@@ -135,7 +132,7 @@ l'effetto meccanico si **amplifica**.
 """)
             st.plotly_chart(
                 barrier_gex_confluence_chart(clusters, snap, spot, confluence),
-                use_container_width=True,
+                width="stretch",
             )
             if confluence:
                 for c in confluence:
@@ -208,4 +205,4 @@ Questo può causare:
                 "Status": b.get("status", ""),
             }
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch")

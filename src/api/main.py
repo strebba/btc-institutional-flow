@@ -31,7 +31,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from src.api.cache import cache_clear
 from src.api.routers import health, gex, flows, barriers, signals, forecast
 from src.api.scheduler import (
     _alert_monitor,
