@@ -10,6 +10,7 @@ tutto il codice, i commit, i test e le discussioni.
 | **StructuredNote** | Filing SEC 424B2/424B3 emesso da una banca (JPM, Morgan Stanley, Goldman Sachs, …) il cui rendimento dipende dal prezzo di IBIT (ETF Bitcoin di BlackRock) |
 | **BarrierLevel** | Singolo prezzo knock-in / autocall / buffer su una nota, espresso in % dell'initial level e/o in USD (IBIT o BTC) |
 | **BarrierCluster** | Gruppo di BarrierLevel entro 2% di distanza, aggregati per tipo e segno direzionale |
+| **BarrierDirection** | Score direzionale 0-1 di una barriera: knock_in/buffer sotto spot = accelerante (0.15), autocall/knock_out sopra spot = supportivo (0.65), altrimenti = neutro (0.50). Allineato a `barrier_sign()` per coerenza dealer-flow |
 | **Underlying** | Ticker del sottostante reale della nota (IBIT, FBTC, BITB, ARKB) — rilevato dal parser via `_detect_underlying` |
 | **PreliminarySupplement** | Filing con `is_preliminary=1`, `initial_level` e `notional` a NULL — escluso da `/api/barriers` |
 | **Issuer** | Filer SEC canonico, derivato da `_known_issuer_or_none()` allowlist — filing di emittenti non noti sono scartati |
@@ -45,6 +46,7 @@ tutto il codice, i commit, i test e le discussioni.
 | **PillarScore** | Sotto-score 0-100 di un singolo pilastro con componenti, peso, e motivazione |
 | **PillarWeights** | Pesi nominali dei pilastri — riscalati se uno o più pilastri non hanno dati |
 | **SignalThreshold** | Score ≥ 65 = LONG, 40-64 = CAUTION, < 40 = RISK_OFF |
+| **TransactionCost** | 80 bps dedotti su ogni cambio posizione nel backtest. Configurato in `settings.yaml:backtest.transaction_cost_bps` |
 | **FactorScorers** | Libreria di scoring a 8 fattori (`src/analytics/factor_scorers.py`, ex `signal_model`) — riusata dai pilastri |
 | **IFIModel** | Institutional Flow Index 0-100 a 6 fattori — deprecato, sostituito dai pilastri |
 
@@ -56,13 +58,15 @@ tutto il codice, i commit, i test e le discussioni.
 | **Outcome** | Esito misurato di una Prediction (hit/miss, Brier score, signed error) |
 | **TargetType** | `direction` (up/down/flat), `level` (reach/break/respect), `prob` (evento probabilistico) |
 | **WeightsVersion** | Snapshot immutabile dei pesi attivi usati per generare predizioni — human-gated activation |
-| **Calibration** | Processo che propone nuovi pesi dai risultati storici — mai auto-attiva, richiede `/api/weights/{id}/activate` |
+| **Calibration** | Processo che propone nuovi pesi dai risultati storici — mai auto-attiva, richiede `/api/weights/{id}/activate`. Usa `scipy.stats.binom.sf` per p-value senza overflow |
+| **MacroData** | Dataclass unificato da `src/flows/macro_fetcher.py` con funding rate, OI, long/short, liquidazioni. Singola fonte di verità per `/api/signals`, `/api/macro` e dashboard |
 
 ## Infrastruttura
 
 | Termine | Definizione |
 |---------|-------------|
-| **StructuredNotesDB** | SQLite versionato in git (`data/structured_notes.db`) — fonte di verità per note/barriere EDGAR |
-| **RuntimeDB** | SQLite gitignorato (`data/runtime.db`) — cache, snapshot, predizioni |
+| **StructuredNotesDB** | SQLite versionato in git (`data/structured_notes.db`) — fonte di verità per note/barriere EDGAR. Path hardcodato, ignora `DB_PATH` |
+| **RuntimeDB** | SQLite gitignorato (`data/runtime.db`) — segnali, predizioni, alert. Usato in dev via `DB_PATH` env var |
+| **GexDB** | SQLite per snapshot GEX — path hardcodato a `data/structured_notes.db`, ignora `DB_PATH` |
 | **CacheStore** | TTL cache in-memory con lock per ridurre chiamate upstream (Deribit, Farside) |
 | **SchedulerManager** | Orchestrator dei 3 APScheduler in-process (alert Telegram, IFI, forecast) |

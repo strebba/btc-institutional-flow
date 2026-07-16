@@ -16,6 +16,7 @@ from typing import Optional
 
 import numpy as np
 import yaml
+from scipy.stats import binom
 
 from src.analytics.factor_scorers import WEIGHTS as DEFAULT_WEIGHTS
 from src.config import setup_logging
@@ -47,12 +48,14 @@ def load_weights_config() -> dict:
 # ─── Statistiche ─────────────────────────────────────────────────────────────
 
 def binomial_p_value(hits: int, n: int, p0: float = 0.5) -> Optional[float]:
-    """p-value a una coda (H1: tasso > p0) del test binomiale esatto. None se n=0."""
+    """p-value a una coda (H1: tasso > p0) del test binomiale esatto. None se n=0.
+
+    Usa scipy.stats.binom.sf (survival function) per evitare overflow di math.comb
+    per n > 170.
+    """
     if n <= 0:
         return None
-    # P(X >= hits) con X ~ Binom(n, p0)
-    tail = sum(math.comb(n, k) * p0 ** k * (1 - p0) ** (n - k) for k in range(hits, n + 1))
-    return float(min(1.0, tail))
+    return float(binom.sf(hits - 1, n, p0))
 
 
 def spearman_ic(x: list[float], y: list[float]) -> Optional[float]:

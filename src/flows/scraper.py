@@ -446,7 +446,9 @@ class FarsideScraper:
 
                     premium   = ir - br                      # tracking error
                     aum_proxy = close * shares_outstanding
-                    flow      = premium * aum_proxy * 0.5   # 50% del premium → flusso netto
+                    yf_cfg = get_settings().get("flows", {}).get("yfinance_fallback", {})
+                    ratio    = float(yf_cfg.get("premium_to_flow_ratio", 0.5))
+                    flow     = premium * aum_proxy * ratio
 
                     flows.append(EtfFlowData(
                         date=idx.date(),

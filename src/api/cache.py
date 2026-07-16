@@ -24,6 +24,12 @@ _TTL: dict[str, int] = {
 
 # Lock che impedisce fetch Deribit concorrenti: il secondo richiedente attende
 # il primo e poi legge dalla cache invece di lanciare un nuovo fetch da 888 opzioni.
+#
+# NOTA: questo è un threading.Lock, corretto perché tutti i chiamanti di
+# _get_gex_data() sono endpoint sync (def, non async def). FastAPI esegue
+# gli endpoint sync in un threadpool — il lock serializza correttamente
+# attraverso i thread. Se in futuro un chiamante diventasse async (await),
+# questo lock va convertito in asyncio.Lock per non bloccare l'event loop.
 _gex_fetch_lock = threading.Lock()
 
 

@@ -17,10 +17,12 @@ from typing import Generator, Optional
 
 import pandas as pd
 
-from src.config import get_settings, setup_logging
+from src.config import setup_logging
 from src.gex.models import GexSnapshot
 
 _log = setup_logging("gex.db")
+
+_VERSIONED_DB = Path(__file__).resolve().parent.parent.parent / "data" / "structured_notes.db"
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS gex_snapshots (
@@ -56,8 +58,7 @@ class GexDB:
     """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        cfg = get_settings()
-        self._path = Path(db_path or cfg["database"]["path"])
+        self._path = Path(db_path or _VERSIONED_DB)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_table()
 

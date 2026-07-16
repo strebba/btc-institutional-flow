@@ -97,7 +97,6 @@ def get_signals() -> JSONResponse:
         from src.edgar.structured_notes_db import StructuredNotesDB
         from src.analytics.backtest import Backtest
         from src.analytics.pillars import CompositeSignal, CompositeInputs
-        from src.flows.coinglass_client import CoinGlassClient
 
         gex_data = _get_gex_data()
         snapshot = gex_data["snapshot"]
@@ -137,55 +136,15 @@ def get_signals() -> JSONResponse:
         liquidations_long: float | None = None
         liquidations_short: float | None = None
 
+        from src.flows.macro_fetcher import fetch_macro_data
         macro_data_cached = cache_get("macro_data")
-        if macro_data_cached is not None:
-            funding_rate_ann = macro_data_cached.get("funding_rate_annualized_pct")
-            oi_change_7d_pct = macro_data_cached.get("oi_change_7d_pct")
-            long_short_ratio = macro_data_cached.get("long_short_ratio_latest")
-            liquidations_long = macro_data_cached.get("liquidations_long_24h_usd")
-            liquidations_short = macro_data_cached.get("liquidations_short_24h_usd")
-
-        _cg: CoinGlassClient | None = None
-
-        if funding_rate_ann is None:
-            try:
-                _cg = _cg or CoinGlassClient()
-                fr_series = _cg.fetch_funding_rate_history(days=14)
-                if not fr_series.empty:
-                    funding_rate_ann = float(fr_series.iloc[-1]) * 3 * 365 * 100
-            except Exception as _e:
-                _log.warning("Funding rate fetch fallito in /signals: %s", _e)
-
-        if oi_change_7d_pct is None:
-            try:
-                _cg = _cg or CoinGlassClient()
-                oi_series = _cg.fetch_aggregated_oi_history(days=14)
-                if len(oi_series) >= 7:
-                    oi_7d_ago = float(oi_series.iloc[-8])
-                    oi_now = float(oi_series.iloc[-1])
-                    if oi_7d_ago > 0:
-                        oi_change_7d_pct = (oi_now - oi_7d_ago) / oi_7d_ago * 100
-            except Exception as _e:
-                _log.warning("OI change fetch fallito in /signals: %s", _e)
-
-        if long_short_ratio is None:
-            try:
-                _cg = _cg or CoinGlassClient()
-                ls_series = _cg.fetch_long_short_ratio(days=3)
-                if not ls_series.empty:
-                    long_short_ratio = float(ls_series.iloc[-1])
-            except Exception as _e:
-                _log.warning("Long/short ratio fetch fallito in /signals: %s", _e)
-
-        if liquidations_long is None:
-            try:
-                _cg = _cg or CoinGlassClient()
-                liq_df = _cg.fetch_liquidations(days=2)
-                if not liq_df.empty:
-                    liquidations_long = float(liq_df["long_usd"].iloc[-1])
-                    liquidations_short = float(liq_df["short_usd"].iloc[-1])
-            except Exception as _e:
-                _log.warning("Liquidations fetch fallito in /signals: %s", _e)
+        macro_cache_dict = macro_data_cached if isinstance(macro_data_cached, dict) else {}
+        macro = fetch_macro_data(cache_data=macro_cache_dict)
+        funding_rate_ann = macro.funding_rate_annualized_pct
+        oi_change_7d_pct = macro.oi_change_7d_pct
+        long_short_ratio = macro.long_short_ratio
+        liquidations_long = macro.liquidations_long_24h_usd
+        liquidations_short = macro.liquidations_short_24h_usd
 
         flow_is_estimate = bool(raw_flows) and all(
             f.source.startswith("yfinance") for f in raw_flows
@@ -230,41 +189,44 @@ def get_signals() -> JSONResponse:
 
         backtest_metrics: dict = {}
         equity_curve: list[dict] = []
-        if not merged.empty and "btc_return" in merged.columns:
-            _gex_series = _gex_db.get_series(days=365)
-            bt = Backtest()
-            results = bt.run(
-                merged,
-                gex_series=_gex_series if not _gex_series.empty else None,
-                active_barriers=active_barriers,
-                composite=composite,
-            )
-            for key, m in results.items():
-                backtest_metrics[key] = {
-                    "strategy_name": m.strategy_name,
-                    "total_return_pct": round(m.total_return * 100, 2),
-                    "annualized_return_pct": round(m.annualized_return * 100, 2),
-                    "sharpe_ratio": round(m.sharpe_ratio, 3),
-                    "max_drawdown_pct": round(m.max_drawdown * 100, 2),
-                    "win_rate_pct": round(m.win_rate * 100, 2),
-                    "profit_factor": round(m.profit_factor, 3) if m.profit_factor < 1000 else None,
-                    "n_trades": m.n_trades,
-                    "days_long": m.days_long,
-                    "days_short": m.days_short,
-                    "days_flat": m.days_flat,
-                }
-            if "strategy" in results and not results["strategy"].equity_curve.empty:
-                ec = results["strategy"].equity_curve
-                bah_ec = results.get("buy_and_hold")
-                bah_vals = bah_ec.equity_curve if bah_ec else None
-                for ts, val in ec.items():
-                    row: dict = {
-                        "date": str(ts.date()) if hasattr(ts, "date") else str(ts),
-                        "strategy": round(float(val), 4),
+        try:
+            if not merged.empty and "btc_return" in merged.columns:
+                _gex_series = _gex_db.get_series(days=365)
+                bt = Backtest()
+                results = bt.run(
+                    merged,
+                    gex_series=_gex_series if not _gex_series.empty else None,
+                    active_barriers=active_barriers,
+                    composite=composite,
+                )
+                for key, m in results.items():
+                    backtest_metrics[key] = {
+                        "strategy_name": m.strategy_name,
+                        "total_return_pct": round(m.total_return * 100, 2),
+                        "annualized_return_pct": round(m.annualized_return * 100, 2),
+                        "sharpe_ratio": round(m.sharpe_ratio, 3),
+                        "max_drawdown_pct": round(m.max_drawdown * 100, 2),
+                        "win_rate_pct": round(m.win_rate * 100, 2),
+                        "profit_factor": round(m.profit_factor, 3) if m.profit_factor < 1000 else None,
+                        "n_trades": m.n_trades,
+                        "days_long": m.days_long,
+                        "days_short": m.days_short,
+                        "days_flat": m.days_flat,
                     }
-                    if bah_vals is not None and ts in bah_vals.index:
-                        row["buy_and_hold"] = round(float(bah_vals[ts]), 4)
-                    equity_curve.append(row)
+                if "strategy" in results and not results["strategy"].equity_curve.empty:
+                    ec = results["strategy"].equity_curve
+                    bah_ec = results.get("buy_and_hold")
+                    bah_vals = bah_ec.equity_curve if bah_ec else None
+                    for ts, val in ec.items():
+                        row: dict = {
+                            "date": str(ts.date()) if hasattr(ts, "date") else str(ts),
+                            "strategy": round(float(val), 4),
+                        }
+                        if bah_vals is not None and ts in bah_vals.index:
+                            row["buy_and_hold"] = round(float(bah_vals[ts]), 4)
+                        equity_curve.append(row)
+        except Exception:
+            _log.warning("Backtest computation failed", exc_info=True)
 
         pillars_out = [
             {"name": p.name, "score": p.score, "weight": round(p.weight, 4),

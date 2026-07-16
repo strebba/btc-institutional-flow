@@ -6,6 +6,7 @@ Visualizza in tempo reale:
   - ETF Flows    — flussi istituzionali IBIT, correlazione rolling
   - Segnali      — segnale composito operativo + backtest
   - EDGAR Monitor — monitor note strutturate SEC
+  - Validation   — walk-forward, factor decomposition, parameter sensitivity
 
 Moduli:
   - data_loader   — @st.cache_data functions (fetch + caching)
@@ -193,6 +194,9 @@ from src.dashboard.data_loader import (  # noqa: E402
     run_regime,
     run_backtest,
     run_event_study,
+    run_walk_forward,
+    run_factor_decomp,
+    run_sensitivity,
 )
 from src.dashboard.header import _render_header  # noqa: E402
 from src.dashboard.sidebar import _sidebar  # noqa: E402
@@ -200,6 +204,7 @@ from src.dashboard.tabs.barrier_map import _tab_barrier_map  # noqa: E402
 from src.dashboard.tabs.gex import _tab_gex  # noqa: E402
 from src.dashboard.tabs.flows import _tab_flows  # noqa: E402
 from src.dashboard.tabs.signals import _tab_signals  # noqa: E402
+from src.dashboard.tabs.validation import _tab_validation  # noqa: E402
 from src.dashboard.tabs.edgar import _tab_edgar_monitor  # noqa: E402
 
 
@@ -245,19 +250,21 @@ def main() -> None:
     if manual_refresh:
         for fn in [load_prices_and_flows, load_gex, load_barriers,
                    load_db_summary, load_macro, run_granger, run_regime,
-                   run_backtest, run_event_study]:
+                   run_backtest, run_event_study,
+                   run_walk_forward, run_factor_decomp, run_sensitivity]:
             fn.clear()
         st.rerun()
 
     _render_header(snap, merged_df)
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🎯 Barrier Map",
         "📊 GEX",
         "💰 ETF Flows",
         "🚦 Segnali",
         "🔍 EDGAR Monitor",
+        "🔬 Validation",
     ])
 
     with tab1:
@@ -270,6 +277,8 @@ def main() -> None:
         _tab_signals(snap, merged_df, barriers)
     with tab5:
         _tab_edgar_monitor(barriers, merged_df)
+    with tab6:
+        _tab_validation(merged_df, barriers)
 
     st.caption(
         f"Ultimo aggiornamento: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')} · "

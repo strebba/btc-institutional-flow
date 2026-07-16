@@ -326,12 +326,12 @@ class PriceFetcher:
         if "btc_close" in merged and "ibit_close" in merged:
             merged["ibit_btc_ratio"] = merged["ibit_close"] / merged["btc_close"]
 
-        # Volatilità realizzata BTC 7 giorni
+        # Volatilità realizzata BTC 7 giorni (annualizzata — BTC trades 365 giorni/anno)
         if "btc_return" in merged:
             merged["btc_vol_7d"] = (
                 merged["btc_return"]
                 .rolling(7, min_periods=4)
-                .std() * (252 ** 0.5)  # annualizzata
+                .std() * (365 ** 0.5)
             )
 
         return merged.dropna(how="all")

@@ -203,7 +203,7 @@ class Backtest:
         Args:
             strategy_returns: rendimenti giornalieri (log returns).
             strategy_name: nome della strategia.
-            signals: segnali opzionali per contare long/short/flat.
+            signals: segnali opzionali per contare long/short/flat e applicare costi.
 
         Returns:
             BacktestMetrics.
@@ -218,6 +218,14 @@ class Backtest:
                 n_trades=0, days_long=0, days_short=0, days_flat=0,
             )
 
+        # Transaction costs: applicati solo sui giorni di cambio posizione
+        cost_bps = float(self._cfg.get("transaction_cost_bps", 80))
+        if cost_bps > 0 and signals is not None:
+            cost_pct = cost_bps / 10_000
+            position_changes = signals.diff().fillna(0).abs()
+            rets = rets.copy()
+            rets = rets - (position_changes.reindex(rets.index).fillna(0) * cost_pct)
+
         # Equity curve — log returns richiedono exp(cumsum), non (1+r).cumprod()
         equity = np.exp(rets.cumsum())
 
@@ -229,6 +237,26 @@ class Backtest:
         # Sharpe (rf=0, annualizzato) — sqrt(365) per crypto
         ann_vol   = float(rets.std() * (365 ** 0.5))
         sharpe    = ann_ret / ann_vol if ann_vol > 0 else 0.0
+
+        # ── Sharpe sanity check ────────────────────────────────────────────
+        # Reference: sharp_edges.md "overfitting-certainty" — Haircut Rule
+        if sharpe > 5.0:
+            _log.warning(
+                "%s: Sharpe=%.2f — SEVERELY OVERFIT (expect ≤0.5 live). "
+                "Reduce parameters or increase out-of-sample validation.",
+                strategy_name, sharpe,
+            )
+        elif sharpe > 3.0:
+            _log.warning(
+                "%s: Sharpe=%.2f — LIKELY OVERFIT (Haircut Rule: expect ≤1.5 live). "
+                "Verify with walk-forward backtest.",
+                strategy_name, sharpe,
+            )
+        elif sharpe > 2.0:
+            _log.info(
+                "%s: Sharpe=%.2f — above typical. Walk-forward validation recommended.",
+                strategy_name, sharpe,
+            )
 
         # Max drawdown
         rolling_max = equity.cummax()
@@ -297,6 +325,21 @@ class Backtest:
             _log.error("btc_return mancante nel DataFrame")
             return {}
 
+        n_days = len(df)
+        n_years_bh = n_days / 365
+        if n_years_bh < 1:
+            _log.warning(
+                "Backtest su < 1 anno di dati (%.1f mesi) — statisticamente "
+                "insufficiente per validazione. Richiesti ≥2 anni con più regimi.",
+                n_years_bh * 12,
+            )
+        elif n_years_bh < 2:
+            _log.info(
+                "Backtest su %.1f anni di dati — copertura minima. "
+                "Walk-forward validation raccomandata.",
+                n_years_bh,
+            )
+
         # Genera segnali (lag=1 per evitare look-ahead bias)
         signals = self._generate_signals(
             df, gex_series, active_barriers, barrier_history, signal_model, composite
@@ -341,6 +384,62 @@ class Backtest:
             bah.sharpe_ratio,
             bah.max_drawdown * 100,
         )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Regime coverage
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def regime_coverage(merged_df: pd.DataFrame) -> dict:
+        """Verifica che il dataset copra regimi di mercato noti.
+
+        Reference: sharp_edges.md "regime-blindness" — una strategia
+        testata su un solo regime non è validata.
+
+        Args:
+            merged_df: DataFrame con DatetimeIndex.
+
+        Returns:
+            dict: periods_covered (bool per periodo), coverage_pct,
+            is_adequate (bool, True se ≥2 periodi coperti).
+        """
+        required_periods = {
+            "2020_covid": ("2020-02-15", "2020-04-15"),
+            "2021_bull": ("2021-01-01", "2021-04-15"),
+            "2022_bear": ("2022-01-01", "2022-12-31"),
+            "2023_recovery": ("2023-01-01", "2023-06-30"),
+            "2024_etf_launch": ("2024-01-10", "2024-03-31"),
+        }
+
+        coverage: dict[str, bool] = {}
+
+        for period_name, (start, end) in required_periods.items():
+            try:
+                period_data = merged_df.loc[start:end]
+                coverage[period_name] = len(period_data) > 5
+            except Exception:
+                coverage[period_name] = False
+
+        n_covered = sum(coverage.values())
+        coverage_pct = n_covered / len(required_periods) if required_periods else 0.0
+
+        is_adequate = n_covered >= 2
+
+        if not is_adequate:
+            _log.warning(
+                "Regime coverage insufficiente: %d/%d periodi coperti. "
+                "Il backtest potrebbe riflettere un solo regime di mercato.",
+                n_covered, len(required_periods),
+            )
+        else:
+            _log.info("Regime coverage: %d/%d periodi — adeguato.", n_covered, len(required_periods))
+
+        return {
+            "periods_covered": coverage,
+            "coverage_pct": round(coverage_pct, 2),
+            "n_covered": n_covered,
+            "is_adequate": is_adequate,
+        }
 
     # ──────────────────────────────────────────────────────────────────────────
     # Plot

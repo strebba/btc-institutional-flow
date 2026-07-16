@@ -10,6 +10,27 @@ _settings = get_settings()
 _REFRESH = _settings["dashboard"]["refresh_interval_s"]
 
 
+def _get_backtest_context(days: int = 365):
+    """Helper condiviso: GexDB series + StructuredNotesDB barrier_history.
+
+    Sostituisce i 4 blocchi duplicati in run_backtest, run_walk_forward,
+    run_factor_decomp e run_sensitivity.
+    """
+    from src.edgar.structured_notes_db import StructuredNotesDB
+    from src.gex.gex_db import GexDB
+
+    gex_series = GexDB().get_series(days=days)
+    barrier_history = None
+    try:
+        bh = StructuredNotesDB().get_barrier_history(days=days)
+        if not bh.empty:
+            barrier_history = bh
+    except Exception:
+        pass
+    return gex_series, barrier_history
+
+
+@st.cache_data(ttl=_REFRESH, show_spinner=False)
 def load_prices_and_flows() -> pd.DataFrame:
     """Carica prezzi BTC/IBIT e flussi ETF aggregati."""
     from src.flows.correlation import FlowCorrelation
@@ -137,41 +158,19 @@ def load_db_summary() -> dict:
 def load_macro() -> dict:
     """Carica i dati macro CoinGlass (funding/OI/L-S/liquidazioni) per il pilastro Macro.
 
-    Best-effort: se CoinGlass non è disponibile (chiave assente, rete) ritorna {}
-    e il pilastro Macro risulterà 'n/d' (i pesi vengono riscalati sugli altri).
+    Best-effort: se CoinGlass non è disponibile ritorna {} e il pilastro Macro
+    risulterà 'n/d' (i pesi vengono riscalati sugli altri).
+
+    Usa src.flows.macro_fetcher.fetch_macro_data() — stessa fonte di /api/signals.
     """
-    out: dict = {}
+    from src.flows.macro_fetcher import fetch_macro_data
+
     try:
-        from src.flows.coinglass_client import CoinGlassClient
-        cg = CoinGlassClient()
-        try:
-            fr = cg.fetch_funding_rate_history(days=14)
-            if not fr.empty:
-                out["funding_rate_annualized_pct"] = float(fr.iloc[-1]) * 3 * 365 * 100
-        except Exception:
-            pass
-        try:
-            oi = cg.fetch_aggregated_oi_history(days=14)
-            if len(oi) >= 8 and float(oi.iloc[-8]) > 0:
-                out["oi_change_7d_pct"] = (float(oi.iloc[-1]) - float(oi.iloc[-8])) / float(oi.iloc[-8]) * 100
-        except Exception:
-            pass
-        try:
-            ls = cg.fetch_long_short_ratio(days=3)
-            if not ls.empty:
-                out["long_short_ratio"] = float(ls.iloc[-1])
-        except Exception:
-            pass
-        try:
-            liq = cg.fetch_liquidations(days=2)
-            if not liq.empty:
-                out["liquidations_long_24h_usd"] = float(liq["long_usd"].iloc[-1])
-                out["liquidations_short_24h_usd"] = float(liq["short_usd"].iloc[-1])
-        except Exception:
-            pass
+        macro = fetch_macro_data()
+        return macro.to_dict()
     except Exception as e:
         _log.warning("Macro CoinGlass non disponibile per la dashboard: %s", e)
-    return out
+        return {}
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
@@ -206,18 +205,8 @@ def run_backtest(merged_df: pd.DataFrame, barriers: list[dict]):
     """Esegue il backtest a 4 pilastri con serie GEX storica dal DB e storico barriere."""
     from src.analytics.backtest import Backtest
     from src.analytics.pillars import CompositeSignal
-    from src.edgar.structured_notes_db import StructuredNotesDB
-    from src.gex.gex_db import GexDB
 
-    gex_series = GexDB().get_series(days=365)
-    # Carica storico barriere se disponibile; fallback a barriere correnti
-    barrier_history = None
-    try:
-        bh = StructuredNotesDB().get_barrier_history(days=365)
-        if not bh.empty:
-            barrier_history = bh
-    except Exception:
-        pass
+    gex_series, barrier_history = _get_backtest_context(days=365)
 
     bt = Backtest()
     return bt, bt.run(
@@ -287,3 +276,106 @@ def compute_composite(
         liquidations_short_24h_usd=macro.get("liquidations_short_24h_usd"),
     )
     return CompositeSignal().compute(inputs)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Quantitative validation (nuovi moduli)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@st.cache_data(ttl=_REFRESH, show_spinner=False)
+def run_walk_forward(merged_df: pd.DataFrame, barriers: list[dict]) -> dict | None:
+    """Walk-forward backtest del CompositeSignal a 4 pilastri.
+
+    Returns:
+        dict da WalkForwardBacktest.analyze() o None se dati insufficienti.
+    """
+    from src.analytics.walk_forward import WalkForwardBacktest
+
+    if merged_df.empty or "btc_return" not in merged_df.columns:
+        return None
+
+    gex_series, barrier_history = _get_backtest_context(days=730)
+
+    wfb = WalkForwardBacktest()
+    results = wfb.run(
+        merged_df,
+        train_days=504,
+        test_days=63,
+        step_days=63,
+        gex_series=gex_series if not gex_series.empty else None,
+        active_barriers=barriers if barriers else None,
+        barrier_history=barrier_history,
+    )
+    return wfb.analyze(results)
+
+
+@st.cache_data(ttl=_REFRESH, show_spinner=False)
+def run_factor_decomp(merged_df: pd.DataFrame, barriers: list[dict]) -> dict | None:
+    """Factor decomposition dei rendimenti della strategia.
+
+    Returns:
+        dict con decomposition e exposures, o None.
+    """
+    from src.analytics.backtest import Backtest
+    from src.analytics.factor_decomposition import FactorDecomposition
+    from src.analytics.pillars import CompositeSignal
+
+    if merged_df.empty or "btc_return" not in merged_df.columns:
+        return None
+
+    bt = Backtest()
+    composite = CompositeSignal()
+
+    gex_series, barrier_history = _get_backtest_context(days=365)
+
+    df = merged_df.copy()
+    if gex_series is not None and not gex_series.empty:
+        df = df.join(gex_series.rename("_gex"), how="left")
+        df["_gex"] = df["_gex"].ffill().fillna(0.0)
+
+    signals = bt._generate_signals(
+        df,
+        gex_series=gex_series if not gex_series.empty else None,
+        active_barriers=barriers if barriers else None,
+        barrier_history=barrier_history,
+        composite=composite,
+    )
+    signals_lagged = signals.shift(1).fillna(0.0)
+    rets = df["btc_return"].dropna()
+    strat_rets = rets * signals_lagged.reindex(rets.index).fillna(0.0)
+
+    fd = FactorDecomposition()
+    factors = fd.build_default_factors(rets)
+
+    if factors.empty:
+        return None
+
+    exposures = fd.calculate_factor_exposures(strat_rets, factors)
+    decomposition = fd.decompose_strategy_returns(strat_rets, factors)
+
+    return {"exposures": exposures, "decomposition": decomposition}
+
+
+@st.cache_data(ttl=_REFRESH, show_spinner=False)
+def run_sensitivity(merged_df: pd.DataFrame, barriers: list[dict]) -> dict | None:
+    """Parameter sensitivity dei pesi dei pilastri.
+
+    Returns:
+        dict da ParameterSensitivity.pillar_sensitivity() o None.
+    """
+    from src.analytics.sensitivity import ParameterSensitivity
+
+    if merged_df.empty or "btc_return" not in merged_df.columns:
+        return None
+
+    gex_series, barrier_history = _get_backtest_context(days=365)
+
+    ps = ParameterSensitivity()
+    return ps.pillar_sensitivity(
+        merged_df,
+        delta=0.20,
+        gex_series=gex_series if not gex_series.empty else None,
+        active_barriers=barriers if barriers else None,
+        barrier_history=barrier_history,
+    )

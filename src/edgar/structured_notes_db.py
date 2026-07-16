@@ -16,10 +16,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Generator, Optional
 
-from src.config import get_settings, setup_logging
+from src.config import setup_logging
 from src.edgar.models import BarrierLevel, StructuredNote
 
 _log = setup_logging("edgar.db")
+
+_VERSIONED_DB = Path(__file__).resolve().parent.parent.parent / "data" / "structured_notes.db"
 
 # ─── DDL ─────────────────────────────────────────────────────────────────────
 
@@ -101,8 +103,7 @@ class StructuredNotesDB:
     """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        cfg = get_settings()
-        self._path = Path(db_path or cfg["database"]["path"])
+        self._path = Path(db_path or _VERSIONED_DB)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 

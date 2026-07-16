@@ -60,6 +60,8 @@ flows:
   lookback_days: 365
   sosovalue_api_key: ""        # registrarsi su sosovalue.com (free tier)
   edgar_nport_cik: "0001980994"  # IBIT CIK su SEC EDGAR
+  yfinance_fallback:
+    premium_to_flow_ratio: 0.5  # 50% del tracking error → flusso netto stimato
 
 # ─── ANALYTICS ──────────────────────────────────────────────────────────────────
 analytics:
@@ -76,6 +78,8 @@ backtest:
   short_gex_threshold: 0
   short_flow_threshold_usd_m: -200
   barrier_exclusion_pct: 5.0
+  transaction_cost_bps: 80      # 80 bps per trade crypto (spread + commission + slippage)
+  trading_days_per_year: 365     # BTC trades 365 giorni/anno
 
 # ─── COINGLASS ──────────────────────────────────────────────────────────────────
 coinglass:

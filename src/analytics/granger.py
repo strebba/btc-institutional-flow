@@ -5,6 +5,18 @@ Usa statsmodels.tsa.stattools.grangercausalitytests per testare:
   H2: BTC_returns Granger-cause IBIT_flows (i rendimenti predicono i flussi)
 
 Per lag da 1 a max_lags giorni.
+
+Best practice: applica la correzione di Benjamini-Hochberg (FDR) per
+controllare il False Discovery Rate sui test multipli (max_lags test
+per direzione). Senza correzione, con 10 lag e alpha=0.05, la probabilità
+di almeno un falso positivo è ~40%.
+
+⚠️ DATA SNOOPING WARNING: Il fattore `granger_lead` nel SignalModel
+usa il lag=5 trovato significativo sullo STESSO dataset del backtest.
+Questo è un caso classico di data snooping: il lag è stato selezionato
+guardando i risultati del test, non definito a priori. Per una validazione
+rigorosa, il lag andrebbe scelto su un dataset separato (pre-2024) e
+validato su un holdout.
 """
 
 from __future__ import annotations
@@ -28,7 +40,8 @@ class GrangerResult:
         lag: numero di lag.
         f_stat: F-statistic del test.
         p_value: p-value del test.
-        significant: True se p_value < alpha.
+        significant: True se p_value < alpha (naive, senza correzione).
+        fdr_significant: True se significativo dopo Benjamini-Hochberg FDR correction.
         alpha: livello di significatività usato.
     """
 
@@ -37,11 +50,15 @@ class GrangerResult:
     f_stat: float
     p_value: float
     significant: bool
+    fdr_significant: bool = False
     alpha: float = 0.05
 
 
 class GrangerAnalysis:
     """Esegue il test di Granger causality su serie temporali finanziarie.
+
+    Applica la correzione di Benjamini-Hochberg per controllare il FDR
+    sui test multipli (un test per lag, per direzione).
 
     Args:
         cfg: configurazione analytics (da settings.yaml).
@@ -119,6 +136,45 @@ class GrangerAnalysis:
         return df.dropna()
 
     # ──────────────────────────────────────────────────────────────────────────
+    # Multiple testing correction
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def benjamini_hochberg(
+        results: list[GrangerResult],
+        alpha: float = 0.05,
+    ) -> list[GrangerResult]:
+        """Applica la correzione di Benjamini-Hochberg per FDR control.
+
+        Reference: sharp_edges.md "multiple-testing-trap".
+
+        Args:
+            results: lista di GrangerResult per una direzione, ordinati per lag.
+            alpha: livello FDR target (default 0.05).
+
+        Returns:
+            La stessa lista con fdr_significant aggiornato per ogni elemento.
+        """
+        if not results:
+            return results
+
+        n = len(results)
+        indexed = sorted(enumerate(results), key=lambda x: x[1].p_value)
+
+        last_sig_rank = -1
+        for rank, (orig_idx, r) in enumerate(indexed, start=1):
+            threshold = (rank / n) * alpha
+            if r.p_value <= threshold:
+                last_sig_rank = rank
+            else:
+                break
+
+        for rank, (orig_idx, r) in enumerate(indexed, start=1):
+            r.fdr_significant = rank <= last_sig_rank
+
+        return results
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Granger test
     # ──────────────────────────────────────────────────────────────────────────
 
@@ -131,6 +187,9 @@ class GrangerAnalysis:
         alpha: float = 0.05,
     ) -> dict[str, list[GrangerResult]]:
         """Esegue il test di Granger causality bidirezionale.
+
+        Applica la correzione di Benjamini-Hochberg per controllare il FDR
+        sui test multipli (un test per ogni lag, per ogni direzione).
 
         Args:
             merged_df: DataFrame con almeno flow_col e return_col.
@@ -212,6 +271,17 @@ class GrangerAnalysis:
         except Exception as e:
             _log.error("Errore test H2: %s", e)
 
+        # Applica correzione Benjamini-Hochberg per ogni direzione
+        for direction in results:
+            results[direction] = self.benjamini_hochberg(results[direction], alpha)
+
+        fdr_f2r = sum(1 for r in results["flows→returns"] if r.fdr_significant)
+        fdr_r2f = sum(1 for r in results["returns→flows"] if r.fdr_significant)
+        _log.info(
+            "Benjamini-Hochberg: flows→returns %d/%d sig, returns→flows %d/%d sig (FDR)",
+            fdr_f2r, len(results["flows→returns"]), fdr_r2f, len(results["returns→flows"]),
+        )
+
         return results
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -221,6 +291,9 @@ class GrangerAnalysis:
     def interpret(self, results: dict[str, list[GrangerResult]]) -> str:
         """Genera un'interpretazione testuale dei risultati.
 
+        Mostra sia la significatività naive (p < alpha) che quella corretta
+        per test multipli (Benjamini-Hochberg FDR).
+
         Args:
             results: dict dal metodo run().
 
@@ -228,18 +301,20 @@ class GrangerAnalysis:
             str: interpretazione leggibile.
         """
         lines: list[str] = ["=== Granger Causality Test ===\n"]
+        lines.append("Naive: p < alpha    FDR: Benjamini-Hochberg correction\n")
 
         for direction, res_list in results.items():
             if not res_list:
                 continue
             sig = [r for r in res_list if r.significant]
+            fdr_sig = [r for r in res_list if r.fdr_significant]
             lines.append(f"Direzione: {direction}")
 
-            if sig:
-                min_lag = min(r.lag for r in sig)
-                min_p = min(r.p_value for r in sig)
+            if fdr_sig:
+                min_lag = min(r.lag for r in fdr_sig)
+                min_p = min(r.p_value for r in fdr_sig)
                 lines.append(
-                    f"  ✓ SIGNIFICATIVO: causalità di Granger rilevata "
+                    f"  ✓ SIGNIFICATIVO (FDR corretto): causalità di Granger rilevata "
                     f"(p={min_p:.4f} al lag {min_lag})"
                 )
                 label = (
@@ -248,6 +323,12 @@ class GrangerAnalysis:
                     else "I rendimenti BTC predicono i flussi IBIT"
                 )
                 lines.append(f"  → {label} con lag {min_lag}d")
+            elif sig:
+                n_naive = len(sig)
+                lines.append(
+                    f"  ⚠ ATTENZIONE: {n_naive} lag significativi naive, "
+                    f"Nessuno sopravvive alla correzione FDR (probabili falsi positivi)"
+                )
             else:
                 lines.append(
                     "  ✗ Non c'è evidenza di causalità di Granger (p > 0.05 per tutti i lag)"
@@ -255,7 +336,7 @@ class GrangerAnalysis:
             lines.append("")
 
         # Tabella risultati
-        lines.append("Tabella p-values:\n")
+        lines.append("Tabella p-values (*** = significativo naive, [FDR] = FDR-corrected):\n")
         lines.append(
             f"{'Lag':>4}  {'flows→ret p':>12}  {'ret→flows p':>12}  {'flows→ret sig':>13}  {'ret→flows sig':>13}"
         )
@@ -271,8 +352,17 @@ class GrangerAnalysis:
             p1 = f"{r1.p_value:.4f}" if r1 else "  n/a "
             p2 = f"{r2.p_value:.4f}" if r2 else "  n/a "
             s1 = "***" if r1 and r1.significant else "   "
+            s1 += "[FDR]" if r1 and r1.fdr_significant else "     "
             s2 = "***" if r2 and r2.significant else "   "
+            s2 += "[FDR]" if r2 and r2.fdr_significant else "     "
             lines.append(f"{lag:>4}  {p1:>12}  {p2:>12}  {s1:>13}  {s2:>13}")
+
+        lines.append("")
+        lines.append(
+            "⚠️  DATA SNOOPING: il fattore granger_lead (lag=5) nel SignalModel usa un lag "
+            "trovato significativo sullo stesso dataset. Per validazione rigorosa, "
+            "il lag va definito a priori su un dataset separato (e.g. pre-2024)."
+        )
 
         return "\n".join(lines)
 
@@ -283,7 +373,8 @@ class GrangerAnalysis:
             results: dict dal metodo run().
 
         Returns:
-            pd.DataFrame: con colonne lag, direction, f_stat, p_value, significant.
+            pd.DataFrame: con colonne lag, direction, f_stat, p_value,
+                significant, fdr_significant.
         """
         rows = []
         for direction, res_list in results.items():
@@ -295,6 +386,7 @@ class GrangerAnalysis:
                         "f_stat": r.f_stat,
                         "p_value": r.p_value,
                         "significant": r.significant,
+                        "fdr_significant": r.fdr_significant,
                     }
                 )
         return pd.DataFrame(rows)

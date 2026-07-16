@@ -107,6 +107,21 @@ class TestRun:
             for r in res_list:
                 assert r.significant == (r.p_value < 0.05)
 
+    def test_fdr_significant_field_exists(self, analyzer, df):
+        results = analyzer.run(df)
+        for direction, res_list in results.items():
+            for r in res_list:
+                assert hasattr(r, "fdr_significant")
+                assert isinstance(r.fdr_significant, bool)
+
+    def test_fdr_not_more_than_naive(self, analyzer, df):
+        """FDR non deve dichiarare più significativi del naive."""
+        results = analyzer.run(df)
+        for direction, res_list in results.items():
+            n_naive = sum(1 for r in res_list if r.significant)
+            n_fdr = sum(1 for r in res_list if r.fdr_significant)
+            assert n_fdr <= n_naive
+
     def test_missing_columns_returns_empty(self, analyzer):
         df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
         results = analyzer.run(df)
@@ -152,7 +167,7 @@ class TestToDataFrame:
     def test_columns(self, analyzer, df):
         results = analyzer.run(df)
         frame = analyzer.to_dataframe(results)
-        for col in ["lag", "direction", "f_stat", "p_value", "significant"]:
+        for col in ["lag", "direction", "f_stat", "p_value", "significant", "fdr_significant"]:
             assert col in frame.columns
 
     def test_row_count(self, analyzer, df):
@@ -161,3 +176,42 @@ class TestToDataFrame:
         frame = analyzer.to_dataframe(results)
         # 2 direzioni × max_lags righe
         assert len(frame) == 2 * max_lags
+
+
+class TestBenjaminiHochberg:
+    def test_all_low_pvalues_all_significant(self, analyzer):
+        """Con tutti p-value bassi, FDR conferma tutto."""
+        from src.analytics.granger import GrangerResult
+        results = [
+            GrangerResult("test", lag=1, f_stat=10.0, p_value=0.001, significant=True),
+            GrangerResult("test", lag=2, f_stat=8.0, p_value=0.002, significant=True),
+            GrangerResult("test", lag=3, f_stat=6.0, p_value=0.003, significant=True),
+        ]
+        corrected = analyzer.benjamini_hochberg(results, alpha=0.05)
+        assert all(r.fdr_significant for r in corrected)
+
+    def test_all_high_pvalues_none_significant(self, analyzer):
+        from src.analytics.granger import GrangerResult
+        results = [
+            GrangerResult("test", lag=1, f_stat=1.0, p_value=0.5, significant=False),
+            GrangerResult("test", lag=2, f_stat=1.0, p_value=0.6, significant=False),
+        ]
+        corrected = analyzer.benjamini_hochberg(results, alpha=0.05)
+        assert not any(r.fdr_significant for r in corrected)
+
+    def test_mixed_pvalues_fdr_stricter(self, analyzer):
+        """Con p-value misti, FDR deve essere più restrittivo del naive."""
+        from src.analytics.granger import GrangerResult
+        results = [
+            GrangerResult("test", lag=1, f_stat=5.0, p_value=0.01, significant=True),
+            GrangerResult("test", lag=2, f_stat=3.0, p_value=0.04, significant=True),
+            GrangerResult("test", lag=3, f_stat=1.5, p_value=0.10, significant=False),
+            GrangerResult("test", lag=4, f_stat=1.2, p_value=0.15, significant=False),
+        ]
+        corrected = analyzer.benjamini_hochberg(results, alpha=0.05)
+        n_naive = sum(1 for r in results if r.significant)
+        n_fdr = sum(1 for r in corrected if r.fdr_significant)
+        assert n_fdr <= n_naive
+
+    def test_empty_list(self, analyzer):
+        assert analyzer.benjamini_hochberg([], alpha=0.05) == []

@@ -169,11 +169,11 @@ accelerazione, prezzo aggiustato per volatilità + flusso 3gg).
 
     # Tabella comparativa
     table = bt.summary_table(results)
-    st.dataframe(table, width="stretch")
+    st.dataframe(table, use_container_width=True)
 
     # Equity curve
     st.subheader("Equity Curve")
-    st.plotly_chart(backtest_equity(results), width="stretch")
+    st.plotly_chart(backtest_equity(results), use_container_width=True)
 
     st.caption("""
 ⚠️ Il backtest ha limitazioni significative: lo storico è breve (dal Nov 2024),

@@ -275,3 +275,113 @@ class TestPlot:
         fig = bt.plot(results)
         # Non deve crashare
         assert fig is None or hasattr(fig, "data")
+
+
+class TestSharpeSanity:
+    def test_high_sharpe_does_not_crash(self, bt):
+        """Sharpe elevato deve essere calcolato correttamente senza crash."""
+        rets = pd.Series([0.02] * 100)  # rendimenti costanti → Sharpe molto alto
+        result = bt._compute_metrics(rets, "test")
+        assert result.sharpe_ratio > 3.0
+
+    def test_normal_sharpe_no_warning(self, bt):
+        rng = np.random.default_rng(42)
+        rets = pd.Series(rng.normal(0.001, 0.02, 252))
+        result = bt._compute_metrics(rets, "test")
+        assert isinstance(result.sharpe_ratio, float)
+
+
+class TestRegimeCoverage:
+    def test_returns_dict(self, bt):
+        dates = pd.date_range("2023-01-01", periods=365, freq="D")
+        df = pd.DataFrame({"dummy": range(365)}, index=dates)
+        result = bt.regime_coverage(df)
+        assert "periods_covered" in result
+        assert "coverage_pct" in result
+        assert "is_adequate" in result
+
+    def test_single_regime_not_adequate(self, bt):
+        """Un solo periodo di 3 mesi non è adeguato."""
+        dates = pd.date_range("2024-01-15", periods=60, freq="D")
+        df = pd.DataFrame({"dummy": range(60)}, index=dates)
+        result = bt.regime_coverage(df)
+        assert not result["is_adequate"]
+
+    def test_multiple_regimes_adequate(self, bt):
+        """Dataset che copre 2022 bear + 2024 launch → adeguato."""
+        dates = pd.date_range("2022-01-01", periods=800, freq="D")
+        df = pd.DataFrame({"dummy": range(800)}, index=dates)
+        result = bt.regime_coverage(df)
+        assert result["is_adequate"]
+
+    def test_empty_dataframe(self, bt):
+        df = pd.DataFrame(index=pd.DatetimeIndex([]))
+        result = bt.regime_coverage(df)
+        assert not result["is_adequate"]
+        assert result["n_covered"] == 0
+
+
+class TestCompositeMode:
+    """Test del backtest in modalità CompositeSignal (4 pilastri).
+
+    Questa è la modalità usata dalla dashboard (data_loader:228), ma non era
+    coperta da test. Il test data deve includere tutte le colonne attese dai
+    4 pilastri: GEX, ETF flows, MACRO, BARRIER.
+    """
+
+    @staticmethod
+    def _make_composite_df(n: int = 200, seed: int = 42) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        returns = rng.normal(0.001, 0.025, n)
+        prices = 65_000.0 * np.exp(np.cumsum(returns))
+        return pd.DataFrame(
+            {
+                "btc_return": returns,
+                "btc_close": prices,
+                "ibit_flow_3d": rng.normal(0, 200e6, n),
+                "total_net_gex": rng.normal(15e6, 30e6, n),
+                "total_flow_usd": rng.normal(50e6, 150e6, n),
+                "btc_vol_7d": np.full(n, 0.55),
+                "funding_rate": rng.normal(0.0001, 0.0003, n),
+                "oi_usd": 30e9 * np.exp(np.cumsum(rng.normal(0.0001, 0.002, n))),
+                "long_short_ratio": rng.normal(1.5, 0.3, n),
+            },
+            index=dates,
+        )
+
+    def test_run_with_composite(self, bt):
+        from src.analytics.pillars import CompositeSignal
+        df = self._make_composite_df()
+        results = bt.run(df, composite=CompositeSignal())
+        assert "strategy" in results
+        assert "buy_and_hold" in results
+        assert isinstance(results["strategy"].strategy_name, str)
+
+    def test_generate_signals_with_composite(self, bt):
+        from src.analytics.pillars import CompositeSignal
+        df = self._make_composite_df()
+        signals = bt._generate_signals(df, composite=CompositeSignal())
+        assert signals.isin([-1.0, 0.0, 1.0]).all()
+        assert len(signals) == len(df)
+
+    def test_composite_strategy_produces_equity_curve(self, bt):
+        from src.analytics.pillars import CompositeSignal
+        df = self._make_composite_df()
+        results = bt.run(df, composite=CompositeSignal())
+        assert not results["strategy"].equity_curve.empty
+
+    def test_composite_with_gex_series(self, bt):
+        from src.analytics.pillars import CompositeSignal
+        df = self._make_composite_df()
+        gex = pd.Series(np.full(len(df), 20e6), index=df.index)
+        results = bt.run(df, gex_series=gex, composite=CompositeSignal())
+        assert "strategy" in results
+
+    def test_composite_with_barriers(self, bt):
+        from src.analytics.pillars import CompositeSignal
+        df = self._make_composite_df()
+        avg_price = float(df["btc_close"].mean())
+        barriers = [{"level_price_btc": avg_price * 1.10}]
+        results = bt.run(df, active_barriers=barriers, composite=CompositeSignal())
+        assert "strategy" in results

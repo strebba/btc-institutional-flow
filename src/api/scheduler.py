@@ -207,7 +207,7 @@ async def start_forecast_scheduler():
         from apscheduler.triggers.cron import CronTrigger
 
         s = fc.get("schedule", {})
-        grace = int(timedelta(hours=6).total_seconds())
+        grace = int(timedelta(hours=24).total_seconds())
         sch = AsyncIOScheduler(timezone="UTC")
         sch.add_job(
             _job_predict,

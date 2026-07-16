@@ -59,12 +59,21 @@ def test_barrier_knockin_below_is_bearish():
     assert ps.components["dominant_direction"] == "accelerante_ribasso"
 
 
-def test_barrier_autocall_above_is_resistance():
+def test_barrier_buffer_below_is_bearish():
+    """Buffer bucato al ribasso → dealer vende → score basso."""
+    barriers = [{"barrier_type": "buffer", "level_price_btc": 95_000,
+                 "notional_usd": 100e6, "issuer": "MS"}]
+    ps = score_barrier_pillar(active_barriers=barriers, spot_price=100_000)
+    assert ps.score is not None and ps.score < 40
+    assert ps.components["dominant_direction"] == "accelerante_ribasso"
+
+
+def test_barrier_autocall_above_is_supportive():
+    """Autocall sopra lo spot → dealer compra su dip → score sopra neutro."""
     barriers = [{"barrier_type": "autocall", "level_price_btc": 103_000,
                  "notional_usd": 100e6, "issuer": "GS"}]
     ps = score_barrier_pillar(active_barriers=barriers, spot_price=100_000)
-    # Resistenza: neutro-negativo (~40), non sotto il livello di knock-in
-    assert ps.score is not None and 35 <= ps.score <= 55
+    assert ps.score is not None and ps.score > 50
 
 
 def test_barrier_none_far_is_neutral():
@@ -93,6 +102,14 @@ def test_barrier_spot_zero_no_crash():
 
 def test_barrier_empty():
     assert score_barrier_pillar(active_barriers=[], spot_price=100_000).score is None
+
+
+def test_barrier_knockout_above_is_supportive():
+    """Knock-out sopra lo spot → dealer compra → score sopra neutro."""
+    barriers = [{"barrier_type": "knock_out", "level_price_btc": 105_000,
+                 "notional_usd": 100e6, "issuer": "JPM"}]
+    ps = score_barrier_pillar(active_barriers=barriers, spot_price=100_000)
+    assert ps.score is not None and ps.score > 50
 
 
 def test_barrier_missing_notional_equal_weight():

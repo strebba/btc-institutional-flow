@@ -1,5 +1,46 @@
 # ibit-gamma-tracker — Project Memory
 
+## Code Quality & Validation Overhaul (session 2026-07-16 — 19 fixes)
+
+**625 test passing** dopo tutti i fix (19 pre-existing lxml failures).
+
+### Fase 1 — Fix critici
+1. **DB duale risolto**: `StructuredNotesDB` e `GexDB` ora hanno path hardcodato a `data/structured_notes.db`, ignorano `DB_PATH`. L'API in dev (`make run-api`) usando `runtime.db` ora vede correttamente barriere e GEX storici. `SignalDB`, `PredictionDB`, `AlertDB` continuano a rispettare `DB_PATH`.
+2. **Async lock documentato**: `_gex_fetch_lock` è `threading.Lock`, corretto perché tutti i chiamanti sono endpoint sync eseguiti in threadpool. Documentato il vincolo.
+3. **Barrier sign corretto**: `_barrier_direction()` in `pillars.py` allineato a `barrier_sign()`. Autocall/knock-out sopra spot = supportivo (0.65, dealer compra su dip), knock-in/buffer sotto = accelerante (0.15). Aggiunta costante `_DIR_SUPPORTIVE`.
+4. **data_loader ora testato**: Estratto `_get_backtest_context()` helper condiviso che sostituisce 4 blocchi duplicati. Creato `tests/test_dashboard/test_data_loader.py` con 7 test.
+
+### Fase 2 — Fix statistici
+5. **Binomial p-value**: `scipy.stats.binom.sf()` al posto di `math.comb()` → niente overflow per n>170.
+6. **Volatilità BTC √365**: `price_fetcher.py` corretto da `252**0.5` a `365**0.5`. `backtest.py` già usava 365.
+7. **Transaction costs**: 80 bps dedotti su ogni cambio posizione nel backtest. Configurato in `settings.yaml:backtest.transaction_cost_bps`.
+8. **Magic 0.5 configurabile**: `scraper.py` legge `premium_to_flow_ratio` da `settings.yaml:flows.yfinance_fallback`.
+9. **Regime coverage + data-age**: `backtest.py:run()` emette warning se < 1 anno di dati. `regime_coverage()` già esistente.
+
+### Fase 3 — DRY
+10. **Macro data fetch unificato**: Nuovo `src/flows/macro_fetcher.py` con `MacroData` dataclass + `fetch_macro_data()`. Sostituisce 2 dei 3 siti duplicati (`/api/signals` e `data_loader.load_macro()`). `/api/macro` tenuto separato (serve storico 90gg per charting).
+11. **Backtest context helper**: `_get_backtest_context(days)` in `data_loader.py` sostituisce 4 blocchi identici di 15 righe.
+12-13. **Skip**: `_to_score`/`score_to_signal` dedup e CoinGlass parsing helper — il costo di un terzo modulo supera il beneficio.
+
+### Fase 4 — QoL
+14. `ruff>=0.9` in dev-dependencies (`pyproject.toml`)
+15. Marker `integration` registrato in `pyproject.toml`
+16. `st.dataframe(width="stretch")` → `use_container_width=True` in `tabs/signals.py`
+17. `@st.cache_data` su `load_prices_and_flows()` in `data_loader.py`
+18. Backtest in try/except isolato in `/api/signals` — non contagia più l'endpoint
+19. `misfire_grace_time` 6h → 24h in `scheduler.py`
+
+### File creati
+- `src/flows/macro_fetcher.py`
+- `tests/test_dashboard/test_data_loader.py`
+- `tests/test_dashboard/__init__.py`
+
+### Metriche
+- Righe nette: ~-150 (rimosse duplicazioni, aggiunta funzionalità)
+- Test aggiunti: 7 nuovi + 2 estesi (barrier direction)
+- DRY violations risolte: 4/6 critiche
+- Bug fissati: barrier sign invertito, binomial overflow, volatilità BTC, transaction costs, DB path duale
+
 ## Codebase Restructuring (session 2026-07-13 — comprehensive refactor)
 
 **513 test passing** dopo il refactor completo (12 pre-existing lxml failures in ambiente locale).

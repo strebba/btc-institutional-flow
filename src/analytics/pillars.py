@@ -73,9 +73,10 @@ MACRO_FACTOR_WEIGHTS: dict[str, float] = {
 
 # Parametri Barrier pillar
 _BARRIER_SIGMA = 0.10        # ampiezza kernel di prossimità (±10% → peso ~0.37)
-_DIR_ACCELERANT = 0.15       # knock_in/buffer sotto spot → accelerante ribasso
-_DIR_RESISTANCE = 0.40       # autocall/knock_out sopra spot → resistenza/soft-cap
-_DIR_NEUTRAL    = 0.50       # barriera dal lato neutro
+_DIR_ACCELERANT = 0.15       # knock_in/buffer sotto spot → dealer vende → bearish
+_DIR_RESISTANCE = 0.40       # barriera appena superata → dealer vende delta → bearish
+_DIR_NEUTRAL    = 0.50
+_DIR_SUPPORTIVE = 0.65       # autocall/knock_out sopra spot → dealer compra su dip
 
 
 # ─── Output ───────────────────────────────────────────────────────────────────
@@ -213,12 +214,23 @@ def score_gex_pillar(
 # ─── Pillar 2: BARRIER (direzionale, notional-weighted) ───────────────────────
 
 def _barrier_direction(barrier_type: str, below_spot: bool) -> float:
-    """Score direzionale 0-1 di una barriera (alto = supportivo, basso = ribassista)."""
+    """Score direzionale 0-1 di una barriera (alto = supportivo, basso = ribassista).
+
+    Allineata a barrier_utils.barrier_sign() per la direzionalità dealer-flow:
+      - knock_in/buffer bucati al ribasso → dealer vende → _DIR_ACCELERANT (0.15)
+      - autocall/knock_out sopra spot → dealer compra su dip → _DIR_SUPPORTIVE (0.65)
+      - altri casi (barriera lontana o atipica) → _DIR_NEUTRAL (0.50)
+
+    Il kernel di prossimità in score_barrier_pillar() gestisce il flip: quando
+    il prezzo si avvicina molto a un autocall, il peso del kernel aumenta e
+    l'effetto supportivo domina; se il prezzo sfonda la barriera, questa ricade
+    in un altro ramo (below_spot cambia).
+    """
     bt = (barrier_type or "").lower()
-    if below_spot and bt in ("knock_in", "buffer", "knock_out"):
-        return _DIR_ACCELERANT   # rottura al ribasso → dealer vendono → accelera il calo
-    if (not below_spot) and bt in ("autocall", "knock_out", "call"):
-        return _DIR_RESISTANCE   # sopra spot → soft-cap / resistenza al rialzo
+    if below_spot and bt in ("knock_in", "buffer"):
+        return _DIR_ACCELERANT
+    if (not below_spot) and bt in ("autocall", "knock_out"):
+        return _DIR_SUPPORTIVE
     return _DIR_NEUTRAL
 
 
