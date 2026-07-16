@@ -54,6 +54,7 @@ async def _register_telegram_webhook(telegram: Any) -> None:
     await telegram.set_webhook(f"{webhook_url}/api/telegram/webhook", secret_token=secret)
     await telegram.set_commands([
         {"command": "recap", "description": "Invia il recap GEX + IFI aggiornato"},
+        {"command": "signal", "description": "Segnale direzionale a 4 pilastri (bias long/short)"},
         {"command": "status", "description": "Stato del bot e freschezza dati"},
         {"command": "help", "description": "Mostra tutti i comandi disponibili"},
     ])

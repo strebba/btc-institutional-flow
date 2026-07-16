@@ -400,5 +400,32 @@
 
 ## Telegram Bot Commands
 - `/recap` — Recap GEX + IFI + ETF flows aggiornato (anche da webhook in gruppo)
+- `/signal` — Segnale direzionale a 4 pilastri con bias long/short (-100/+100), frecce per pilastro, livelli chiave
 - `/status` — Stato bot: ultimo recap, snapshot GEX, regime, prossimo recap
 - `/help` — Lista comandi disponibili
+
+## Comando /signal — Design (session 2026-07-16)
+
+Il comando `/signal` fornisce un'indicazione **direzionale esplicita** long/short
+derivata dai 4 pilastri del `CompositeSignal`, rispondendo alla domanda "devo
+essere long o short?" che il segnale LONG/CAUTION/RISK_OFF non rispondeva.
+
+### Componenti del messaggio
+1. **Verdetto**: bias netto da -100 (short) a +100 (long), con label:
+   ≥+40 LONG, +15/+40 LEGGERO LONG, -15/+15 NEUTRALE/FLAT, -40/-15 LEGGERO SHORT, ≤-40 SHORT
+2. **Barra visuale**: rappresentazione ASCII del bias con `█│░`
+3. **4 pilastri**: freccia direzionale (↑↗→↘↓) + score 0-100 + peso + reason
+4. **Livelli chiave**: spot BTC, gamma flip, call/put wall, nearest barrier EDGAR
+5. **Regime GEX**: positive_gamma / negative_gamma / neutral + conteggio barriere
+
+### Calcolo
+- `bias = score × 2 − 100` (trasformazione lineare del composite score 0-100)
+- Nessuna modifica al modello: `PillarScore.score` è già direzionale (0=bearish, 100=bullish)
+- `directional_bias()` in `gex_alert_monitor.py`, template in `templates.py`
+
+### File coinvolti
+- `src/alerts/templates.py:312-440` — `format_signal_message()` + helper `_pillar_arrow()`, `_bias_bar()`
+- `src/alerts/gex_alert_monitor.py:144-149` — `directional_bias()` pure function
+- `src/alerts/gex_alert_monitor.py:296-387` — `build_signal_message()` (fetch GEX+flows+barriers+macro, calcola CompositeSignal)
+- `src/api/main.py:175-188` — handler webhook `/signal`
+- `src/api/scheduler.py:57` — registrazione comando in `set_commands()`

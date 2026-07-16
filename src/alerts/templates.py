@@ -1,8 +1,9 @@
 """Formattazione messaggi HTML per Telegram.
 
-Due template:
+Tre template:
   - format_daily_recap(snap, prev, regime, flows_summary) → recap mattutino
   - format_etf_flow_alert(event) → alert event-driven su flow ETF
+  - format_signal_message(...) → segnale direzionale giornaliero a 4 pilastri
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from src.analytics.pillars import PillarScore
 from src.gex.models import GexSnapshot, GammaRegime
 
 _REGIME_EMOJI = {
@@ -305,5 +307,162 @@ def format_etf_flow_alert(
             lines.append(f"BTC Spot: {_fmt_price(event.spot_price)}")
         if event.gex_regime is not None:
             lines.append(f"GEX regime: {_esc(event.gex_regime)}")
+
+    return "\n".join(lines)
+
+
+# ─── Directional signal (comando /signal) ─────────────────────────────────────
+
+_BIAS_THRESHOLDS: list[tuple[float, str, str]] = [
+    (40.0,  "LONG",          "🟢"),
+    (15.0,  "LEGGERO LONG",  "🟢"),
+    (-15.0, "NEUTRALE/FLAT", "🟡"),
+    (-40.0, "LEGGERO SHORT", "🔴"),
+]
+
+_BIAS_READING: dict[str, str] = {
+    "LONG":          "Condizioni favorevoli per esposizione long",
+    "LEGGERO LONG":  "Condizioni moderatamente favorevoli — size ridotto",
+    "NEUTRALE/FLAT": "Segnali contrastanti — restare piatti o attendere",
+    "LEGGERO SHORT": "Condizioni moderatamente sfavorevoli — ridurre long",
+    "SHORT":         "Condizioni favorevoli per esposizione short / cash",
+}
+
+_PILLAR_LABELS: dict[str, str] = {
+    "gex": "GEX", "barrier": "BARRIER", "etf_flows": "ETF FLOWS", "macro": "MACRO",
+}
+
+
+def _pillar_arrow(score: Optional[float]) -> str:
+    """Freccia direzionale per un pilastro 0-100."""
+    if score is None:
+        return "→"
+    if score >= 65:
+        return "↑"
+    if score >= 55:
+        return "↗"
+    if score > 45:
+        return "→"
+    if score > 35:
+        return "↘"
+    return "↓"
+
+
+def _bias_bar(bias: float, width: int = 30) -> str:
+    """Barra visuale del bias da -100 a +100."""
+    midpoint = width // 2
+    pos = int(round((bias + 100) / 200 * width))
+    pos = max(0, min(width - 1, pos))
+    bar = ["░"] * width
+    bar[midpoint] = "│"
+    if pos != midpoint:
+        bar[pos] = "█"
+    else:
+        bar[midpoint] = "╋"
+    return "".join(bar)
+
+
+def format_signal_message(
+    *,
+    score: float,
+    bias: float,
+    pillars: list[PillarScore],
+    spot_price: Optional[float] = None,
+    flip_price: Optional[float] = None,
+    call_wall: Optional[float] = None,
+    put_wall: Optional[float] = None,
+    regime_label: str = "",
+    barriers_count: int = 0,
+    nearest_barrier: Optional[dict] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """Genera il messaggio HTML del segnale direzionale per il comando /signal.
+
+    Args:
+        score: punteggio composito 0-100.
+        bias: bias direzionale netto -100/+100 (derivato dai pilastri).
+        pillars: lista PillarScore dai 4 pilastri.
+        spot_price: prezzo BTC spot corrente.
+        flip_price: gamma flip price.
+        call_wall: call wall Deribit.
+        put_wall: put wall Deribit.
+        regime_label: label regime GEX (positive_gamma, negative_gamma, neutral).
+        barriers_count: numero di barriere EDGAR attive.
+        nearest_barrier: dict con barrier_type, level_price_btc, distance_pct.
+        now: sovrascrive datetime.now() per test deterministici.
+    """
+    now = now or datetime.now(tz=timezone.utc)
+
+    verdict, verdict_emoji = "SHORT", "🔴"
+    for thr, label, emoji in _BIAS_THRESHOLDS:
+        if bias >= thr:
+            verdict, verdict_emoji = label, emoji
+            break
+
+    reading = _BIAS_READING.get(verdict, "")
+    regime_emoji = _REGIME_EMOJI.get(regime_label, "⚪")
+    regime_display = regime_label.replace("_", " ").upper() if regime_label else "N/D"
+
+    lines: list[str] = []
+    lines.append("🚦 <b>BTC Directional Signal</b>")
+    lines.append(f"<i>{now.strftime('%Y-%m-%d · %H:%M UTC')}</i>")
+    lines.append("")
+
+    lines.append("━━━ <b>VERDETTO</b> ━━━")
+    lines.append(
+        f"{verdict_emoji} <b>{verdict} ({bias:+.0f})</b>"
+        + (f" — {_esc(reading)}" if reading else "")
+    )
+    lines.append("")
+
+    lines.append(f"<code>{_bias_bar(bias)}</code>")
+    lines.append("<code>SHORT ←────────────────|────────────────→ LONG</code>")
+    lines.append("")
+
+    lines.append("━━━ <b>PILASTRI</b> ━━━")
+    for p in pillars:
+        arrow = _pillar_arrow(p.score)
+        label = _PILLAR_LABELS.get(p.name, p.name.upper())
+        s = f"{p.score:.0f}/100" if p.score is not None else "n/d"
+        w = f"{p.weight*100:.0f}%"
+        line = f"{arrow} <b>{_esc(label)}</b>  {s} ({w})"
+        if p.reason:
+            line += f"  — {_esc(p.reason)}"
+        lines.append(line)
+
+    lines.append("")
+
+    lines.append("━━━ <b>LIVELLI CHIAVE</b> ━━━")
+    if spot_price is not None:
+        lines.append(f"BTC: <b>{_fmt_price(spot_price)}</b>")
+    if flip_price is not None and spot_price is not None and spot_price > 0:
+        dist = (spot_price - flip_price) / spot_price * 100
+        lines.append(f"Gamma Flip: {_fmt_price(flip_price)} ({dist:+.1f}%)")
+    if call_wall is not None or put_wall is not None:
+        cw = _fmt_price(call_wall) if call_wall else "—"
+        pw = _fmt_price(put_wall) if put_wall else "—"
+        lines.append(f"Call Wall: {cw}  ·  Put Wall: {pw}")
+    if nearest_barrier:
+        nb = nearest_barrier
+        nb_type = _esc(str(nb.get("barrier_type", "?")))
+        nb_price = nb.get("level_price_btc")
+        nb_dist = nb.get("distance_pct")
+        nb_str = (
+            f"{nb_type} ${nb_price:,.0f}"
+            if nb_price
+            else f"{nb_type}"
+        )
+        if nb_dist is not None:
+            nb_str += f" ({nb_dist:+.1f}%)"
+        lines.append(f"Nearest Barrier: {nb_str}")
+    elif barriers_count > 0:
+        lines.append(f"Barriere attive: {barriers_count} — nessuna nel kernel")
+
+    lines.append("")
+    lines.append(
+        f"<code>{regime_emoji} GEX: {_esc(regime_display)}"
+        + (f" · {barriers_count} barriere attive" if barriers_count else "")
+        + "</code>"
+    )
 
     return "\n".join(lines)

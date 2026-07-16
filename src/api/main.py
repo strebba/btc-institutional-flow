@@ -130,6 +130,7 @@ async def telegram_webhook(request: Request) -> JSONResponse:
         return (
             "<b>BTC Institutional Flow — Comandi disponibili</b>\n\n"
             "/recap — Invia il recap GEX + IFI + ETF flows aggiornato\n"
+            "/signal — Segnale direzionale a 4 pilastri (bias long/short)\n"
             "/status — Stato del bot (ultimo recap, freschezza dati)\n"
             "/help — Mostra questo messaggio"
         )
@@ -175,6 +176,22 @@ async def telegram_webhook(request: Request) -> JSONResponse:
     if cmd == "/status":
         if monitor._telegram is not None:
             await monitor._telegram.send_to(chat_id, await _status_message(monitor))
+        return JSONResponse({"ok": True})
+
+    if cmd == "/signal":
+        try:
+            message = await monitor.build_signal_message()
+            if message:
+                if monitor._telegram is not None:
+                    await monitor._telegram.send_to(chat_id, message)
+                    _log.info("[webhook] /signal inviato a chat %s", chat_id)
+                else:
+                    _log.warning("[webhook] /signal impossibile: telegram non configurato")
+            else:
+                if monitor._telegram is not None:
+                    await monitor._telegram.send_to(chat_id, "<i>Nessun dato GEX disponibile per il segnale.</i>")
+        except Exception:
+            _log.exception("[webhook] errore gestione /signal")
         return JSONResponse({"ok": True})
 
     if cmd != "/recap":
