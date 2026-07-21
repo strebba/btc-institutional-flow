@@ -37,7 +37,7 @@ def _make_df(n: int = 200, with_coinglass: bool = True) -> pd.DataFrame:
     # BTC price: trend rialzista
     log_rets = rng.normal(0.001, 0.03, n)
     prices   = 40_000 * np.exp(np.cumsum(log_rets))
-    vols     = pd.Series(log_rets).rolling(7).std().fillna(0.03).to_numpy() * (252**0.5)
+    vols     = pd.Series(log_rets).rolling(7).std().fillna(0.03).to_numpy() * (365**0.5)
 
     df = pd.DataFrame({
         "total_flow_usd": flows,

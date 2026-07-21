@@ -49,6 +49,19 @@ tutto il codice, i commit, i test e le discussioni.
 | **TransactionCost** | 80 bps dedotti su ogni cambio posizione nel backtest. Configurato in `settings.yaml:backtest.transaction_cost_bps` |
 | **FactorScorers** | Libreria di scoring a 8 fattori (`src/analytics/factor_scorers.py`, ex `signal_model`) — riusata dai pilastri |
 | **IFIModel** | Institutional Flow Index 0-100 a 6 fattori — deprecato, sostituito dai pilastri |
+| **GrangerLead** | Fattore ETF flow lag ottimale determinato da `find_optimal_lag()` su training set pre-2024 e validato su holdout — mitigazione data snooping |
+
+## Validazione Statistica
+
+| Termine | Definizione |
+|---------|-------------|
+| **InformationCoefficient** | Spearman rank correlation tra CompositeSignal oggi e rendimento BTC domani — misura il potere predittivo del segnale. IC > 0 e \|t\| > 2 = segnale significativo |
+| **RollingIC** | IC calcolato su finestra rolling (60gg) per stimare stabilità temporale — metriche: ic_mean, ic_std, IR, t_stat, pct_positive |
+| **InformationRatio** | IC_mean / IC_std — misura la consistenza del segnale. IR > 0.5 indica segnale stabile |
+| **AlphaDecay** | IC per orizzonte 1..15 giorni — mostra per quanto tempo il segnale mantiene potere predittivo |
+| **NullModelIC** | IC di un segnale casuale con la stessa distribuzione ma struttura temporale distrutta (permutazione) — confronto con IC reale per validare che il segnale non sia rumore |
+| **NullModel** (backtest) | Strategia naive per confronto: random (±1 al 50%), always_long, momentum_20d — la strategia deve battere TUTTI i null model |
+| **AnnualizationFactor** | BTC trades 365 giorni/anno — tutti i moduli (backtest, regime_analysis, correlation, ifi) ora usano `sqrt(365)` per consistenza |
 
 ## Forecast Spine
 

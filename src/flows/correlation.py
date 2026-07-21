@@ -179,8 +179,8 @@ class FlowCorrelation:
         if "btc_return" in merged.columns:
             ret = merged["btc_return"].dropna()
             stats["btc"] = {
-                "annualized_vol": ret.std() * (252**0.5),
-                "sharpe_approx": ret.mean() / ret.std() * (252**0.5) if ret.std() > 0 else 0,
+                "annualized_vol": ret.std() * (365**0.5),
+                    "sharpe_approx": ret.mean() / ret.std() * (365**0.5) if ret.std() > 0 else 0,
                 "total_return": float(np.exp(ret.sum()) - 1),
             }
 

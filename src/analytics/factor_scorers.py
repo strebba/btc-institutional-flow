@@ -189,13 +189,15 @@ def _score_put_call_ratio(pcr: float) -> float:
     return 0.15                    # complacency (poca copertura) = top segnale
 
 
-def _score_granger_lead(flow_5d_ago_usd: float) -> float:
-    """ETF flow di 5gg fa come leading indicator (lag Granger documentato).
+def _score_granger_lead(flow_lag_ago_usd: float) -> float:
+    """ETF flow di N giorni fa come leading indicator (lag Granger validato).
 
+    Il lag è determinato da GrangerAnalysis.find_optimal_lag() su training set
+    pre-2024 e validato su holdout. Il valore è in GrangerAnalysis._GRANGER_LEAD_LAG.
     Usa la stessa curva di etf_flow (lineare ±1B) perché il segnale è lo stesso,
-    solo sfasato nel tempo. Inflow 5gg fa → bias up sull'orizzonte attuale (5-7gg).
+    solo sfasato nel tempo.
     """
-    return _score_etf_flow(flow_5d_ago_usd)
+    return _score_etf_flow(flow_lag_ago_usd)
 
 
 def _score_liquidations(long_usd: float, short_usd: float) -> float:

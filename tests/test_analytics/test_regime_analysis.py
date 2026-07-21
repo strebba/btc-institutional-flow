@@ -16,7 +16,7 @@ def _make_merged_df(n: int = 180, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     returns = rng.normal(0, 0.02, n)
-    vol7d = pd.Series(returns).rolling(7).std() * (252 ** 0.5)
+    vol7d = pd.Series(returns).rolling(7).std() * (365 ** 0.5)
     return pd.DataFrame(
         {"btc_return": returns, "btc_vol_7d": vol7d.values},
         index=dates,

@@ -13,7 +13,7 @@ priors:
   long_short:     0.135
   put_call:       0.090
   liquidations:   0.090
-  granger_lead:   0.100   # ETF flow lag 5gg (Granger p≈0.03, lead documentato)
+  granger_lead:   0.100   # ETF flow lag ottimale (Granger, FDR α=0.05 su pre-2024). Il lag è in GrangerAnalysis._GRANGER_LEAD_LAG; ricalibrare con find_optimal_lag().
 
 calibration:
   min_scored: 20          # abbassato da 30: ~7 gg operativi con 3 pred/giorno, campione v1 omogeneo

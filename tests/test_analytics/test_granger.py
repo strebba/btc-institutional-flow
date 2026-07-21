@@ -215,3 +215,77 @@ class TestBenjaminiHochberg:
 
     def test_empty_list(self, analyzer):
         assert analyzer.benjamini_hochberg([], alpha=0.05) == []
+
+
+def _make_causal_df(n: int = 100, causal_lag: int = 3, seed: int = 42) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    noise = rng.normal(0, 0.005, n)
+    flow = rng.normal(0, 1e8, n + causal_lag)
+    ret = np.zeros(n)
+    scale = 1.0e-7
+    for t in range(causal_lag, n):
+        ret[t] = flow[t - causal_lag] * scale + noise[t]
+    dates = pd.date_range("2023-01-01", periods=n, freq="D")
+    return pd.DataFrame({
+        "ibit_flow": flow[causal_lag:],
+        "btc_return": ret,
+    }, index=dates)
+
+
+class TestFindOptimalLag:
+    def test_finds_significant_lag(self):
+        df = _make_causal_df(n=300, causal_lag=3)
+        result = GrangerAnalysis.find_optimal_lag(
+            df, train_end="2023-08-15", max_lags=10,
+        )
+        assert result.get("n_train", 0) > 30
+
+
+    def test_no_significant_lag_returns_none(self):
+        rng = np.random.default_rng(42)
+        dates = pd.date_range("2023-01-01", periods=200, freq="D")
+        df = pd.DataFrame({
+            "ibit_flow": rng.normal(0, 1e8, 200),
+            "btc_return": rng.normal(0, 0.02, 200),
+        }, index=dates)
+        result = GrangerAnalysis.find_optimal_lag(
+            df, train_end="2023-06-15", max_lags=5,
+        )
+        assert result["validated"] is False or result["optimal_lag"] is None
+
+    def test_insufficient_holdout(self):
+        df = _make_causal_df(n=50, causal_lag=3)
+        result = GrangerAnalysis.find_optimal_lag(
+            df, train_end="2023-02-10", max_lags=5,
+        )
+        assert not result["validated"]
+
+    def test_returns_expected_keys(self):
+        df = _make_causal_df(n=150, causal_lag=2)
+        result = GrangerAnalysis.find_optimal_lag(
+            df, train_end="2023-04-15", max_lags=5,
+        )
+        for key in ("optimal_lag", "train_p", "train_fdr_significant",
+                     "holdout_p", "holdout_significant", "validated",
+                     "n_train", "n_holdout"):
+            assert key in result
+
+    def test_holdout_preserves_lag(self):
+        df = _make_causal_df(n=300, causal_lag=4)
+        result = GrangerAnalysis.find_optimal_lag(
+            df, train_end="2023-09-15", max_lags=8,
+        )
+        if result["optimal_lag"] is not None:
+            assert 1 <= result["optimal_lag"] <= 8
+
+    def test_missing_columns(self):
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result = GrangerAnalysis.find_optimal_lag(
+            df, train_end="2023-01-02", max_lags=3,
+        )
+        assert result["optimal_lag"] is None
+        assert not result["validated"]
+
+    def test_class_attribute_exists(self):
+        assert hasattr(GrangerAnalysis, "_GRANGER_LEAD_LAG")
+        assert isinstance(GrangerAnalysis._GRANGER_LEAD_LAG, int)

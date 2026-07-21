@@ -30,7 +30,7 @@ class RegimeStats:
         mean_return: rendimento medio BTC nel regime.
         std_return: deviazione standard dei rendimenti.
         mean_vol: volatilità realizzata media nel regime.
-        sharpe: Sharpe ratio approssimato (mean/std * sqrt(252)).
+        sharpe: Sharpe ratio approssimato (mean/std * sqrt(365), BTC 24/7).
         cum_return: rendimento cumulativo nel regime.
     """
 
@@ -177,7 +177,7 @@ class RegimeAnalysis:
                 return None
             mean_r  = float(rets.mean())
             std_r   = float(rets.std())
-            sharpe  = mean_r / std_r * (252 ** 0.5) if std_r > 0 else 0.0
+            sharpe  = mean_r / std_r * (365 ** 0.5) if std_r > 0 else 0.0
             cum_ret = float(np.exp(rets.sum()) - 1)
             return RegimeStats(
                 regime=regime_name,

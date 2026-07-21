@@ -1,11 +1,17 @@
 """Backtest della strategia combinata GEX + flussi ETF (multi-fattore).
 
-Supporta due modalità di generazione segnali:
-  1. SignalModel (default): scoring 0-100 su 7 fattori ponderati.
-  2. Regole legacy (fallback): GEX > 0 AND flow_3d > 100M → LONG.
+Supporta tre modalità di generazione segnali:
+  1. CompositeSignal (default dashboard): 4 pilastri pesati.
+  2. SignalModel: scoring 0-100 su 8 fattori ponderati.
+  3. Regole legacy (fallback): GEX > 0 AND flow_3d > 100M → LONG.
+
+Null models per validazione statistica:
+  - Random: segnale casuale ±1 con probabilità 50%.
+  - Always Long: posizione long permanente.
+  - Momentum 20d: long se BTC return 20d > 0, altrimenti short.
 
 Metriche: Sharpe ratio, max drawdown, win rate, profit factor.
-Confronto vs buy-and-hold BTC. Equity curve serializzata per frontend.
+Confronto vs buy-and-hold BTC + null models. Equity curve serializzata per frontend.
 """
 from __future__ import annotations
 
@@ -296,6 +302,52 @@ class Backtest:
             daily_returns=rets,
         )
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Null models
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _null_models(merged_df: pd.DataFrame, seed: int = 42) -> dict[str, pd.Series]:
+        """Genera segnali nulli per confronto statistico.
+
+        Reference: patterns.md "Proper Backtest Framework" — una strategia
+        deve battere TUTTI i null model per essere considerata viable.
+
+        Args:
+            merged_df: DataFrame con btc_return e btc_close.
+            seed: seed per riproducibilità del random.
+
+        Returns:
+            dict con chiavi "random_signal", "always_long", "momentum_20d"
+            e valori pd.Series allineate all'indice di merged_df.
+        """
+        idx = merged_df.index
+        n = len(merged_df)
+        rng = np.random.default_rng(seed)
+
+        random_signal = pd.Series(
+            rng.choice([1.0, -1.0], size=n, p=[0.5, 0.5]),
+            index=idx, dtype=float,
+        )
+
+        always_long = pd.Series(np.ones(n), index=idx, dtype=float)
+
+        btc_close = merged_df.get("btc_close", pd.Series())
+        if btc_close.empty or len(btc_close) < 21:
+            momentum_20d = pd.Series(np.zeros(n), index=idx, dtype=float)
+        else:
+            ret_20d = btc_close.pct_change(20).shift(1)
+            momentum_20d = pd.Series(
+                np.where(ret_20d.fillna(0) > 0, 1.0, -1.0),
+                index=idx,
+            )
+
+        return {
+            "random_signal": random_signal,
+            "always_long": always_long,
+            "momentum_20d": momentum_20d,
+        }
+
     def run(
         self,
         merged_df: pd.DataFrame,
@@ -304,8 +356,9 @@ class Backtest:
         barrier_history: Optional[pd.DataFrame] = None,
         signal_model: Optional["SignalModel"] = None,
         composite: Optional["CompositeSignal"] = None,
+        include_null_models: bool = False,
     ) -> dict[str, BacktestMetrics]:
-        """Esegue il backtest e il benchmark buy-and-hold.
+        """Esegue il backtest, benchmark buy-and-hold e opzionalmente null models.
 
         Args:
             merged_df: DataFrame con btc_return, ibit_flow, btc_close.
@@ -316,9 +369,13 @@ class Backtest:
             signal_model: SignalModel per scoring multi-fattore (opzionale).
             composite: CompositeSignal a 4 pilastri (opzionale, ha priorità).
                 Se né composite né signal_model sono forniti usa le regole legacy.
+            include_null_models: se True, aggiunge 3 null models al risultato
+                (random signal, always_long, momentum_20d).
 
         Returns:
-            dict: "strategy" e "buy_and_hold" con i rispettivi BacktestMetrics.
+            dict: "strategy" e "buy_and_hold" sempre presenti. Se
+            include_null_models=True, anche "random_signal",
+            "always_long", "momentum_20d".
         """
         df = merged_df.copy()
         if "btc_return" not in df.columns:
@@ -359,7 +416,26 @@ class Backtest:
 
         self._log_comparison(strategy, bah)
 
-        return {"strategy": strategy, "buy_and_hold": bah}
+        results: dict[str, BacktestMetrics] = {
+            "strategy": strategy,
+            "buy_and_hold": bah,
+        }
+
+        if include_null_models:
+            null_signals = self._null_models(df)
+            null_names = {
+                "random_signal": "Null: Random Signal",
+                "always_long": "Null: Always Long",
+                "momentum_20d": "Null: Momentum 20d",
+            }
+            for key, null_sig in null_signals.items():
+                null_lagged = null_sig.shift(1).fillna(0)
+                null_rets = btc_rets * null_lagged.reindex(btc_rets.index).fillna(0)
+                results[key] = self._compute_metrics(
+                    null_rets, null_names[key], null_lagged,
+                )
+
+        return results
 
     def _log_comparison(
         self,

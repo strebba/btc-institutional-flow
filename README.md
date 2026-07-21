@@ -42,14 +42,24 @@ btc-institutional-flow/
 │   │   └── models.py          # GexSnapshot, GexByStrike, RegimeState
 │   │
 │   ├── analytics/      # Modulo 4 — Statistical Analysis
-│   │   ├── granger.py         # Granger causality flows↔returns (statsmodels)
-│   │   ├── event_study.py     # CAR intorno ai barrier levels (event study)
-│   │   ├── regime_analysis.py # Welch t-test rendimenti positive vs negative gamma
-│   │   └── backtest.py        # Backtest GEX+Flows strategy vs Buy & Hold
+│   │   ├── pillars.py         # CompositeSignal a 4 pilastri (single source of truth)
+│   │   ├── factor_scorers.py   # Libreria scoring 8 fattori (ex signal_model)
+│   │   ├── signal_validation.py # Information Coefficient, alpha decay, null model IC
+│   │   ├── backtest.py        # Backtest + null models (random, always_long, momentum)
+│   │   ├── walk_forward.py    # Walk-forward validation rolling train→test
+│   │   ├── factor_decomposition.py # OLS alpha/beta decomposition
+│   │   ├── sensitivity.py     # Parameter sensitivity ±20%
+│   │   ├── granger.py         # Granger causality + find_optimal_lag()
+│   │   ├── event_study.py     # CAR intorno ai barrier levels
+│   │   ├── regime_analysis.py # Welch t-test positive vs negative gamma
+│   │   └── confluence_backtest.py # Probe confluenza barriere↔GEX
 │   │
 │   ├── dashboard/      # Modulo 5 — Streamlit Dashboard
-│   │   ├── app.py             # Main app multi-tab (5 tab)
-│   │   └── charts.py          # Plotly chart builders condivisi
+│   │   ├── app.py             # Main app multi-tab (6 tab)
+│   │   ├── data_loader.py     # Funzioni @st.cache_data condivise
+│   │   ├── tabs/              # 6 moduli: barrier_map, gex, flows, signals, edgar, validation
+│   │   ├── charts.py          # Plotly chart builders
+│   │   ├── header.py / sidebar.py / static/style.css
 │   │
 │   └── config.py       # Settings loader (YAML + .env), logging setup
 │
@@ -59,7 +69,7 @@ btc-institutional-flow/
 │   ├── run_gex.py             # Calcola GEX live da Deribit
 │   └── run_analytics.py       # Esegue tutti gli analytics
 │
-├── tests/              # 180 test unitari (pytest)
+├── tests/              # ~679 test unitari (pytest)
 ├── config/settings.yaml       # Tutti i parametri configurabili
 └── data/               # SQLite DB locali (auto-creati)
 ```
@@ -84,12 +94,13 @@ btc-institutional-flow/
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**5 tab:**
-- **GEX** — Profilo GEX per strike, livelli chiave (Put Wall, Call Wall, Gamma Flip, Max Pain)
-- **ETF Flows** — Flussi IBIT storici, prezzo BTC, correlazione rolling 30d
-- **Analytics** — Heatmap Granger p-values, confronto regime positive/negative gamma
-- **Backtest** — Equity curve e performance table della strategia GEX+Flows vs B&H
-- **EDGAR Barriers** — Tabella barriere attive, event study CAR intorno ai livelli
+**6 tab:**
+- **Barrier Map** — Mappa visiva dei livelli critici EDGAR con confluenza GEX
+- **GEX** — Profilo Gamma Exposure, regime, gamma flip, put/call wall
+- **ETF Flows** — Flussi IBIT e multi-ETF, correlazione rolling, Granger causality
+- **Segnali** — CompositeSignal a 4 pilastri (GEX/Barrier/Flows/Macro) con gauge e backtest vs null models
+- **EDGAR Monitor** — Note strutturate SEC, barriere attive, event study CAR
+- **Validation** — Information Coefficient (potere predittivo), Walk-Forward, Factor Decomposition, Parameter Sensitivity
 
 ---
 
@@ -183,21 +194,24 @@ Apri http://localhost:8501
 
 | Test | Risultato |
 |------|-----------|
-| **Granger causality** | Flussi IBIT → BTC returns significativo a lag **5-7 giorni** (p≈0.028-0.049) ✓ |
+| **Information Coefficient** | IC del CompositeSignal vs forward BTC return — validazione rolling con null model |
 | **GEX live** | +$41.5M → regime **POSITIVE_GAMMA**, Put Wall $60k (-12%), Call Wall $75k (+9%) |
 | **EDGAR filing** | 547 filing 424B2/424B3 trovati, JPMorgan dominante emittente |
 | **Note strutturate** | 8 note parsed (autocallable, barrier note), 10 barriere attive |
+| **Walk-Forward** | Rolling train (2 anni) → test (3 mesi) per validazione OOS |
+| **Factor Decomposition** | OLS regression per separare alpha puro da beta mascherato |
 
 ---
 
 ## Test
 
 ```bash
-pytest                    # tutti i test (180)
+pytest                    # tutti i test (~679)
 pytest tests/test_edgar/  # solo EDGAR
 pytest tests/test_gex/    # solo GEX
 pytest tests/test_flows/  # solo Flows
-pytest tests/test_analytics/  # solo Analytics
+pytest tests/test_analytics/  # solo Analytics (302 test)
+pytest tests/test_forecast/   # solo Forecast
 ```
 
 ---

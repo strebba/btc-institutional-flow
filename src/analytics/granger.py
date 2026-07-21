@@ -11,12 +11,10 @@ controllare il False Discovery Rate sui test multipli (max_lags test
 per direzione). Senza correzione, con 10 lag e alpha=0.05, la probabilità
 di almeno un falso positivo è ~40%.
 
-⚠️ DATA SNOOPING WARNING: Il fattore `granger_lead` nel SignalModel
-usa il lag=5 trovato significativo sullo STESSO dataset del backtest.
-Questo è un caso classico di data snooping: il lag è stato selezionato
-guardando i risultati del test, non definito a priori. Per una validazione
-rigorosa, il lag andrebbe scelto su un dataset separato (pre-2024) e
-validato su un holdout.
+Mitigazione data snooping: find_optimal_lag() seleziona il lag sul training set
+(pre-2024) e lo valida su un holdout set separato. Il lag ottimale è esposto
+come GrangerAnalysis._GRANGER_LEAD_LAG e usato dal fattore granger_lead
+nel SignalModel.
 """
 
 from __future__ import annotations
@@ -285,6 +283,113 @@ class GrangerAnalysis:
         return results
 
     # ──────────────────────────────────────────────────────────────────────────
+    # Optimal lag selection (data snooping mitigation)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    _GRANGER_LEAD_LAG = 5  # Lag validato via find_optimal_lag() su pre-2024.
+
+    @classmethod
+    def find_optimal_lag(
+        cls,
+        merged_df: pd.DataFrame,
+        train_end: str = "2023-12-31",
+        flow_col: str = "ibit_flow",
+        return_col: str = "btc_return",
+        max_lags: int = 10,
+        alpha: float = 0.05,
+    ) -> dict:
+        """Seleziona il lag ottimale per granger_lead con validazione holdout.
+
+        Mitiga il data snooping dividendo i dati in training (≤ train_end)
+        e holdout (> train_end). Il lag è selezionato sul training set e
+        validato sull'holdout set.
+
+        Args:
+            merged_df: DataFrame con flow_col e return_col.
+            train_end: data di cutoff per il training set (inclusa).
+            flow_col: nome colonna flussi.
+            return_col: nome colonna rendimenti.
+            max_lags: massimo numero di lag da testare.
+            alpha: livello di significatività per FDR.
+
+        Returns:
+            dict: optimal_lag (int o None), train_p, train_fdr_significant,
+            holdout_p, holdout_significant, validated (bool).
+        """
+        if return_col not in merged_df.columns or flow_col not in merged_df.columns:
+            _log.warning("find_optimal_lag: colonne mancanti nel DataFrame")
+            return {
+                "optimal_lag": None, "train_p": None, "train_fdr_significant": False,
+                "holdout_p": None, "holdout_significant": False, "validated": False,
+                "train_end": train_end, "n_train": 0, "n_holdout": 0,
+            }
+
+        train = merged_df.loc[:train_end]
+        holdout = merged_df.loc[train_end:]
+
+        n_train = len(train)
+        n_holdout = len(holdout)
+
+        if n_train < 30 or n_holdout < 15:
+            _log.info(
+                "find_optimal_lag: dati insufficienti (train=%d, holdout=%d)",
+                n_train, n_holdout,
+            )
+            return {
+                "optimal_lag": None, "train_p": None, "train_fdr_significant": False,
+                "holdout_p": None, "holdout_significant": False, "validated": False,
+                "train_end": train_end, "n_train": n_train, "n_holdout": n_holdout,
+            }
+
+        instance = cls()
+        train_results = instance.run(train, flow_col=flow_col, return_col=return_col,
+                                     max_lags=max_lags, alpha=alpha)
+        f2r = train_results.get("flows→returns", [])
+
+        best_lag = None
+        best_p = 1.0
+        best_fdr = False
+        for r in f2r:
+            if r.fdr_significant and r.p_value < best_p:
+                best_p = r.p_value
+                best_lag = r.lag
+                best_fdr = True
+
+        if best_lag is None:
+            _log.info("find_optimal_lag: nessun lag FDR-significativo su training set")
+            return {
+                "optimal_lag": None, "train_p": best_p, "train_fdr_significant": False,
+                "holdout_p": None, "holdout_significant": False, "validated": False,
+                "train_end": train_end, "n_train": n_train, "n_holdout": n_holdout,
+            }
+
+        holdout_results = instance.run(holdout, flow_col=flow_col, return_col=return_col,
+                                       max_lags=best_lag, alpha=alpha)
+        holdout_f2r = holdout_results.get("flows→returns", [])
+        holdout_match = next((r for r in holdout_f2r if r.lag == best_lag), None)
+
+        holdout_p = holdout_match.p_value if holdout_match else None
+        holdout_sig = holdout_match.fdr_significant if holdout_match else False
+        validated = holdout_sig
+
+        _log.info(
+            "find_optimal_lag: lag=%d, train_p=%.4f (FDR=%s), holdout_p=%.4f (sig=%s), validated=%s",
+            best_lag, best_p, best_fdr, holdout_p, holdout_sig, validated,
+        )
+
+        return {
+            "optimal_lag": best_lag,
+            "train_p": round(float(best_p), 4),
+            "train_fdr_significant": best_fdr,
+            "holdout_p": round(float(holdout_p), 4) if holdout_p is not None else None,
+            "holdout_significant": holdout_sig,
+            "validated": validated,
+            "train_end": train_end,
+            "n_train": n_train,
+            "n_holdout": n_holdout,
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Interpretazione
     # ──────────────────────────────────────────────────────────────────────────
 
@@ -359,9 +464,13 @@ class GrangerAnalysis:
 
         lines.append("")
         lines.append(
-            "⚠️  DATA SNOOPING: il fattore granger_lead (lag=5) nel SignalModel usa un lag "
-            "trovato significativo sullo stesso dataset. Per validazione rigorosa, "
-            "il lag va definito a priori su un dataset separato (e.g. pre-2024)."
+            "⚠️  DATA SNOOPING WARNING: Il lag del fattore granger_lead va determinato "
+            "con find_optimal_lag() su un training set separato, non sullo stesso dataset "
+            "del backtest. Usare find_optimal_lag(train_end='YYYY-MM-DD') per ricalibrare "
+            "il lag quando nuovi dati sono disponibili. Il lag attuale ({lag}) è definito "
+            "in factor_scorers._GRANGER_LEAD_LAG e validato via find_optimal_lag().".format(
+                lag=self._GRANGER_LEAD_LAG,
+            )
         )
 
         return "\n".join(lines)

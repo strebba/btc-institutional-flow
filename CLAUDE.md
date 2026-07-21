@@ -14,7 +14,7 @@ Toolkit Python per l'impatto del **dealer hedging** su note strutturate IBIT sul
 make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
-make test           # pytest tests/ -v  (~513 test)
+make test           # pytest tests/ -v  (~679 test)
 make test-unit      # pytest tests/unit/ -v -q (esclude integration)
 make lint           # ruff check src/ tests/
 make update-all     # update-gex + update-flows + update-edgar (cron data refresh)
@@ -36,8 +36,8 @@ entrambi i repo.
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati) |
-| `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps) + IFI + Granger + regime analysis |
-| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (5 moduli), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
+| `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
+| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (6 moduli con validation tab), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
 | `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (6 file: health, gex, flows, barriers, signals, forecast), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`, `schemas.py` |
 | `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |

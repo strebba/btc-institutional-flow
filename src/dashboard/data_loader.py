@@ -215,6 +215,7 @@ def run_backtest(merged_df: pd.DataFrame, barriers: list[dict]):
         active_barriers=barriers if barriers else None,
         barrier_history=barrier_history,
         composite=CompositeSignal(),
+        include_null_models=True,
     )
 
 
@@ -355,6 +356,32 @@ def run_factor_decomp(merged_df: pd.DataFrame, barriers: list[dict]) -> dict | N
     decomposition = fd.decompose_strategy_returns(strat_rets, factors)
 
     return {"exposures": exposures, "decomposition": decomposition}
+
+
+@st.cache_data(ttl=_REFRESH, show_spinner=False)
+def run_signal_ic(merged_df: pd.DataFrame, barriers: list[dict]) -> dict | None:
+    """Information Coefficient del CompositeSignal vs forward BTC returns.
+
+    Returns:
+        dict da signal_validation_summary() o None se dati insufficienti.
+    """
+    from src.analytics.pillars import CompositeSignal
+    from src.analytics.signal_validation import signal_validation_summary
+
+    if merged_df.empty or "btc_return" not in merged_df.columns:
+        return None
+
+    gex_series, barrier_history = _get_backtest_context(days=365)
+
+    scores_df = CompositeSignal().compute_series(
+        merged_df,
+        active_barriers=barriers if barriers else None,
+        barrier_history=barrier_history,
+    )
+    df = merged_df.copy()
+    df["composite_score"] = scores_df["composite_score"]
+
+    return signal_validation_summary(df, min_periods=20, window=60)
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)

@@ -1,5 +1,51 @@
 # ibit-gamma-tracker — Project Memory
 
+## Quantitative Validation Overhaul (session 2026-07-21 — 4 critical fixes)
+
+**679 test passing** dopo tutti i fix.
+
+Obiettivo: dimostrare statisticamente che i dati istituzionali anticipano la direzione del prezzo BTC.
+
+### CRITICAL #1 — Information Coefficient sul CompositeSignal
+- **Nuovo**: `src/analytics/signal_validation.py` (171 righe) — `spearman_ic()`, `rolling_information_coefficient()`, `alpha_decay()`, `null_model_ic()`, `signal_validation_summary()`
+- Riusa `forward_returns()` da `forecast/validation.py` per no-leakage allineamento
+- IC calcolato su finestra rolling 60gg con t-stat e IR
+- Null model: 100 permutazioni del segnale per stimare distribuzione nulla dell'IC
+- `data_loader.py`: aggiunto `run_signal_ic()`
+- Dashboard `tabs/validation.py`: nuova sezione "1. Information Coefficient" con KPI, giudizio SIGNIFICANT/NOT, null model comparison, alpha decay table
+- **Test**: 20 nuovi test in `test_signal_validation.py`
+
+### CRITICAL #2 — Data Snooping Fix (granger_lead)
+- `granger.py`: aggiunto `GrangerAnalysis.find_optimal_lag()` — split train/holdout, selezione lag via FDR, validazione holdout
+- Costante `_GRANGER_LEAD_LAG = 5` come attributo di classe, importabile da `factor_scorers.py`
+- Aggiornato il data snooping warning in `interpret()` — ora referenzia `find_optimal_lag()` come metodo di ricalibrazione
+- `factor_scorers.py`: docstring di `_score_granger_lead()` aggiornata, parametro rinominato `flow_5d_ago_usd` → `flow_lag_ago_usd`
+- `config/weights.yaml`: commento aggiornato con riferimento al metodo di validazione
+- **Test**: 7 nuovi test in `TestFindOptimalLag`
+
+### CRITICAL #3 — Null Models nel Backtest
+- `backtest.py`: aggiunto `_null_models()` — random_signal (±1 al 50%), always_long (+1), momentum_20d (long se return_20d > 0)
+- `run()` accetta `include_null_models=True`
+- `data_loader.py`: `run_backtest()` passa `include_null_models=True`
+- **Test**: 8 nuovi test in `TestNullModels`
+
+### CRITICAL #4 — Fix Annualizzazione √252 → √365
+- `regime_analysis.py`: `252**0.5` → `365**0.5` (Sharpe regime GEX)
+- `correlation.py`: `252**0.5` → `365**0.5` (vol annualizzata e Sharpe flows)
+- `ifi.py`: `(30/252)**0.5` → `(30/365)**0.5` (conversione vol 30gg — consistenza con `price_fetcher.py` che già usa 365)
+- Test data allineati: `test_regime_analysis.py`, `test_ifi.py`
+
+### Metriche
+- Righe nette: ~+400 (nuovo modulo IC + test)
+- Test aggiunti: 35 nuovi (20 IC + 7 granger + 8 null models)
+- Bug fissati: annualizzazione inconsistente, data snooping, assenza null models, IC mancante
+
+### File creati
+- `src/analytics/signal_validation.py`
+- `tests/test_analytics/test_signal_validation.py`
+
+---
+
 ## Code Quality & Validation Overhaul (session 2026-07-16 — 19 fixes)
 
 **625 test passing** dopo tutti i fix (19 pre-existing lxml failures).

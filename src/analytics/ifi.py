@@ -112,11 +112,11 @@ def _score_price_momentum(btc_close: pd.Series, btc_vol_7d: pd.Series) -> pd.Ser
     """Rendimento BTC 30d normalizzato per volatilità — Sharpe-like a 30gg.
 
     Rendimento alto con vol bassa → segnale forte. Normalizzato per volatilità
-    annualizzata convertita a orizzonte 30gg: vol_ann * sqrt(30/252).
+    annualizzata convertita a orizzonte 30gg: vol_ann * sqrt(30/365).
     """
     ret_30d = btc_close.pct_change(30, fill_method=None)
     vol_adj = btc_vol_7d.replace(0, np.nan).fillna(0.40)
-    vol_30d = vol_adj * (30 / 252) ** 0.5
+    vol_30d = vol_adj * (30 / 365) ** 0.5
     sharpe_like = ret_30d / vol_30d.replace(0, 0.10)
     return pd.Series(_sigmoid(sharpe_like.fillna(0.0).to_numpy()), index=btc_close.index)
 

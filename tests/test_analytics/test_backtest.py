@@ -385,3 +385,57 @@ class TestCompositeMode:
         barriers = [{"level_price_btc": avg_price * 1.10}]
         results = bt.run(df, active_barriers=barriers, composite=CompositeSignal())
         assert "strategy" in results
+
+
+class TestNullModels:
+    def test_random_signal_length(self, bt, df):
+        nulls = bt._null_models(df)
+        assert len(nulls["random_signal"]) == len(df)
+
+    def test_random_signal_values(self, bt, df):
+        nulls = bt._null_models(df)
+        sig = nulls["random_signal"]
+        assert sig.isin([-1.0, 1.0]).all()
+
+    def test_always_long_all_ones(self, bt, df):
+        nulls = bt._null_models(df)
+        assert (nulls["always_long"] == 1.0).all()
+
+    def test_momentum_20d_values(self, bt, df):
+        nulls = bt._null_models(df)
+        sig = nulls["momentum_20d"]
+        assert sig.isin([-1.0, 0.0, 1.0]).all()
+        assert len(sig) == len(df)
+
+    def test_run_includes_null_models(self, bt, df):
+        df2 = df.copy()
+        df2["ibit_flow_3d"] = 300e6
+        results = bt.run(df2, include_null_models=True)
+        assert "strategy" in results
+        assert "buy_and_hold" in results
+        assert "random_signal" in results
+        assert "always_long" in results
+        assert "momentum_20d" in results
+
+    def test_null_models_reproducible(self, bt, df):
+        nulls1 = bt._null_models(df, seed=42)
+        nulls2 = bt._null_models(df, seed=42)
+        assert (nulls1["random_signal"] == nulls2["random_signal"]).all()
+
+    def test_momentum_20d_no_lookahead(self, bt):
+        rng = np.random.default_rng(42)
+        dates = pd.date_range("2024-01-01", periods=100, freq="D")
+        prices = 60000 * np.exp(np.cumsum(rng.normal(0.001, 0.02, 100)))
+        df = pd.DataFrame(
+            {"btc_close": prices, "btc_return": rng.normal(0, 0.02, 100)},
+            index=dates,
+        )
+        nulls = bt._null_models(df)
+        sig = nulls["momentum_20d"]
+        assert sig.iloc[0] == 0.0 or sig.isin([-1.0, 1.0]).all()
+
+    def test_null_models_dont_break_run_without_flag(self, bt, df):
+        results = bt.run(df, include_null_models=False)
+        assert "strategy" in results
+        assert "buy_and_hold" in results
+        assert "random_signal" not in results
