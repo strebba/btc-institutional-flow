@@ -49,12 +49,15 @@ app = FastAPI(
     title="BTC Institutional Flow API",
     description="GEX, ETF flows, SEC barriers, composite signals for BTC institutional analysis.",
     version="1.0.0",
+    # Docs/OpenAPI sotto /api: la root del dominio è la dashboard Streamlit
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json",
 )
 
 # CORS
 _raw_origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:8501,https://btc-institutional-flow-tpw9m.ondigitalocean.app",
+    "http://localhost:3000,http://localhost:8501,https://btc-institutional-flow-tpw9m.ondigitalocean.app,https://www.wagmi-lab.com",
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -92,7 +95,7 @@ app.include_router(forecast.router)
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
-    return RedirectResponse(url="/docs")
+    return RedirectResponse(url="/api/docs")
 
 
 # ─── Telegram webhook ────────────────────────────────────────────────────────

@@ -14,12 +14,14 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Stage 2: runtime — immagine finale senza build tools ────────────────────────
 FROM python:3.11-slim AS runtime
 
-# Dipendenze runtime (solo libxml2/libxslt per lxml, curl per curl_cffi)
+# Dipendenze runtime: libxml2/libxslt per lxml, curl per healthcheck,
+# nginx per il reverse proxy (X-Frame-Options strip + WebSocket),
+# supervisor per la gestione dei 3 processi (nginx/uvicorn/streamlit)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxml2 libxslt1.1 curl \
+    libxml2 libxslt1.1 curl nginx supervisor \
     && rm -rf /var/lib/apt/lists/*
 
-# Utente non-root per ridurre la superficie d'attacco
+# Utente non-root per i processi applicativi (nginx resta root per la porta)
 RUN useradd --no-create-home --shell /bin/false appuser
 
 WORKDIR /app
@@ -31,16 +33,20 @@ COPY --from=builder /install /usr/local
 COPY src/ src/
 COPY config/ config/
 COPY run_api.py .
+COPY .streamlit/ .streamlit/
+
+# Reverse proxy + process manager
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY supervisord.conf supervisord.conf
 
 # DB SQLite versionato (fonte di verità — il filesystem DO è effimero,
-# il refresh EDGAR committa il DB su main → redeploy di entrambi i servizi)
+# il refresh EDGAR committa il DB su main → redeploy automatico)
 COPY data/structured_notes.db data/structured_notes.db
 
 # Directory runtime con permessi corretti
-RUN mkdir -p data logs && chown appuser:appuser data logs
+RUN mkdir -p data logs /tmp/nginx && chown -R appuser:appuser data logs /tmp/nginx
 
-USER appuser
+EXPOSE 8080
 
-EXPOSE 8000 8501
-
-CMD ["python", "run_api.py", "--host", "0.0.0.0", "--port", "8000"]
+# supervisord (root) gestisce nginx (root) + uvicorn/streamlit (appuser)
+CMD ["supervisord", "-c", "/app/supervisord.conf"]

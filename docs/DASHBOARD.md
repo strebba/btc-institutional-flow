@@ -11,8 +11,13 @@ streamlit run src/dashboard/app.py
 
 ```
 src/dashboard/
-├── app.py      # Orchestrazione Streamlit (5 tab, sidebar, cache, header)
-└── charts.py   # Funzioni Plotly pure: DataFrame/dict → go.Figure
+├── app.py           # Orchestrazione Streamlit (tab, sidebar, cache, header)
+├── data_loader.py   # Funzioni @st.cache_data condivise (GEX, flows, barriers, backtest)
+├── charts.py        # Funzioni Plotly pure: DataFrame/dict → go.Figure
+├── header.py        # KPI sempre visibili + banner regime
+├── sidebar.py       # Filtri e refresh manuale
+├── tabs/            # 6 moduli: barrier_map, gex, flows, signals, edgar, validation
+└── static/style.css # CSS custom (tema Wagmi Lab)
 ```
 
 ## Tab e contenuto
@@ -143,28 +148,35 @@ dashboard:
 ### Locale (sviluppo)
 ```bash
 streamlit run src/dashboard/app.py
+# → http://localhost:8501
 ```
 
-### Con opzioni custom
-```bash
-streamlit run src/dashboard/app.py \
-  --server.port 8080 \
-  --server.headless true \
-  --browser.gatherUsageStats false
+### Produzione — DO App Platform (container unico)
+
+La dashboard NON si deploya da sola: gira nello stesso container del backend FastAPI,
+esposta pubblicamente da **nginx** che fa da reverse proxy.
+
+```
+supervisord (container DO, http_port 8080)
+├── nginx :8080      → pubblico: /api/* → FastAPI, /* → Streamlit
+├── uvicorn :8000    → FastAPI (solo loopback)
+└── streamlit :8501  → dashboard (solo loopback)
 ```
 
-### Docker (esempio)
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY . .
-RUN pip install -e "."
-EXPOSE 8501
-CMD ["streamlit", "run", "src/dashboard/app.py", "--server.headless", "true"]
+- URL pubblico: `https://btc-institutional-flow-tpw9m.ondigitalocean.app/`
+- Config processi: `supervisord.conf` · proxy: `nginx.conf` · spec: `.do/app.yaml`
+- Replica locale completa: `docker compose up -d --build` → http://localhost:8080
+- Config Streamlit: `.streamlit/config.toml` (tema Wagmi Lab, headless)
+
+### Embed in iframe (sito Wix wagmi-lab.com)
+
+nginx rimuove `X-Frame-Options` (hardcoded da Streamlit, non disattivabile via config)
+e imposta `Content-Security-Policy: frame-ancestors https://www.wagmi-lab.com`.
+
+```html
+<iframe src="https://btc-institutional-flow-tpw9m.ondigitalocean.app/?embed=true"
+        style="width:100%; height:800px; border:none;"
+        title="BTC Institutional Flow"></iframe>
 ```
 
-### Streamlit Community Cloud
-1. Push su GitHub
-2. Vai su [share.streamlit.io](https://share.streamlit.io)
-3. Seleziona repo, branch `main`, file `src/dashboard/app.py`
-4. Aggiungi eventuali secrets in `Settings > Secrets`
+`?embed=true` nasconde la toolbar Streamlit e riduce il padding.

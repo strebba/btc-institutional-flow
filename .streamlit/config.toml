@@ -1,0 +1,22 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Streamlit config — btc-institutional-flow (Wagmi Lab theme)
+# Coerente con config/settings.yaml → dashboard.theme
+# ─────────────────────────────────────────────────────────────────────────────
+
+[server]
+headless = true
+address = "127.0.0.1"
+port = 8501
+enableCORS = false
+enableXsrfProtection = true
+enableWebsocketCompression = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#00FF9D"        # Wagmi Lab — neon green
+backgroundColor = "#000000"     # Wagmi Lab — pure black
+secondaryBackgroundColor = "#0d0d0d"  # surface near-black
+textColor = "#FFFFFF"           # pure white

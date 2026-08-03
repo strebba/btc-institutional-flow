@@ -14,6 +14,7 @@ Toolkit Python per l'impatto del **dealer hedging** su note strutturate IBIT sul
 make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
+make compose-up     # replica ambiente DO: nginx:8080 + API + dashboard (docker compose)
 make test           # pytest tests/ -v  (~679 test)
 make test-unit      # pytest tests/unit/ -v -q (esclude integration)
 make lint           # ruff check src/ tests/
@@ -27,7 +28,8 @@ Venv locale in `.venv`.
 
 Il FastAPI di questo repo (`run_api.py`, porta 8000) è il **BTC API consumato da PTF-Dashboard**
 (lì configurato come `VITE_BTC_API_URL`). Modifiche end-to-end ai dati BTC della dashboard toccano
-entrambi i repo.
+entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso container**
+(nginx + supervisord), con la dashboard embeddata nel sito Wix **wagmi-lab.com**.
 
 ## Architettura (moduli `src/`)
 
@@ -50,9 +52,19 @@ ignorano `DB_PATH`). `SignalDB`, `PredictionDB`, `AlertDB` rispettano `DB_PATH` 
 
 ## Deploy
 
-`Procfile` → `python run_api.py --host 0.0.0.0 --port 8000`. `Dockerfile` + `docker-compose.yml`
-disponibili. Git repo attivo (branch `main`). La dashboard Streamlit gira in locale
-(`make run-dashboard`), non deployata su DO.
+**DO App Platform** (`btc-institutional-flow-tpw9m.ondigitalocean.app`, `.do/app.yaml`):
+container unico con **supervisord** che gestisce 3 processi:
+- `nginx` :8080 → reverse proxy pubblico (root del dominio → dashboard Streamlit)
+- `uvicorn` :8000 → FastAPI backend (solo loopback, `/api/*`)
+- `streamlit` :8501 → dashboard (solo loopback, tema Wagmi Lab da `.streamlit/config.toml`)
+
+nginx: `/api/*` → FastAPI, `/*` → Streamlit (con WebSocket `/_stcore/*`); rimuove
+`X-Frame-Options` e imposta `Content-Security-Policy: frame-ancestors` per **wagmi-lab.com**
+(embed iframe). App Platform non supporta volumi → i dati sono condivisi via **DB versionato
+nel repo** (refresh EDGAR → commit → redeploy). Config nginx: `nginx.conf`; processi:
+`supervisord.conf`. Modifiche alla spec DO: applicare da Console → Settings → App Spec.
+Local mirror: `docker compose up -d --build` → http://localhost:8080 (dash) e /api/docs (API).
+La dashboard gira anche in locale standalone (`make run-dashboard`, porta 8501).
 
 ## Refresh dati EDGAR (note IBIT)
 

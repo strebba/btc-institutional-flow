@@ -190,6 +190,29 @@ Apri http://localhost:8501
 
 ---
 
+## Deploy su DigitalOcean
+
+Container **unico** su DO App Platform (`.do/app.yaml`), gestito da supervisord:
+nginx `:8080` (reverse proxy pubblico) + uvicorn `:8000` (FastAPI) + streamlit `:8501`.
+
+| Risorsa | URL |
+|---------|-----|
+| Dashboard (embed Wix) | `https://btc-institutional-flow-tpw9m.ondigitalocean.app/?embed=true` |
+| API docs (Swagger) | `https://btc-institutional-flow-tpw9m.ondigitalocean.app/api/docs` |
+| Health check | `https://btc-institutional-flow-tpw9m.ondigitalocean.app/api/health` |
+
+**Replica locale**: `docker compose up -d --build` → http://localhost:8080
+
+**Embed nel sito Wix** (nginx già rimuove `X-Frame-Options` e autorizza wagmi-lab.com):
+
+```html
+<iframe src="https://btc-institutional-flow-tpw9m.ondigitalocean.app/?embed=true"
+        style="width:100%; height:800px; border:none;"
+        title="BTC Institutional Flow"></iframe>
+```
+
+---
+
 ## Risultati con dati reali
 
 | Test | Risultato |

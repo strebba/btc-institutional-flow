@@ -1,5 +1,59 @@
 # ibit-gamma-tracker — Project Memory
 
+## Standalone Deploy on DO + Wix Embed (session 2026-08-03)
+
+**679 test passing** · ruff clean.
+
+Obiettivo: hostare backend + dashboard Streamlit sullo stesso container DO e
+embedderli in iframe sul sito Wix **wagmi-lab.com**.
+
+### Blocker identificati
+1. **X-Frame-Options: DENY** — Streamlit (Tornado) imposta l'header hardcoded,
+   non disattivabile via config → il browser rifiuta l'iframe. Fix: nginx
+   `proxy_hide_header X-Frame-Options`.
+2. **App Platform non supporta i volumi** (confermato dalla doc DO) → due servizi
+   separati non condividono il filesystem. Fix: container unico con supervisord
+   (nginx :8080 + uvicorn :8000 + streamlit :8501) → filesystem condiviso nativo.
+3. **Ingress DO trima il path prefix** → nella spec precedente serviva
+   `preserve_path_prefix: true`. Superato: ora un solo servizio con nginx interno
+   che instrada `/api/*` e `/_stcore/*`.
+4. **Streamlit non parte come appuser senza HOME** — `PermissionError` su
+   `/root/.streamlit/secrets.toml`. Fix: `environment=HOME="/tmp"` in
+   `supervisord.conf` per i programmi che girano come appuser.
+
+### Architettura finale
+```
+Container DO (http_port 8080) — supervisord
+├── nginx :8080    → /api/* → uvicorn, /_stcore/* + /* → streamlit
+│                    strip X-Frame-Options + CSP frame-ancestors wagmi-lab.com
+├── uvicorn :8000  → FastAPI (loopback)
+└── streamlit :8501 → dashboard (loopback, tema Wagmi Lab .streamlit/config.toml)
+```
+
+- **URL**: dashboard `https://btc-institutional-flow-tpw9m.ondigitalocean.app/`
+  (embed `?embed=true`), API docs `/api/docs`, health `/api/health`
+- **docs_url/openapi_url** spostati sotto `/api` in `main.py` (root = dashboard)
+- **DB versionato** resta la fonte di verità condivisa (EDGAR workflow → commit → redeploy)
+- **File**: `nginx.conf`, `supervisord.conf`, `.streamlit/config.toml`, `.do/app.yaml`,
+  `Dockerfile` (apt nginx+supervisor, CMD supervisord), `docker-compose.yml` (1 servizio)
+- **Eliminato**: `Procfile` (obsoleto, spec DO usa Dockerfile + run_command)
+- **CORS**: default aggiornato a `btc-institutional-flow-tpw9m` + `wagmi-lab.com`
+  (main.py, start_api.sh, .env.example, docker-compose, .do/app.yaml)
+
+### Iframe Wix
+```html
+<iframe src="https://btc-institutional-flow-tpw9m.ondigitalocean.app/?embed=true"
+        style="width:100%; height:800px; border:none;"></iframe>
+```
+
+### Note operative
+- Replica locale: `docker compose up -d --build` → http://localhost:8080
+- Applicare la spec DO: Console → Settings → App Spec → incolla `.do/app.yaml`
+- GEX snapshot/IFI history scritti nel container sono effimeri (come prima) — i dati
+  persistenti sono solo quelli versionati nel repo
+
+---
+
 ## Quantitative Validation Overhaul (session 2026-07-21 — 4 critical fixes)
 
 **679 test passing** dopo tutti i fix.

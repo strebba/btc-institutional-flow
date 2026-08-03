@@ -1,7 +1,13 @@
-.PHONY: test test-unit test-integration lint typecheck install run-api run-dashboard update-gex update-flows update-edgar update-all
+.PHONY: test test-unit test-integration lint typecheck install run-api run-dashboard compose-up compose-down update-gex update-flows update-edgar update-all
 
 install:
 	pip install -e ".[dev]"
+
+compose-up:
+	docker compose up -d --build
+
+compose-down:
+	docker compose down
 
 test:
 	python3 -m pytest tests/ -v --tb=short

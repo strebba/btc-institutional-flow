@@ -36,8 +36,49 @@
                           │  Modulo 5               │
                           │  Streamlit Dashboard    │
                           │  src/dashboard/         │
+                          └────────────┬────────────┘
+                                       │
+                                       ▼
+                          ┌─────────────────────────┐
+                          │  Modulo 6 (API + UI)    │
+                          │  FastAPI + nginx        │
+                          │  src/api/               │
                           └─────────────────────────┘
 ```
+
+## Deployment (produzione)
+
+Container **unico** su DO App Platform, gestito da `supervisord` (3 processi):
+
+```
+                    ┌──────────────────────────────────────┐
+                    │         Container DO (porta 8080)    │
+  https://…         │                                      │
+  wagmi-lab.com ──► │  nginx :8080 (reverse proxy)         │
+  (iframe embed)    │    ├── /api/*     → uvicorn :8000    │
+                    │    └── /_stcore/* → streamlit :8501  │
+                    │                       (WebSocket)     │
+                    │  uvicorn :8000  — FastAPI (loopback)  │
+                    │  streamlit :8501 — dashboard          │
+                    │                                      │
+                    │  /app/data/structured_notes.db        │
+                    └──────────────────────────────────────┘
+```
+
+- **nginx** rimuove `X-Frame-Options` (impostato hardcoded da Streamlit) e aggiunge
+  `Content-Security-Policy: frame-ancestors` → consente l'embed in iframe su wagmi-lab.com
+- **supervisord** riavvia automaticamente i processi in caso di crash
+- I dati sono condivisi via **DB versionato nel repo** (App Platform non supporta volumi):
+  refresh EDGAR settimanale → commit su `main` → redeploy
+- Config: `nginx.conf`, `supervisord.conf`, `.do/app.yaml`, `.streamlit/config.toml`
+
+### URL
+
+| Risorsa | URL |
+|---------|-----|
+| Dashboard (embed) | `https://btc-institutional-flow-tpw9m.ondigitalocean.app/?embed=true` |
+| API docs | `https://btc-institutional-flow-tpw9m.ondigitalocean.app/api/docs` |
+| Health | `https://btc-institutional-flow-tpw9m.ondigitalocean.app/api/health` |
 
 ## Flusso dati
 
@@ -143,6 +184,9 @@ if isinstance(df.columns, pd.MultiIndex):
 
 ### `data/structured_notes.db`
 
+DB SQLite unico (versionato in git). Contiene: `notes`, `barrier_levels`, `prices`
+(OHLCV BTC/IBIT), `gex_snapshots`, `barrier_snapshots`.
+
 ```sql
 CREATE TABLE notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,18 +208,11 @@ CREATE TABLE barrier_levels (
     level_price_btc  REAL,   -- prezzo BTC corrispondente
     status          TEXT     -- active | triggered | expired
 );
-```
 
-### `data/prices.db`
-
-```sql
-CREATE TABLE btc_ohlcv (
-    date TEXT PRIMARY KEY,
-    open REAL, high REAL, low REAL, close REAL, volume REAL
-);
-CREATE TABLE ibit_ohlcv (
-    date TEXT PRIMARY KEY,
-    open REAL, high REAL, low REAL, close REAL, volume REAL
+CREATE TABLE prices (
+    ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
+    return_pct REAL, updated_at TEXT,
+    PRIMARY KEY (ticker, date)
 );
 ```
 

@@ -1,34 +1,23 @@
+# Replica locale dell'ambiente DO App Platform: un solo container con
+# nginx (:8080) + uvicorn (:8000) + streamlit (:8501) via supervisord.
 services:
-  api:
+  web:
     build: .
-    container_name: btc-flow-api
+    container_name: btc-flow-web
     ports:
-      - "8000:8000"
+      - "8080:8080"
     volumes:
       - ./data:/app/data       # SQLite persistente
       - ./logs:/app/logs       # Log persistenti
     environment:
-      # Origini consentite per CORS — dominio DO attuale
-      - CORS_ORIGINS=https://btc-institutional-flow-tpw9m.ondigitalocean.app,http://localhost:3000,http://localhost:8501
-      # Sostituisci con la tua email reale per SEC EDGAR user-agent
-      - EDGAR_USER_AGENT=ibit-gamma-tracker/1.0 (contact@example.com)
+      # Origini consentite per CORS — dominio DO + Wix embed
+      - CORS_ORIGINS=https://btc-institutional-flow-tpw9m.ondigitalocean.app,https://www.wagmi-lab.com,http://localhost:3000,http://localhost:8501
+      # User-Agent reale richiesto da SEC EDGAR
+      - EDGAR_USER_AGENT=ibit-gamma-tracker/1.0 (strebba90@gmail.com)
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
-
-  dashboard:
-    build: .
-    container_name: btc-flow-dashboard
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./data:/app/data       # SQLite condiviso con l'API
-      - ./logs:/app/logs
-    environment:
-      - DB_PATH=data/structured_notes.db
-    command: streamlit run src/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false
-    restart: unless-stopped
+      start_period: 60s

@@ -1,28 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DO App Platform spec — btc-institutional-flow
+#
+# Container unico con 3 processi (supervisord):
+#   nginx :8080  → reverse proxy pubblico
+#   uvicorn :8000 → FastAPI backend (solo loopback)
+#   streamlit :8501 → dashboard Streamlit (solo loopback)
+#
+# Routing (gestito da nginx nel container):
+#   /api/* → FastAPI   |   /* → Streamlit dashboard
+#
+# I dati sono condivisi via DB versionato nel repo (App Platform non supporta
+# volumi): il workflow EDGAR committa data/structured_notes.db su main →
+# redeploy automatico di entrambi i servizi con dati freschi.
+#
+# Applicare: DO Console → Settings → App Spec → Edit → incolla questo file
+# ─────────────────────────────────────────────────────────────────────────────
 name: btc-institutional-flow
 region: fra
 features:
   - buildpack-stack=ubuntu-22
 services:
-  - name: api
+  - name: web
     dockerfile_path: Dockerfile
     source_dir: /
-    run_command: python run_api.py --host 0.0.0.0 --port $PORT
-    http_port: 8000
+    run_command: supervisord -c /app/supervisord.conf
+    http_port: 8080
     instance_count: 1
-    instance_size_slug: basic-xxs
+    instance_size_slug: basic-xs
     github:
       repo: strebba/btc-institutional-flow
       branch: main
       deploy_on_push: true
     health_check:
       http_path: /api/health
-      initial_delay_seconds: 30
+      initial_delay_seconds: 60
       period_seconds: 20
       timeout_seconds: 5
       failure_threshold: 10
     envs:
       - key: CORS_ORIGINS
-        value: "https://btc-institutional-flow-tpw9m.ondigitalocean.app,http://localhost:3000,http://localhost:8501"
+        value: "https://btc-institutional-flow-tpw9m.ondigitalocean.app,https://www.wagmi-lab.com,http://localhost:3000,http://localhost:8501"
         scope: RUN_TIME
         type: GENERAL
       - key: EDGAR_USER_AGENT
@@ -33,40 +50,3 @@ services:
         value: "data/structured_notes.db"
         scope: RUN_TIME
         type: GENERAL
-
-  - name: dashboard
-    dockerfile_path: Dockerfile
-    source_dir: /
-    run_command: streamlit run src/dashboard/app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false
-    http_port: 8501
-    instance_count: 1
-    instance_size_slug: basic-xxs
-    github:
-      repo: strebba/btc-institutional-flow
-      branch: main
-      deploy_on_push: true
-    health_check:
-      http_path: /_stcore/health
-      initial_delay_seconds: 60
-      period_seconds: 20
-      timeout_seconds: 5
-      failure_threshold: 10
-    envs:
-      - key: DB_PATH
-        value: "data/structured_notes.db"
-        scope: RUN_TIME
-        type: GENERAL
-
-ingress:
-  rules:
-    - component:
-        name: api
-        preserve_path_prefix: true
-      match:
-        path:
-          prefix: /api
-    - component:
-        name: dashboard
-      match:
-        path:
-          prefix: /
