@@ -44,7 +44,7 @@ COPY supervisord.conf supervisord.conf
 COPY data/structured_notes.db data/structured_notes.db
 
 # Directory runtime con permessi corretti
-RUN mkdir -p data logs /tmp/nginx && chown -R appuser:appuser data logs /tmp/nginx
+RUN mkdir -p data logs && chown -R appuser:appuser data logs
 
 EXPOSE 8080
 
