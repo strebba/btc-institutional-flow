@@ -20,6 +20,14 @@ embedderli in iframe sul sito Wix **wagmi-lab.com**.
 4. **Streamlit non parte come appuser senza HOME** — `PermissionError` su
    `/root/.streamlit/secrets.toml`. Fix: `environment=HOME="/tmp"` in
    `supervisord.conf` per i programmi che girano come appuser.
+5. **nginx crash → loop "Unlinking stale socket" su DO** — i temp path
+   (`/tmp/nginx/body` ecc.) puntavano a una dir di proprietà appuser (755),
+   non scrivibile dai worker nginx (default `nobody`) → nginx crashava →
+   supervisord riavviava → DO ricreava il container all'infinito.
+   Fix (`d60efb2`): temp paths flat in `/tmp` (world-writable, sticky bit)
+   + direttiva `user appuser` in nginx.conf (master root per bind :8080,
+   worker come appuser → accesso condiviso a data/ e logs/). Rimosso
+   `mkdir /tmp/nginx` dal Dockerfile.
 
 ### Architettura finale
 ```
