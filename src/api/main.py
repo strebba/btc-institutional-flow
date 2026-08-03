@@ -54,7 +54,7 @@ app = FastAPI(
 # CORS
 _raw_origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:8501,https://seashell-app-h7hc4.ondigitalocean.app",
+    "http://localhost:3000,http://localhost:8501,https://btc-institutional-flow-tpw9m.ondigitalocean.app",
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 

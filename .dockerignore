@@ -10,4 +10,8 @@ docs/
 memory/
 .env
 logs/
-data/
+data/runtime.db
+data/runtime.db-shm
+data/runtime.db-wal
+data/*.db-shm
+data/*.db-wal

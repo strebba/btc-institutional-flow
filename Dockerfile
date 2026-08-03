@@ -32,11 +32,15 @@ COPY src/ src/
 COPY config/ config/
 COPY run_api.py .
 
+# DB SQLite versionato (fonte di verità — il filesystem DO è effimero,
+# il refresh EDGAR committa il DB su main → redeploy di entrambi i servizi)
+COPY data/structured_notes.db data/structured_notes.db
+
 # Directory runtime con permessi corretti
 RUN mkdir -p data logs && chown appuser:appuser data logs
 
 USER appuser
 
-EXPOSE 8000
+EXPOSE 8000 8501
 
 CMD ["python", "run_api.py", "--host", "0.0.0.0", "--port", "8000"]

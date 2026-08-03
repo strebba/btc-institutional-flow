@@ -1,0 +1,72 @@
+name: btc-institutional-flow
+region: fra
+features:
+  - buildpack-stack=ubuntu-22
+services:
+  - name: api
+    dockerfile_path: Dockerfile
+    source_dir: /
+    run_command: python run_api.py --host 0.0.0.0 --port $PORT
+    http_port: 8000
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    github:
+      repo: strebba/btc-institutional-flow
+      branch: main
+      deploy_on_push: true
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 30
+      period_seconds: 20
+      timeout_seconds: 5
+      failure_threshold: 10
+    envs:
+      - key: CORS_ORIGINS
+        value: "https://btc-institutional-flow-tpw9m.ondigitalocean.app,http://localhost:3000,http://localhost:8501"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: EDGAR_USER_AGENT
+        value: "ibit-gamma-tracker/1.0 (strebba90@gmail.com)"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: DB_PATH
+        value: "data/structured_notes.db"
+        scope: RUN_TIME
+        type: GENERAL
+
+  - name: dashboard
+    dockerfile_path: Dockerfile
+    source_dir: /
+    run_command: streamlit run src/dashboard/app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false
+    http_port: 8501
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    github:
+      repo: strebba/btc-institutional-flow
+      branch: main
+      deploy_on_push: true
+    health_check:
+      http_path: /_stcore/health
+      initial_delay_seconds: 60
+      period_seconds: 20
+      timeout_seconds: 5
+      failure_threshold: 10
+    envs:
+      - key: DB_PATH
+        value: "data/structured_notes.db"
+        scope: RUN_TIME
+        type: GENERAL
+
+ingress:
+  rules:
+    - component:
+        name: api
+        preserve_path_prefix: true
+      match:
+        path:
+          prefix: /api
+    - component:
+        name: dashboard
+      match:
+        path:
+          prefix: /
