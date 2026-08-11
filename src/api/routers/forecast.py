@@ -50,11 +50,11 @@ def verify_predictions() -> JSONResponse:
 
         db = PredictionDB()
         fetcher = PriceFetcher()
-        _ticker = {"BTC": "BTC-USD"}
+        from src.config import TICKER_MAP
 
         def provider(asset, start, end):
             return fetcher.fetch(
-                _ticker.get(asset, asset),
+                TICKER_MAP.get(asset, asset),
                 start_date=start.date(),
                 end_date=(end + _td(days=1)).date(),
             )

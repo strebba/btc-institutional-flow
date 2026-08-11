@@ -356,7 +356,10 @@ class CoinGlassClient:
                 ts_ms = item.get("t") or item.get("time")
                 # "close" è il campo reale nella risposta v4 OHLC aggregated OI
                 oi = (
-                    item.get("close") or item.get("c") or item.get("openInterest") or item.get("oi")
+                    item.get("close") if item.get("close") is not None
+                    else item.get("c") if item.get("c") is not None
+                    else item.get("openInterest") if item.get("openInterest") is not None
+                    else item.get("oi")
                 )
             else:
                 continue
@@ -433,9 +436,12 @@ class CoinGlassClient:
                 # Updated field names from CoinGlass API docs
                 ratio = (
                     item.get("global_account_long_short_ratio")
-                    or item.get("longShortRatio")
-                    or item.get("ratio")
-                    or item.get("c")
+                    if item.get("global_account_long_short_ratio") is not None
+                    else item.get("longShortRatio")
+                    if item.get("longShortRatio") is not None
+                    else item.get("ratio")
+                    if item.get("ratio") is not None
+                    else item.get("c")
                 )
             else:
                 continue

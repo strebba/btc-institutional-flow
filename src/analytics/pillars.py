@@ -641,7 +641,8 @@ class CompositeSignal:
         barrier_history: pd.DataFrame,
     ) -> pd.Series:
         """Calcola il barrier score usando lo storico barriere per ogni data."""
-        # Raggruppa barriere per snapshot_date
+        import bisect
+
         history_by_date: dict[pd.Timestamp, list[dict]] = {}
         for _, row in barrier_history.iterrows():
             d = row["snapshot_date"]
@@ -652,21 +653,30 @@ class CompositeSignal:
                 "issuer": row["issuer"],
             })
 
+        candidates = sorted(history_by_date.keys())
         scores = pd.Series(np.nan, index=btc_close.index, dtype=float)
+
         for ts, price in btc_close.items():
             if pd.isna(price) or price <= 0:
                 continue
-            # Cerca la data di snapshot più vicina (entro 1 giorno)
             if ts in history_by_date:
                 barriers = history_by_date[ts]
-            else:
-                # Nearest neighbor: giorno prima o dopo
-                candidates = sorted(history_by_date.keys())
-                nearest = min(candidates, key=lambda d: abs((d - ts).days), default=None)
-                if nearest is None or abs((nearest - ts).days) > 1:
+            elif candidates:
+                idx = bisect.bisect_left(candidates, ts)
+                best = None
+                if idx < len(candidates):
+                    best = candidates[idx]
+                if idx > 0:
+                    prev = candidates[idx - 1]
+                    if best is None or abs((prev - ts).days) < abs((best - ts).days):
+                        best = prev
+                if best is None or abs((best - ts).days) > 1:
                     scores[ts] = 50.0
                     continue
-                barriers = history_by_date[nearest]
+                barriers = history_by_date[best]
+            else:
+                scores[ts] = 50.0
+                continue
 
             if barriers:
                 result = score_barrier_pillar(active_barriers=barriers, spot_price=float(price))

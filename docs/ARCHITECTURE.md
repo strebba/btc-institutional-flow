@@ -20,23 +20,32 @@
          └──────────────────────┴───────────────────────────┘
                                         │
                                         ▼
-                          ┌─────────────────────────┐
-                          │  Modulo 4               │
-                          │  Statistical Analysis   │
-                          │  src/analytics/         │
-                          │                         │
-                          │  · Granger causality    │
-                          │  · Event study (CAR)    │
-                          │  · Regime analysis      │
-                          │  · Backtest             │
-                          └────────────┬────────────┘
-                                       │
-                                       ▼
-                          ┌─────────────────────────┐
-                          │  Modulo 5               │
-                          │  Streamlit Dashboard    │
-                          │  src/dashboard/         │
-                          └────────────┬────────────┘
+                           ┌─────────────────────────┐
+                           │  Modulo 4               │
+                           │  Statistical Analysis   │
+                           │  src/analytics/         │
+                           │                         │
+                           │  · Granger causality    │
+                           │  · Event study (CAR)    │
+                           │  · Regime analysis      │
+                           │  · Backtest             │
+                           └────────────┬────────────┘
+                                        │
+                          ┌─────────────┴──────────────┐
+                          ▼                            ▼
+               ┌────────────────────┐  ┌────────────────────────┐
+               │  Modulo A          │  │  Modulo B              │
+               │  Forecast Engine   │  │  Alert System          │
+               │  src/forecast/     │  │  src/alerts/           │
+               └─────────┬──────────┘  └────────────┬───────────┘
+                         │                          │
+                         └──────────┬───────────────┘
+                                    ▼
+                           ┌─────────────────────────┐
+                           │  Modulo 5               │
+                           │  Streamlit Dashboard    │
+                           │  src/dashboard/         │
+                           └────────────┬────────────┘
                                        │
                                        ▼
                           ┌─────────────────────────┐
@@ -154,7 +163,7 @@ GEX = sign × gamma × OI × contract_size × spot² × 0.01
 **Strategia di fallback per i dati:**
 ```
 1. Farside Investors (HTML scraping) → bloccato da Cloudflare 403
-2. SoSoValue API → non implementata
+2. SoSoValue API → implementata (con retry)
 3. yfinance volume estimate → ATTIVO
    flow_estimate = sign(return) × volume × close × 0.08
 4. CSV manuale → FarsideScraper.from_csv(path)
@@ -246,8 +255,8 @@ analytics:
 dashboard:
   refresh_interval_s: 900    # 15 minuti
   theme:
-    background: "#1a1a2e"
-    positive:   "#00ff88"
+    background: "#000000"
+    positive:   "#00FF9D"
     negative:   "#ff4444"
     neutral:    "#4488ff"
 ```

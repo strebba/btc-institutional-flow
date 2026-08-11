@@ -84,11 +84,21 @@ class DeribitClient:
         )
         self._min_interval = 1.0 / self._cfg["rate_limit_rps"]
         self._cache: dict[str, Any] = {}
+        self._cache_ts: dict[str, float] = {}
         self._circuit_breaker = CircuitBreaker(failure_threshold=20, recovery_timeout=60)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Internal helpers
     # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _cache_ttl(endpoint: str) -> float:
+        """TTL in secondi per tipo di endpoint. Spot/ticker brevi, instrument list lunghi."""
+        if "ticker" in endpoint:
+            return 5.0
+        if "get_instruments" in endpoint or "get_book_summary" in endpoint:
+            return 30.0
+        return 30.0
 
     def _throttle(self) -> None:
         """Rispetta il rate limit configurato (thread-safe, globale tra istanze)."""
@@ -122,7 +132,9 @@ class DeribitClient:
         """
         cache_key = f"{endpoint}:{params}"
         if cache_key in self._cache:
-            return self._cache[cache_key]
+            age = time.monotonic() - self._cache_ts.get(cache_key, 0)
+            if age < self._cache_ttl(endpoint):
+                return self._cache[cache_key]
 
         if self._circuit_breaker.is_open():
             _log.warning("Circuit breaker OPEN - throttling requests")
@@ -140,6 +152,7 @@ class DeribitClient:
 
             result = data.get("result")
             self._cache[cache_key] = result
+            self._cache_ts[cache_key] = time.monotonic()
             self._circuit_breaker.record_success()
             return result
         except (requests.Timeout, requests.ConnectionError):
@@ -164,6 +177,7 @@ class DeribitClient:
     def clear_cache(self) -> None:
         """Svuota la cache in memoria."""
         self._cache.clear()
+        self._cache_ts.clear()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API methods

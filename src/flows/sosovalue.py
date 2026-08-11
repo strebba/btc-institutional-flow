@@ -1,10 +1,11 @@
 """Client per SoSoValue ETF API — flussi giornalieri Bitcoin ETF spot."""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import requests
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.config import get_settings, setup_logging
 from src.flows.models import EtfFlowData
@@ -35,6 +36,7 @@ class SoSoValueClient:
         self._cfg = cfg or get_settings()["flows"]
         self._api_key: str = self._cfg.get("sosovalue_api_key", "")
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
     def fetch(self, lookback_days: int = 400) -> list[EtfFlowData]:
         """Scarica i flussi ETF Bitcoin spot dall'API SoSoValue.
 
@@ -69,8 +71,11 @@ class SoSoValueClient:
             resp = session.get(_API_URL, params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
+        except requests.RequestException as e:
+            _log.warning("SoSoValue API errore (ritentato): %s", e)
+            raise
         except Exception as e:
-            _log.warning("SoSoValue API errore: %s", e)
+            _log.warning("SoSoValue API errore non recuperabile: %s", e)
             return []
 
         return self._parse_response(data)
@@ -112,7 +117,7 @@ class SoSoValueClient:
             try:
                 if isinstance(raw_date, (int, float)):
                     # Unix timestamp in millisecondi
-                    parsed_date = datetime.utcfromtimestamp(raw_date / 1000).date()
+                    parsed_date = datetime.fromtimestamp(raw_date / 1000, tz=timezone.utc).date()
                 else:
                     parsed_date = datetime.strptime(str(raw_date)[:10], "%Y-%m-%d").date()
             except (ValueError, OSError):

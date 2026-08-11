@@ -1,11 +1,13 @@
-"""Autenticazione opzionale via API key con FastAPI Depends()."""
+"""Autenticazione opzionale via API key con FastAPI Depends().
+
+La protezione reale e' implementata a livello middleware in main.py.
+Questa dependency e' disponibile per eventuali controlli per-route.
+"""
 from __future__ import annotations
 
 import os
 
 from fastapi import HTTPException, Request
-
-_API_KEY = os.getenv("API_KEY")
 
 
 def require_api_key(request: Request) -> None:
@@ -14,7 +16,8 @@ def require_api_key(request: Request) -> None:
     Se API_KEY non e' impostata, tutti gli accessi sono consentiti (sviluppo locale).
     L'endpoint /api/health e' escluso dal controllo (middleware-level).
     """
-    if not _API_KEY:
+    api_key = os.getenv("API_KEY")
+    if not api_key:
         return
-    if request.headers.get("X-API-Key") != _API_KEY:
+    if request.headers.get("X-API-Key") != api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")

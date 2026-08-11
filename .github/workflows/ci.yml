@@ -17,6 +17,7 @@ jobs:
           python-version: "3.11"
       - run: pip install ruff
       - run: ruff check src/ tests/
+      - run: ruff format --check src/ tests/
 
   test:
     name: Tests
@@ -35,15 +36,7 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: .
-        run: pytest --tb=short -q
-
-      - name: Upload coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: .coverage
-          if-no-files-found: ignore
+        run: pytest --tb=short -q --cov=src --cov-report=xml
 
       - name: Notify Telegram on failure
         if: failure()

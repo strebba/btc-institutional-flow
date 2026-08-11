@@ -59,6 +59,8 @@ class RegimeDetector:
             snapshot: GexSnapshot da aggiungere.
         """
         self._history.append(snapshot)
+        if len(self._history) > 500:
+            self._history = self._history[-400:]
 
     def detect(self, snapshot: GexSnapshot) -> GammaRegime:
         """Classifica il regime e genera alert per lo snapshot corrente.

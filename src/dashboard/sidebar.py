@@ -74,7 +74,7 @@ def _sidebar(snap: dict, merged_df: pd.DataFrame, barriers: list[dict]) -> bool:
 """,
             unsafe_allow_html=True,
         )
-        st.metric("Long GEX threshold", "$0")
+        st.metric("Long GEX threshold", f"+{cfg.get('long_gex_threshold_usd_m', 0)}M")
         st.metric("Long Flow (3d)", f"+{cfg.get('long_flow_threshold_usd_m', 100)}M")
         st.metric("Short Flow (3d)", f"{cfg.get('short_flow_threshold_usd_m', -200)}M")
         st.metric("Barrier exclusion", f"±{cfg.get('barrier_exclusion_pct', 5)}%")

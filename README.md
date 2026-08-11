@@ -63,11 +63,22 @@ btc-institutional-flow/
 │   │
 │   └── config.py       # Settings loader (YAML + .env), logging setup
 │
-├── scripts/            # Entry point CLI
+├── scripts/            # Entry point CLI (15 script)
+│   ├── cron_calibrate.py      # Calibrazione forecast settimanale
+│   ├── cron_edgar.py          # Refresh incrementale EDGAR
+│   ├── cron_gex.py            # Snapshot GEX giornaliero
+│   ├── cron_ifi.py            # IFI storico giornaliero
+│   ├── cron_predict.py        # Predizioni dealer-flow giornaliere
+│   ├── cron_signal.py         # Segnale composito giornaliero
+│   ├── cron_snapshot_barriers.py # Snapshot barriere EDGAR
+│   ├── cron_verify.py         # Verifica predizioni quotidiane
+│   ├── fetch_farside.py       # Aggiorna cache Farside HTML
+│   ├── notify_telegram.py     # Notifica CI/alert Telegram
+│   ├── run_analytics.py       # Esegue tutti gli analytics
+│   ├── run_coinglass.py       # Fetch dati CoinGlass
 │   ├── run_edgar.py           # Scarica e parsa filing EDGAR
 │   ├── run_flows.py           # Scarica flussi ETF e prezzi
-│   ├── run_gex.py             # Calcola GEX live da Deribit
-│   └── run_analytics.py       # Esegue tutti gli analytics
+│   └── run_gex.py             # Calcola GEX live da Deribit
 │
 ├── tests/              # ~679 test unitari (pytest)
 ├── config/settings.yaml       # Tutti i parametri configurabili
@@ -86,7 +97,7 @@ btc-institutional-flow/
 │  │  Regime: POSITIVE GAMMA      │  ⚠️ NEAR CALL_WALL                    │
 │  └──────────────────────────────┘                                        │
 ├──────────┬──────────┬──────────┬──────────┬──────────────────────────────┤
-│  📊 GEX  │ 💸 Flows │ 🔬 Analy │ 📈 Back  │  🏛️ EDGAR Barriers          │
+│  📊 GEX  │ 💸 Flows │ 🔬 Analy │ 📈 Back  │  🏛️ Barriers │ ✅ Valid │
 ├──────────┴──────────┴──────────┴──────────┴──────────────────────────────┤
 │  [GEX profile bar chart per strike]    [Livelli chiave: walls + flip]    │
 │                                                                           │
@@ -108,7 +119,7 @@ btc-institutional-flow/
 
 ### Prerequisiti
 
-- Python 3.9+
+- Python 3.11+
 - Git
 
 ### Setup
@@ -135,7 +146,8 @@ Le variabili rilevanti in `.env`:
 ```env
 # Opzionale — tutti hanno default in settings.yaml
 EDGAR_USER_AGENT="ibit-gamma-tracker/1.0 (tua@email.com)"
-DERIBIT_BASE_URL="https://www.deribit.com/api/v2"
+# API_KEY — se impostata, protegge tutti gli endpoint /api/* (eccetto /api/health)
+API_KEY=""
 ```
 
 ---

@@ -50,6 +50,46 @@ ignorano `DB_PATH`). `SignalDB`, `PredictionDB`, `AlertDB` rispettano `DB_PATH` 
 `structured_notes.db`, override `data/runtime.db` in dev). Config: `config/settings.yaml` +
 `config/weights.yaml` via `src.config.get_settings()`. Scheduler/cron in `scripts/` (16 script).
 
+## Skills disponibili
+
+Tutte le skill sono disponibili globalmente e richiamabili via `skill` tool.
+**Regola generale**: quando lavori su un file/modulo elencato sotto, carica la skill corrispondente
+prima di iniziare — fornisce pattern, best practice, e reference aggiornati.
+
+### Project-installed (`.agents/skills/`)
+
+| Skill | Trigger | File/Task |
+|-------|---------|-----------|
+| `fastapi-python` | Qualsiasi modifica a `src/api/` | `main.py`, `routers/*`, `schemas.py`, `auth.py`, `cache.py`, `scheduler.py` |
+| `developing-with-streamlit` | Qualsiasi modifica a `src/dashboard/` | `app.py`, `tabs/*`, `charts.py`, `data_loader.py`, `header.py`, `sidebar.py` |
+| `tdd` | Scrivere/aggiornare test (`tests/`) | Red-green-refactor, test first |
+| `systematic-debugging` | Qualsiasi bug o test failure | Root cause tracing, defense-in-depth |
+| `codebase-design` | Refactoring, nuovo modulo/seam | Deep module design, interfacce |
+| `domain-modeling` | Modellare nuovi concetti dominio | ADR, ubiquitous language, CONTEXT.md |
+| `find-skills` | Cercare nuove skill utili | Ricerca ecosistema skills.sh |
+
+### Globale — Core dominio
+
+| Skill | Trigger | File/Task |
+|-------|---------|-----------|
+| `crypto-derivatives` | GEX, gamma flip, dealer positioning, options flow, funding rate, barriere, max pain | `src/gex/*`, `src/edgar/barrier_utils.py`, `src/analytics/pillars.py` (pilastro gex/barrier), `tabs/gex.py`, `tabs/barrier_map.py` |
+| `quantitative-research` | Backtesting, alpha generation, factor models, regime detection, walk-forward, statistical arbitrage | `src/analytics/backtest.py`, `src/analytics/factor_scorers.py`, `src/analytics/regime_analysis.py`, `src/analytics/walk_forward.py`, `src/analytics/pillars.py` |
+| `Time Series Analysis` | Trend, autocorrelation, Granger causality, forecasting, ARIMA, ACF/PACF | `src/analytics/granger.py`, `src/forecast/*`, `src/flows/correlation.py`, `src/analytics/signal_validation.py` |
+| `portfolio-risk` | VaR, max drawdown, Sharpe/Sortino, correlation matrix, rolling metrics | `src/analytics/backtest.py`, `src/analytics/regime_analysis.py`, `src/analytics/sensitivity.py` |
+| `scipy-best-practices` | Ottimizzazione, stat avanzata, interpolazione, signal processing | `src/analytics/*`, `src/forecast/calibration.py`, qualsiasi uso di `scipy.*` |
+| `plotly` | Qualsiasi grafico Plotly | `src/dashboard/charts.py`, `tabs/gex.py`, `tabs/barrier_map.py`, `tabs/flows.py`, `tabs/signals.py` |
+
+### Globale — Infrastruttura & operatività
+
+| Skill | Trigger | File/Task |
+|-------|---------|-----------|
+| `bingx-swap-market` | Funding rate, OI, order book da BingX (fonte alternativa ai dati macro) | `src/flows/macro_fetcher.py`, `src/analytics/factor_scorers.py` |
+| `error-monitoring` | Error logging, Sentry, health check, structured logging backend | `src/api/main.py`, `src/alerts/`, qualsiasi gestione errori produzione |
+
+### Skill NON usare (stack non corrispondente)
+
+`playwright-e2e` (React), `postgres-optimization` (SQLite), `react-performance`, `supabase-realtime`, `supabase-security`, `bingx-fund-account`, `bingx-swap-account`, `bingx-swap-trade`, `customize-opencode`
+
 ## Deploy
 
 **DO App Platform** (`btc-institutional-flow-tpw9m.ondigitalocean.app`, `.do/app.yaml`):

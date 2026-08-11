@@ -134,7 +134,7 @@ t_stat, p_value = scipy.stats.ttest_ind(
 - `mean_return` — rendimento medio giornaliero nel regime
 - `std_return` — deviazione standard
 - `mean_vol` — volatilità realizzata media (7d rolling)
-- `sharpe` — `mean_return / std_return × √252`
+- `sharpe` — `mean_return / std_return × √365`
 - `cum_return` — rendimento cumulativo nel regime
 
 **Correlazione rolling GEX ↔ volatilità:**

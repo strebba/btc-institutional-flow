@@ -13,7 +13,7 @@ Metriche calcolate:
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -83,7 +83,7 @@ class GexCalculator:
         if not options_data:
             _log.warning("Nessun dato opzioni disponibile")
             return GexSnapshot(
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 spot_price=spot_price,
                 total_net_gex=0.0,
                 gamma_flip_price=None,
@@ -146,7 +146,7 @@ class GexCalculator:
             call_wall = max(positive_strikes, key=lambda g: g.net_gex).strike
 
         # ── Max pain ──────────────────────────────────────────────────────────
-        max_pain = self._calculate_max_pain(options_data, spot_price)
+        max_pain = self._calculate_max_pain(options_data)
 
         _log.info(
             "GEX calcolato: total_net=%.2fM, flip=%.0f, put_wall=%.0f, call_wall=%.0f, max_pain=%.0f",
@@ -158,7 +158,7 @@ class GexCalculator:
         )
 
         return GexSnapshot(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             spot_price=spot_price,
             total_net_gex=total_net_gex,
             gamma_flip_price=gamma_flip,
@@ -208,7 +208,6 @@ class GexCalculator:
     def _calculate_max_pain(
         self,
         options_data: list[dict],
-        spot_price: float,
     ) -> Optional[float]:
         """Calcola il max pain: strike che minimizza il payoff totale delle opzioni.
 

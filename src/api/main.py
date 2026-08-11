@@ -111,7 +111,8 @@ async def telegram_webhook(request: Request) -> JSONResponse:
 
     try:
         update = await request.json()
-    except Exception:
+    except (ValueError, Exception) as exc:
+        _log.debug("Invalid JSON in Telegram webhook: %s", exc)
         return JSONResponse({"ok": True})
 
     msg = update.get("message") or update.get("channel_post")

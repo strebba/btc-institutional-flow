@@ -124,13 +124,12 @@ class TestGetSeries:
         assert abs(s.iloc[0] - 123_456_789.0) < 1.0
 
     def test_get_series_respects_days_limit(self, db: GexDB) -> None:
-        """days=0 non ritorna nulla (nessun dato nel futuro)."""
+        """days=0 non ritorna dati (WHERE date('now', '-0 days') ≈ solo oggi, ma
+        il timestamp è al passato → nessuna riga). days=365 cattura il record."""
         db.insert_snapshot(_make_snapshot(), "positive_gamma")
-        # days=0 → WHERE date >= date('now', '0 days') → solo oggi incluso
-        # Verifica che days limiti correttamente
         s_long  = db.get_series(days=365)
         s_short = db.get_series(days=0)
-        # s_long deve contenere il record (oggi), s_short potrebbe no (dipende da sqlite)
+        assert len(s_long) >= 1
         assert len(s_long) >= len(s_short)
 
 

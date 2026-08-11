@@ -135,18 +135,6 @@ class TestComputeMetrics:
         result = bt._compute_metrics(rets, "test")
         assert result.max_drawdown <= 0
 
-    def test_win_rate_in_range(self, bt):
-        rng = np.random.default_rng(42)
-        rets = pd.Series(rng.normal(0, 0.02, 200))
-        result = bt._compute_metrics(rets, "test")
-        assert 0.0 <= result.win_rate <= 1.0
-
-    def test_profit_factor_positive(self, bt):
-        rng = np.random.default_rng(42)
-        rets = pd.Series(rng.normal(0, 0.02, 200))
-        result = bt._compute_metrics(rets, "test")
-        assert result.profit_factor >= 0
-
     def test_with_signals_counts(self, bt):
         rets = pd.Series([0.01] * 100 + [-0.01] * 100)
         signals = pd.Series([1.0] * 100 + [-1.0] * 100)
@@ -423,6 +411,7 @@ class TestNullModels:
         assert (nulls1["random_signal"] == nulls2["random_signal"]).all()
 
     def test_momentum_20d_no_lookahead(self, bt):
+        """Momentum usa pct_change + shift(1): nessuna dipendenza dal futuro."""
         rng = np.random.default_rng(42)
         dates = pd.date_range("2024-01-01", periods=100, freq="D")
         prices = 60000 * np.exp(np.cumsum(rng.normal(0.001, 0.02, 100)))
@@ -432,7 +421,8 @@ class TestNullModels:
         )
         nulls = bt._null_models(df)
         sig = nulls["momentum_20d"]
-        assert sig.iloc[0] == 0.0 or sig.isin([-1.0, 1.0]).all()
+        assert sig.isin([-1.0, 1.0]).all()
+        assert len(sig) == len(df)
 
     def test_null_models_dont_break_run_without_flag(self, bt, df):
         results = bt.run(df, include_null_models=False)

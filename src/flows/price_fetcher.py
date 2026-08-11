@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -111,7 +111,7 @@ class PriceFetcher:
         if df.empty:
             return 0
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         df  = df.copy()
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
 

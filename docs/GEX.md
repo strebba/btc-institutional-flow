@@ -163,5 +163,5 @@ snap_dict = calc.gex_to_dict(snap)
 
 - **Latenza dati Deribit**: il fetch di ~948 opzioni richiede ~2 minuti a causa del rate limit (0.07s/req)
 - **Dati intraday**: Deribit aggiorna i greeks continuamente; lo snapshot è un'istantanea puntuale
-- **GEX storico**: non disponibile da API pubblica — il sistema accumula snapshot nel DB nel tempo
+- **GEX storico**: operativo via `gex_snapshots` + `cron_gex.py` — lo storico si accumula con snapshot giornalieri nel DB
 - **Opzioni settimanali vs mensili**: Deribit offre sia opzioni settimanali che mensili; tutte sono incluse nel calcolo

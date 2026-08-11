@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from src.api.helpers import ok
+from src.api.helpers import http_error, ok
 
 router = APIRouter(tags=["meta"])
 
@@ -24,13 +24,11 @@ def health_edgar() -> JSONResponse:
 
     try:
         db = StructuredNotesDB()
-        with db._conn() as conn:
-            last = conn.execute("SELECT MAX(created_at) FROM notes").fetchone()[0]
-            total_notes = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-            total_barriers = conn.execute("SELECT COUNT(*) FROM barrier_levels").fetchone()[0]
-            active_barriers = conn.execute(
-                "SELECT COUNT(*) FROM barrier_levels WHERE status='active'"
-            ).fetchone()[0]
+        stats = db.get_edgar_stats()
+        last = stats["last_update"]
+        total_notes = stats["total_notes"]
+        total_barriers = stats["total_barriers"]
+        active_barriers = stats["active_barriers"]
 
         stale_days = None
         if last:
@@ -52,8 +50,4 @@ def health_edgar() -> JSONResponse:
             },
         })
     except Exception as exc:
-        return ok({
-            "service": "btc-institutional-flow",
-            "healthy": False,
-            "edgar": {"error": str(exc)},
-        })
+        raise http_error(503, f"EDGAR health check failed: {exc}")

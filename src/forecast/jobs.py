@@ -6,18 +6,16 @@ async le esegue in un thread separato.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from src.config import setup_logging
+from src.config import TICKER_MAP, setup_logging
 from src.forecast.calibration import CalibrationReport, load_weights_config, run_calibration
 from src.forecast.prediction_db import PredictionDB
 from src.forecast.sources.dealer_flow import SOURCE as DEALER_FLOW
 from src.forecast.sources.dealer_flow import build_dealer_flow_predictions
 
 _log = setup_logging("forecast.jobs")
-
-_TICKER = {"BTC": "BTC-USD"}
 
 
 def _governance() -> dict:
@@ -47,7 +45,6 @@ def run_daily_predict(*, horizon: int = 5, db: Optional[PredictionDB] = None) ->
     preds = build_dealer_flow_predictions(
         ctx.result, spot_price=ctx.spot,
         gamma_flip=snap.gamma_flip_price, max_pain=snap.max_pain,
-        put_wall=snap.put_wall, call_wall=snap.call_wall,
         total_net_gex=snap.total_net_gex, horizon_days=horizon,
         weights_version=weights_version,
     )
@@ -68,13 +65,13 @@ def run_daily_verify(*, db: Optional[PredictionDB] = None) -> dict:
 
     def provider(asset, start, end):
         return fetcher.fetch(
-            _TICKER.get(asset, asset),
+            TICKER_MAP.get(asset, asset),
             start_date=start.date(),
             end_date=(end + timedelta(days=1)).date(),
         )
 
     due = db.get_due()
-    outcomes = score_due_predictions(db, provider, datetime.utcnow())
+    outcomes = score_due_predictions(db, provider, datetime.now(timezone.utc))
     hits = sum(1 for o in outcomes if o.hit)
     _log.info("[verify] mature=%d verificate=%d hit=%d", len(due), len(outcomes), hits)
     return {"status": "ok", "due": len(due), "verified": len(outcomes),

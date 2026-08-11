@@ -9,6 +9,7 @@ interni dei sotto-fattori (GEX, ETF, MACRO factor weights).
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Optional
 
 import pandas as pd
@@ -22,6 +23,17 @@ from src.analytics.pillars import (
 )
 from src.analytics.backtest import Backtest
 from src.config import setup_logging
+
+
+@contextmanager
+def _temp_weights(module, attr_name: str, test_weights: dict):
+    """Temporarily replace factor weights, restoring on exit (even on exception)."""
+    original = getattr(module, attr_name)
+    setattr(module, attr_name, test_weights)
+    try:
+        yield
+    finally:
+        setattr(module, attr_name, original)
 
 _log = setup_logging("analytics.sensitivity")
 
@@ -173,15 +185,21 @@ class ParameterSensitivity:
         base_composite = CompositeSignal()
         base_sharpe = self._sharpe_for_signal(df, base_composite)
 
-        groups = {
+        groups: dict[str, dict[str, float]] = {
             "gex": GEX_FACTOR_WEIGHTS.copy(),
             "etf_flows": ETF_FACTOR_WEIGHTS.copy(),
             "macro": MACRO_FACTOR_WEIGHTS.copy(),
+        }
+        attr_map = {
+            "gex": "GEX_FACTOR_WEIGHTS",
+            "etf_flows": "ETF_FACTOR_WEIGHTS",
+            "macro": "MACRO_FACTOR_WEIGHTS",
         }
 
         result: dict[str, dict[str, dict]] = {}
 
         for group_name, group_weights in groups.items():
+            attr_name = attr_map[group_name]
             result[group_name] = {}
             for factor in group_weights:
                 w_base = group_weights[factor]
@@ -193,13 +211,10 @@ class ParameterSensitivity:
                     s = sum(test_weights.values())
                     test_weights = {k: v / s for k, v in test_weights.items()}
 
-                    setattr(_pillars_mod, f"{group_name.upper()}_FACTOR_WEIGHTS", test_weights)
-
-                    test_composite = CompositeSignal()
-                    sharpe = self._sharpe_for_signal(df, test_composite)
+                    with _temp_weights(_pillars_mod, attr_name, test_weights):
+                        test_composite = CompositeSignal()
+                        sharpe = self._sharpe_for_signal(df, test_composite)
                     sharpes.append(sharpe)
-
-                setattr(_pillars_mod, f"{group_name.upper()}_FACTOR_WEIGHTS", group_weights.copy())
 
                 low_s, high_s = sharpes[0], sharpes[1]
                 sharpe_range = abs(high_s - low_s)

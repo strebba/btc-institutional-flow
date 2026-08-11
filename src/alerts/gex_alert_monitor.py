@@ -220,13 +220,18 @@ class GexAlertMonitor:
             return False
 
         cooldown_h = float(self._cfg.get("error_cooldown_hours", 6))
-        if self._alert_db.within_cooldown(ALERT_ERROR, hours=cooldown_h):
+        on_cooldown = await asyncio.to_thread(
+            self._alert_db.within_cooldown, ALERT_ERROR, hours=cooldown_h
+        )
+        if on_cooldown:
             return False
 
         msg = f"⚠️ <b>BTC Institutional Flow — Errore</b>\n<i>{error_msg}</i>"
         sent = await self._telegram.send_message(msg)
         if sent:
-            self._alert_db.record_sent(ALERT_ERROR, msg)
+            await asyncio.to_thread(
+                self._alert_db.record_sent, ALERT_ERROR, msg
+            )
         return sent
 
     async def build_recap_message(self) -> Optional[str]:
@@ -422,7 +427,7 @@ class GexAlertMonitor:
             return 0
 
         try:
-            aggs = self._fetch_flows()
+            aggs = await asyncio.to_thread(self._fetch_flows)
         except Exception as exc:
             _log.warning("flows fetch failed in check_etf_flows: %s", exc)
             return 0
@@ -442,7 +447,7 @@ class GexAlertMonitor:
             return 0
 
         # Arricchisci con contesto GEX corrente (best-effort)
-        latest = self._gex_db.get_latest_n(1)
+        latest = await asyncio.to_thread(self._gex_db.get_latest_n, 1)
         snap = latest[-1] if latest else None
 
         cooldown_map = {
@@ -455,7 +460,10 @@ class GexAlertMonitor:
         sent_count = 0
         for ev in events:
             alert_type = cooldown_map.get(ev.trigger, ev.trigger)
-            if self._alert_db.within_cooldown(alert_type, hours=cooldown_h):
+            on_cooldown = await asyncio.to_thread(
+                self._alert_db.within_cooldown, alert_type, hours=cooldown_h
+            )
+            if on_cooldown:
                 _log.info("flow alert %s skip: cooldown attivo", alert_type)
                 continue
 
@@ -463,15 +471,20 @@ class GexAlertMonitor:
                 ev.spot_price = snap.spot_price
             # Regime dal DB (ultimo snapshot)
             if snap is not None:
-                ev.gex_regime = self._gex_db.get_last_regime_label()
+                ev.gex_regime = await asyncio.to_thread(self._gex_db.get_last_regime_label)
 
             message = format_etf_flow_alert(ev)
-            if self._alert_db.is_duplicate(alert_type, message):
+            is_dup = await asyncio.to_thread(
+                self._alert_db.is_duplicate, alert_type, message
+            )
+            if is_dup:
                 _log.info("flow alert %s skip: payload duplicato", alert_type)
                 continue
 
             if await self._telegram.send_message(message):
-                self._alert_db.record_sent(alert_type, message)
+                await asyncio.to_thread(
+                    self._alert_db.record_sent, alert_type, message
+                )
                 sent_count += 1
                 _log.info("flow alert inviato: type=%s", alert_type)
 

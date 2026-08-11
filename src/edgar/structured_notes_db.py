@@ -12,7 +12,7 @@ import sqlite3
 
 import pandas as pd
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -127,6 +127,26 @@ class StructuredNotesDB:
         finally:
             conn.close()
 
+    def get_edgar_stats(self) -> dict:
+        """Restituisce statistiche aggregate del DB per health check.
+
+        Returns:
+            dict con last_update, total_notes, total_barriers, active_barriers.
+        """
+        with self._conn() as conn:
+            last = conn.execute("SELECT MAX(created_at) FROM notes").fetchone()[0]
+            total_notes = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+            total_barriers = conn.execute("SELECT COUNT(*) FROM barrier_levels").fetchone()[0]
+            active_barriers = conn.execute(
+                "SELECT COUNT(*) FROM barrier_levels WHERE status='active'"
+            ).fetchone()[0]
+        return {
+            "last_update": last,
+            "total_notes": total_notes,
+            "total_barriers": total_barriers,
+            "active_barriers": active_barriers,
+        }
+
     def _init_schema(self) -> None:
         """Crea le tabelle, gli indici e applica le migrazioni incrementali."""
         with self._conn() as conn:
@@ -169,7 +189,7 @@ class StructuredNotesDB:
 
     @staticmethod
     def _now() -> str:
-        return datetime.utcnow().isoformat()
+        return datetime.now(timezone.utc).isoformat()
 
     # ─── Note CRUD ───────────────────────────────────────────────────────────
 
@@ -397,7 +417,7 @@ class StructuredNotesDB:
                 return 0
 
             for row in rows:
-                if row["level_price_ibit"]:
+                if row["level_price_ibit"] and ibit_btc_ratio and ibit_btc_ratio > 0:
                     btc_price = row["level_price_ibit"] / ibit_btc_ratio
                     conn.execute(
                         "UPDATE barrier_levels SET level_price_btc=? WHERE id=?",
@@ -424,9 +444,10 @@ class StructuredNotesDB:
             dict con conteggi: {"triggered": N, "reactivated": M}.
         """
         counts = {"triggered": 0, "reactivated": 0}
+        triggered_ids: list[int] = []
+        reactivated_ids: list[int] = []
+
         with self._conn() as conn:
-            # Il confronto col prezzo IBIT ha senso solo per note IBIT: le barriere
-            # di note su altri ETF restano allo status corrente.
             rows = conn.execute(
                 """
                 SELECT b.id, b.barrier_type, b.level_price_ibit, b.status
@@ -448,15 +469,22 @@ class StructuredNotesDB:
                     new_triggered = current_ibit_price >= level
 
                 if new_triggered and old_status == "active":
-                    conn.execute(
-                        "UPDATE barrier_levels SET status='triggered' WHERE id=?", (row["id"],)
-                    )
+                    triggered_ids.append(row["id"])
                     counts["triggered"] += 1
                 elif not new_triggered and old_status == "triggered":
-                    conn.execute(
-                        "UPDATE barrier_levels SET status='active' WHERE id=?", (row["id"],)
-                    )
+                    reactivated_ids.append(row["id"])
                     counts["reactivated"] += 1
+
+            if triggered_ids:
+                conn.executemany(
+                    "UPDATE barrier_levels SET status='triggered' WHERE id=?",
+                    [(bid,) for bid in triggered_ids],
+                )
+            if reactivated_ids:
+                conn.executemany(
+                    "UPDATE barrier_levels SET status='active' WHERE id=?",
+                    [(bid,) for bid in reactivated_ids],
+                )
 
         _log.info("Barrier status aggiornati: %s (prezzo IBIT=%.2f)", counts, current_ibit_price)
         return counts
@@ -592,8 +620,8 @@ class StructuredNotesDB:
                         ),
                     )
                     inserted += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.warning("Snapshot barriera fallito per barriera %s: %s", b.get("id"), e)
         _log.info("Snapshot barriere: %d barriere salvate per %s", inserted, today)
         return inserted
 

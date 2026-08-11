@@ -10,6 +10,7 @@ _settings = get_settings()
 _REFRESH = _settings["dashboard"]["refresh_interval_s"]
 
 
+@st.cache_data(ttl=_REFRESH, show_spinner=False)
 def _get_backtest_context(days: int = 365):
     """Helper condiviso: GexDB series + StructuredNotesDB barrier_history.
 

@@ -9,6 +9,10 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+import requests
+
+from src.flows.coinglass_client import CoinGlassClient, CoinGlassError
+
 _log = logging.getLogger(__name__)
 
 
@@ -55,8 +59,6 @@ def fetch_macro_data(
     Returns:
         MacroData con i valori disponibili (None per quelli non fetchabili).
     """
-    from src.flows.coinglass_client import CoinGlassClient
-
     cache_data = cache_data or {}
     out = MacroData.from_dict(cache_data)
     cg = cg_client or CoinGlassClient()
@@ -66,8 +68,8 @@ def fetch_macro_data(
             fr = cg.fetch_funding_rate_history(days=14)
             if not fr.empty:
                 out.funding_rate_annualized_pct = float(fr.iloc[-1]) * 3 * 365 * 100
-        except Exception:
-            pass
+        except (CoinGlassError, requests.RequestException) as exc:
+            _log.warning("Funding rate fetch failed: %s", exc)
 
     if out.oi_change_7d_pct is None:
         try:
@@ -77,16 +79,16 @@ def fetch_macro_data(
                     (float(oi.iloc[-1]) - float(oi.iloc[-8]))
                     / float(oi.iloc[-8]) * 100
                 )
-        except Exception:
-            pass
+        except (CoinGlassError, requests.RequestException, IndexError) as exc:
+            _log.warning("OI history fetch failed: %s", exc)
 
     if out.long_short_ratio is None:
         try:
             ls = cg.fetch_long_short_ratio(days=3)
             if not ls.empty:
                 out.long_short_ratio = float(ls.iloc[-1])
-        except Exception:
-            pass
+        except (CoinGlassError, requests.RequestException) as exc:
+            _log.warning("Long/short ratio fetch failed: %s", exc)
 
     if out.liquidations_long_24h_usd is None:
         try:
@@ -94,7 +96,7 @@ def fetch_macro_data(
             if not liq.empty:
                 out.liquidations_long_24h_usd = float(liq["long_usd"].iloc[-1])
                 out.liquidations_short_24h_usd = float(liq["short_usd"].iloc[-1])
-        except Exception:
-            pass
+        except (CoinGlassError, requests.RequestException) as exc:
+            _log.warning("Liquidations fetch failed: %s", exc)
 
     return out

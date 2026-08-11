@@ -263,16 +263,21 @@ class EdgarEftsSearcher:
         entity_name = entity_name.split(" (CIK")[0].strip()
 
         # URL diretto al documento
+        try:
+            cik_int = str(int(cik)) if cik else "0"
+        except (ValueError, TypeError):
+            _log.warning("CIK non numerico: %s", cik)
+            cik_int = "0"
         if doc_filename and cik:
             filing_url = (
                 f"https://www.sec.gov/Archives/edgar/data/"
-                f"{int(cik)}/{acc_clean}/{doc_filename}"
+                f"{cik_int}/{acc_clean}/{doc_filename}"
             )
         else:
             # Fallback all'index del filing
             filing_url = (
                 f"https://www.sec.gov/Archives/edgar/data/"
-                f"{int(cik) if cik else 0}/{acc_clean}/{adsh}-index.htm"
+                f"{cik_int}/{acc_clean}/{adsh}-index.htm"
             )
 
         return {

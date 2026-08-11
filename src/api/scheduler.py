@@ -38,7 +38,8 @@ async def _catch_up_daily_recap(monitor: Any, recap_cfg: dict) -> None:
         return
 
     alert_db = AlertDB()
-    if alert_db.sent_today(ALERT_DAILY_RECAP):
+    sent = await asyncio.to_thread(alert_db.sent_today, ALERT_DAILY_RECAP)
+    if sent:
         _log.info("[alerts] catch-up skip: recap gia' inviato oggi (UTC)")
         return
 

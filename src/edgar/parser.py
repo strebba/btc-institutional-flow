@@ -116,19 +116,6 @@ _RE_BARRIER_ABS_REVERSE = re.compile(
     re.IGNORECASE,
 )
 
-_RE_BARRIER_PCT = re.compile(
-    r"([\d]+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?(?:initial|starting|reference)\s+"
-    r"(?:value|level|price|share\s+price)",
-    re.IGNORECASE,
-)
-
-_RE_BARRIER_LABEL = re.compile(
-    r"(?:barrier|trigger|knock[\-\s]in\s+level|threshold|"
-    r"buffer\s+level|downside\s+threshold|protection\s+level)"
-    r"[:\s]+([^\n<]{3,80})",
-    re.IGNORECASE,
-)
-
 _RE_AUTOCALL_PCT = re.compile(
     r"(?:auto[\-\s]?call\s+(?:trigger|level|threshold)|call\s+(?:level|trigger|value))"
     r"\s*:?\s*(?:1\s+)?([\d]+(?:\.\d+)?)\s*%",   # gestisce "10 0.00%" → "100.00%"

@@ -14,6 +14,7 @@ from typing import Generator, Optional
 import pandas as pd
 
 from src.config import get_settings, setup_logging
+from src.utils.db_helpers import safe_db_value
 
 _log = setup_logging("analytics.ifi_db")
 
@@ -95,9 +96,9 @@ class IFIDb:
                     created_at=excluded.created_at
                 """,
                 (date, round(score, 2), regime,
-                 _safe(flow_score), _safe(trend_score), _safe(price_score),
-                 _safe(funding_score), _safe(oi_score),
-                 _safe(btc_price), _safe(total_flow_usd), now),
+                 safe_db_value(flow_score), safe_db_value(trend_score), safe_db_value(price_score),
+                 safe_db_value(funding_score), safe_db_value(oi_score),
+                 safe_db_value(btc_price), safe_db_value(total_flow_usd), now),
             )
 
     def upsert_series(
@@ -107,32 +108,51 @@ class IFIDb:
         btc_prices: Optional[pd.Series],
         flows: Optional[pd.Series],
     ) -> int:
-        """Upsert di una serie di score (DatetimeIndex). Restituisce il numero di righe salvate."""
+        """Upsert di una serie di score (DatetimeIndex). Usa exec_many per performance."""
         from src.analytics.ifi import regime_label
 
-        count = 0
+        now = datetime.now(timezone.utc).isoformat()
+        rows: list[tuple] = []
         for ts, score in scores.items():
             date = str(ts.date()) if hasattr(ts, "date") else str(ts)
             regime = regime_label(float(score))
+            btc_price = _lookup(btc_prices, ts)
+            total_flow = _lookup(flows, ts)
+            rows.append((
+                date, round(float(score), 2), regime,
+                safe_db_value(_factor(factor_df, ts, "flow_momentum")),
+                safe_db_value(_factor(factor_df, ts, "flow_trend")),
+                safe_db_value(_factor(factor_df, ts, "price_momentum")),
+                safe_db_value(_factor(factor_df, ts, "funding")),
+                safe_db_value(_factor(factor_df, ts, "oi_momentum")),
+                safe_db_value(btc_price),
+                safe_db_value(total_flow),
+                now,
+            ))
 
-            btc_price    = _lookup(btc_prices, ts)
-            total_flow   = _lookup(flows, ts)
-            flow_score   = _factor(factor_df, ts, "flow_momentum")
-            trend_score  = _factor(factor_df, ts, "flow_trend")
-            price_score  = _factor(factor_df, ts, "price_momentum")
-            funding_score= _factor(factor_df, ts, "funding")
-            oi_score     = _factor(factor_df, ts, "oi_momentum")
-
-            self.upsert(
-                date=date, score=float(score), regime=regime,
-                flow_score=flow_score, trend_score=trend_score,
-                price_score=price_score, funding_score=funding_score,
-                oi_score=oi_score, btc_price=btc_price,
-                total_flow_usd=total_flow,
+        with self._conn() as conn:
+            conn.executemany(
+                """
+                INSERT INTO ifi_history
+                    (date, score, regime, flow_score, trend_score, price_score,
+                     funding_score, oi_score, btc_price, total_flow_usd, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(date) DO UPDATE SET
+                    score=excluded.score,
+                    regime=excluded.regime,
+                    flow_score=coalesce(excluded.flow_score, flow_score),
+                    trend_score=coalesce(excluded.trend_score, trend_score),
+                    price_score=coalesce(excluded.price_score, price_score),
+                    funding_score=coalesce(excluded.funding_score, funding_score),
+                    oi_score=coalesce(excluded.oi_score, oi_score),
+                    btc_price=coalesce(excluded.btc_price, btc_price),
+                    total_flow_usd=coalesce(excluded.total_flow_usd, total_flow_usd),
+                    created_at=excluded.created_at
+                """,
+                rows,
             )
-            count += 1
 
-        return count
+        return len(rows)
 
     # ─── Read ─────────────────────────────────────────────────────────────────
 
@@ -176,17 +196,6 @@ class IFIDb:
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def _safe(v: Optional[float]) -> Optional[float]:
-    """Converte NaN/inf in None per SQLite."""
-    import math
-    if v is None:
-        return None
-    try:
-        return None if (math.isnan(v) or math.isinf(v)) else round(float(v), 6)
-    except (TypeError, ValueError):
-        return None
-
-
 def _lookup(series: Optional[pd.Series], ts) -> Optional[float]:
     if series is None:
         return None
@@ -194,7 +203,7 @@ def _lookup(series: Optional[pd.Series], ts) -> Optional[float]:
         v = series.get(ts) if hasattr(series, "get") else None
         if v is None and ts in series.index:
             v = series[ts]
-        return _safe(float(v)) if v is not None else None
+        return safe_db_value(float(v)) if v is not None else None
     except Exception:
         return None
 
@@ -204,7 +213,7 @@ def _factor(factor_df: Optional[pd.DataFrame], ts, col: str) -> Optional[float]:
         return None
     try:
         if ts in factor_df.index:
-            return _safe(float(factor_df.loc[ts, col]))
+            return safe_db_value(float(factor_df.loc[ts, col]))
     except Exception:
         pass
     return None

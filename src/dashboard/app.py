@@ -28,23 +28,19 @@ from pathlib import Path
 # non e' installato in editable mode)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
 import pandas as pd
 import streamlit as st
 
-from src.config import get_settings, setup_logging
+from src.config import get_settings
 
-_log = setup_logging("dashboard.app")
 _settings = get_settings()
 _theme = _settings["dashboard"]["theme"]
-_REFRESH = _settings["dashboard"]["refresh_interval_s"]
 
 _SURFACE = _theme.get("surface", "#161b22")
 _BORDER = _theme.get("border", "#30363d")
 _TEXT_MUTED = _theme.get("text_muted", "#8b949e")
-_ACCENT = _theme.get("accent", "#a371f7")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page config + CSS
@@ -229,7 +225,10 @@ def main() -> None:
             for future in as_completed(futures):
                 key = futures[future]
                 try:
-                    result = future.result()
+                    result = future.result(timeout=15)
+                except TimeoutError:
+                    st.warning(f"Timeout caricamento {key} (15s) — dati parziali")
+                    continue
                 except Exception as e:
                     if key == "gex":
                         st.warning(f"GEX non disponibile: {e}")

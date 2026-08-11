@@ -1,5 +1,48 @@
 # ibit-gamma-tracker — Project Memory
 
+## Skill Ecosystem (session 2026-08-04)
+
+**15 skill totali** disponibili per il progetto (8 globali symlinkate + 7 project-installed).
+Caricare la skill pertinente **prima** di modificare il file/task corrispondente.
+
+### Core dominio (6 skill globali — `~/.agents/skills/`)
+
+| Skill | Quando caricare |
+|-------|-----------------|
+| `crypto-derivatives` | GEX, gamma flip, dealer positioning, options flow, funding rate, barriere |
+| `quantitative-research` | Backtesting, alpha generation, factor models, regime detection, walk-forward |
+| `Time Series Analysis` | Trend, autocorrelation, Granger causality, forecasting, ARIMA |
+| `portfolio-risk` | VaR, max drawdown, Sharpe/Sortino, correlation matrix, rolling metrics |
+| `scipy-best-practices` | Ottimizzazione, stat avanzata, interpolazione (`scipy.*`) |
+| `plotly` | Qualsiasi grafico Plotly in `charts.py` o nei tab |
+
+### Infrastruttura (2 skill globali)
+
+| Skill | Quando caricare |
+|-------|-----------------|
+| `bingx-swap-market` | Funding rate, OI, order book da BingX (fonte alternativa dati macro) |
+| `error-monitoring` | Error logging, health check, gestione errori produzione |
+
+### Engineering (7 skill project-installed — `.agents/skills/`)
+
+| Skill | Quando caricare |
+|-------|-----------------|
+| `fastapi-python` | Modifiche a `src/api/` |
+| `developing-with-streamlit` | Modifiche a `src/dashboard/` |
+| `tdd` | Scrivere/aggiornare test |
+| `systematic-debugging` | Bug o test failure |
+| `codebase-design` | Refactoring, nuovo modulo/seam |
+| `domain-modeling` | Modellare nuovi concetti dominio |
+| `find-skills` | Cercare nuove skill |
+
+### Skill NON rilevanti
+
+`bingx-fund-account`, `bingx-swap-account`, `bingx-swap-trade`, `customize-opencode`,
+`playwright-e2e` (React stack), `postgres-optimization` (SQLite), `react-performance`,
+`supabase-realtime`, `supabase-security`
+
+---
+
 ## Standalone Deploy on DO + Wix Embed (session 2026-08-03)
 
 **679 test passing** · ruff clean.

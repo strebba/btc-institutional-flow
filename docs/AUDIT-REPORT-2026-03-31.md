@@ -1,3 +1,5 @@
+# STATUS: ~85% risolto. Vedi REMEDIATION-PLAN.md per audit 2026-08-04
+
 # AUDIT REPORT — ibit-gamma-tracker
 **Data:** 2026-03-31  
 **Classificazione:** PROJ-AUDIT-ADV-v1.0  

@@ -50,6 +50,7 @@ class AlertDB:
         conn = sqlite3.connect(self._path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         try:
             yield conn
             conn.commit()
@@ -77,6 +78,8 @@ class AlertDB:
         try:
             ts = datetime.fromisoformat(row["last_sent_at"])
         except ValueError:
+            _log.warning("Timestamp corrotto in alert_db per alert_type=%s: %s",
+                         alert_type, row["last_sent_at"])
             return None
         return ts, row["last_payload_hash"]
 

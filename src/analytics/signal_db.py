@@ -17,6 +17,7 @@ import pandas as pd
 
 from src.analytics.factor_scorers import SignalResult
 from src.config import get_settings, setup_logging
+from src.utils.db_helpers import safe_db_value
 
 _log = setup_logging("analytics.signal_db")
 
@@ -113,14 +114,14 @@ class SignalDB:
                 """,
                 (
                     ts, date, round(result.score, 2), result.signal, result.reason,
-                    _safe(c.get("gex")), _safe(c.get("etf_flow")),
-                    _safe(c.get("funding_rate")), _safe(c.get("oi_change")),
-                    _safe(c.get("long_short")), _safe(c.get("put_call")),
-                    _safe(c.get("liquidations")),
-                    _safe(spot_price_usd), _safe(total_gex_usd), _safe(ibit_flow_3d_usd),
-                    _safe(funding_rate_pct), _safe(oi_change_7d_pct),
-                    _safe(long_short_ratio), _safe(put_call_ratio),
-                    _safe(liq_long_usd), _safe(liq_short_usd),
+                    safe_db_value(c.get("gex")), safe_db_value(c.get("etf_flow")),
+                    safe_db_value(c.get("funding_rate")), safe_db_value(c.get("oi_change")),
+                    safe_db_value(c.get("long_short")), safe_db_value(c.get("put_call")),
+                    safe_db_value(c.get("liquidations")),
+                    safe_db_value(spot_price_usd), safe_db_value(total_gex_usd), safe_db_value(ibit_flow_3d_usd),
+                    safe_db_value(funding_rate_pct), safe_db_value(oi_change_7d_pct),
+                    safe_db_value(long_short_ratio), safe_db_value(put_call_ratio),
+                    safe_db_value(liq_long_usd), safe_db_value(liq_short_usd),
                     1 if near_active_barrier else 0,
                 ),
             )
@@ -182,12 +183,3 @@ class SignalDB:
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _safe(v: Optional[float]) -> Optional[float]:
-    import math
-    if v is None:
-        return None
-    try:
-        return None if (math.isnan(v) or math.isinf(v)) else round(float(v), 6)
-    except (TypeError, ValueError):
-        return None

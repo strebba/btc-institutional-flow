@@ -135,10 +135,10 @@ Configurato in `config/settings.yaml`:
 dashboard:
   refresh_interval_s: 900
   theme:
-    background: "#1a1a2e"   # sfondo scuro navy
-    text:       "#ffffff"   # testo bianco
+    background: "#000000"   # sfondo nero
+    text:       "#FFFFFF"   # testo bianco
     grid:       "#2a2a3e"   # griglia
-    positive:   "#00ff88"   # verde neon
+    positive:   "#00FF9D"   # verde Wagmi Lab
     negative:   "#ff4444"   # rosso
     neutral:    "#4488ff"   # blu
 ```

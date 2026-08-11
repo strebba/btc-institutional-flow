@@ -76,3 +76,7 @@ def setup_logging(name: str = "ibit") -> logging.Logger:
     logger.addHandler(fh)
 
     return logger
+
+
+# Convenience ticker mapping (used by forecast jobs + API router)
+TICKER_MAP: dict[str, str] = {"BTC": "BTC-USD"}

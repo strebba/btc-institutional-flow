@@ -57,8 +57,6 @@ def build_dealer_flow_predictions(
     spot_price: float,
     gamma_flip: Optional[float] = None,
     max_pain: Optional[float] = None,
-    put_wall: Optional[float] = None,
-    call_wall: Optional[float] = None,
     total_net_gex: Optional[float] = None,
     horizon_days: int = DEFAULT_HORIZON_DAYS,
     asset: str = "BTC",

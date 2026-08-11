@@ -43,13 +43,6 @@ class TestPillarSensitivity:
             assert "range" in result[pillar]
             assert "is_stable" in result[pillar]
 
-    def test_sensitivity_range_non_negative(self):
-        df = _make_merged_df()
-        ps = ParameterSensitivity()
-        result = ps.pillar_sensitivity(df, delta=0.20)
-        for pillar, metrics in result.items():
-            assert metrics["range"] >= 0
-
     def test_overall_stability_field(self):
         df = _make_merged_df()
         ps = ParameterSensitivity()

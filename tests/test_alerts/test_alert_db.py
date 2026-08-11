@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from freezegun import freeze_time
 
 from src.alerts.alert_db import AlertDB, payload_hash
 
@@ -90,23 +91,16 @@ class TestSentToday:
         db.record_sent("daily_recap", "hello")
         assert db.sent_today("daily_recap") is True
 
+    @freeze_time("2026-06-15 12:00:00")
     def test_false_if_sent_yesterday(self, db: AlertDB) -> None:
-        """Messaggio inviato ieri pomeriggio non deve bloccare quello di oggi."""
-        yesterday_afternoon = (
-            datetime.now(tz=timezone.utc) - timedelta(hours=18)
-        ).isoformat()
+        """Messaggio inviato ieri non deve bloccare quello di oggi."""
+        yesterday = "2026-06-14T18:00:00+00:00"
         with db._conn() as conn:
             conn.execute(
                 "INSERT INTO alert_state VALUES (?, ?, ?)",
-                ("daily_recap", yesterday_afternoon, payload_hash("old")),
+                ("daily_recap", yesterday, payload_hash("old")),
             )
-        # Se sono passate 18h ma siamo in un nuovo giorno UTC, deve essere False
-        # (il test potrebbe essere tautologico se gira poco dopo mezzanotte UTC,
-        #  ma copre il caso comune)
-        yesterday_dt = datetime.now(tz=timezone.utc) - timedelta(hours=18)
-        today_dt = datetime.now(tz=timezone.utc)
-        if yesterday_dt.date() < today_dt.date():
-            assert db.sent_today("daily_recap") is False
+        assert db.sent_today("daily_recap") is False
 
     def test_independent_per_type(self, db: AlertDB) -> None:
         db.record_sent("daily_recap", "x")
