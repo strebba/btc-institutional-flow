@@ -165,3 +165,9 @@ snap_dict = calc.gex_to_dict(snap)
 - **Dati intraday**: Deribit aggiorna i greeks continuamente; lo snapshot è un'istantanea puntuale
 - **GEX storico**: operativo via `gex_snapshots` + `cron_gex.py` — lo storico si accumula con snapshot giornalieri nel DB
 - **Opzioni settimanali vs mensili**: Deribit offre sia opzioni settimanali che mensili; tutte sono incluse nel calcolo
+
+## Export su TradingView
+
+I livelli calcolati qui (gamma flip, put/call wall, max pain, profilo per strike) possono essere
+portati sul grafico BTC di TradingView come indicatore Pine v6: `make export-pine` oppure
+`GET /api/gex/pine`. Dettagli e limiti in [`docs/TRADINGVIEW.md`](TRADINGVIEW.md).

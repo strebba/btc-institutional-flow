@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import traceback
 
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from src.api.cache import cache_get, cache_set, _gex_fetch_lock
 from src.api.helpers import ok, http_error
+from src.gex.pine_exporter import MAX_PROFILE_STRIKES, build_pine_script
 
 router = APIRouter(prefix="/api/gex", tags=["gex"])
 
@@ -211,3 +212,64 @@ def get_gex() -> JSONResponse:
     except Exception as exc:
         traceback.print_exc()
         raise http_error(f"GEX error: {exc}")
+
+
+# ─── GET /api/gex/pine ─────────────────────────────────────────────────────────
+
+
+def _ibit_ratio() -> float | None:
+    """Ratio IBIT/BTC corrente, o None se i prezzi non sono disponibili."""
+    try:
+        from src.flows.price_fetcher import PriceFetcher
+
+        return PriceFetcher().get_ibit_btc_ratio()
+    except Exception as exc:
+        import logging
+        logging.getLogger("api.gex").debug("IBIT/BTC ratio non disponibile: %s", exc)
+        return None
+
+
+@router.get("/pine", response_class=PlainTextResponse)
+def get_gex_pine(
+    history_days: int = Query(120, ge=0, le=365, description="Giorni di storico livelli (0 = nessuno)"),
+    max_strikes: int = Query(MAX_PROFILE_STRIKES, ge=0, le=MAX_PROFILE_STRIKES, description="Strike nel profilo call/put"),
+    range_pct: float = Query(0.15, gt=0.0, le=1.0, description="Finestra strike attorno allo spot (0.15 = ±15%)"),
+    download: bool = Query(False, description="Forza il download come file .pine"),
+) -> PlainTextResponse:
+    """Indicatore TradingView (Pine v6) con i livelli GEX correnti incorporati.
+
+    Pine Script non può chiamare API esterne: lo script restituito è uno snapshot
+    con gamma flip, put/call wall, max pain, profilo call/put per strike e — se il
+    DB ha storia — la serie step dei livelli passati. Va ri-generato per aggiornarlo.
+    """
+    # TTL della cache: chiave non presente in _TTL → default 300s, come /api/gex.
+    cache_key = f"gex_pine:{history_days}:{max_strikes}:{range_pct}"
+    script = cache_get(cache_key)
+
+    if script is None:
+        try:
+            gex_data = _get_gex_data()
+            snapshot = gex_data["snapshot"]
+            state = gex_data["state"]
+            gex_db = gex_data["gex_db"]
+
+            history = gex_db.get_walls_series(days=history_days) if history_days > 0 else None
+
+            script = build_pine_script(
+                snapshot,
+                regime=state.regime,
+                gex_percentile=state.gex_percentile,
+                history=history,
+                max_strikes=max_strikes,
+                range_pct=range_pct,
+                ibit_ratio=_ibit_ratio(),
+            )
+            cache_set(cache_key, script)
+        except Exception as exc:
+            traceback.print_exc()
+            raise http_error(f"GEX Pine export error: {exc}")
+
+    headers = {}
+    if download:
+        headers["Content-Disposition"] = 'attachment; filename="btc_gex_tradingview.pine"'
+    return PlainTextResponse(script, media_type="text/plain; charset=utf-8", headers=headers)

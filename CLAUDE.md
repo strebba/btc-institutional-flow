@@ -19,6 +19,7 @@ make test           # pytest tests/ -v  (~679 test)
 make test-unit      # pytest tests/unit/ -v -q (esclude integration)
 make lint           # ruff check src/ tests/
 make update-all     # update-gex + update-flows + update-edgar (cron data refresh)
+make export-pine    # exports/btc_gex_tradingview.pine (indicatore TradingView, = GET /api/gex/pine)
 ```
 
 Lint/type: `ruff` (configurato in `pyproject.toml`), `.pre-commit-config.yaml`.
@@ -36,7 +37,7 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | Modulo | Ruolo |
 |--------|-------|
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
-| `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
+| `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain + `pine_exporter.py` (indicatore TradingView Pine v6, vedi `docs/TRADINGVIEW.md`) |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati) |
 | `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
 | `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (6 moduli con validation tab), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
@@ -48,7 +49,7 @@ DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignora
 `StructuredNotesDB` e `GexDB` puntano **sempre** a `structured_notes.db` (path hardcodato,
 ignorano `DB_PATH`). `SignalDB`, `PredictionDB`, `AlertDB` rispettano `DB_PATH` (default
 `structured_notes.db`, override `data/runtime.db` in dev). Config: `config/settings.yaml` +
-`config/weights.yaml` via `src.config.get_settings()`. Scheduler/cron in `scripts/` (16 script).
+`config/weights.yaml` via `src.config.get_settings()`. Scheduler/cron in `scripts/` (17 script).
 
 ## Skills disponibili
 

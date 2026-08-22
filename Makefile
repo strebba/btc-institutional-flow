@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration lint typecheck install run-api run-dashboard compose-up compose-down update-gex update-flows update-edgar update-all
+.PHONY: test test-unit test-integration lint typecheck install run-api run-dashboard compose-up compose-down update-gex update-flows update-edgar update-all export-pine
 
 install:
 	pip install -e ".[dev]"
@@ -35,6 +35,9 @@ update-edgar:
 	python3 scripts/run_edgar.py
 
 update-all: update-gex update-flows update-edgar
+
+export-pine:
+	python3 scripts/export_pine.py
 
 run-api:
 	DB_PATH=data/runtime.db python3 run_api.py

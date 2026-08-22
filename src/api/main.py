@@ -4,6 +4,7 @@ Endpoint:
   GET /api/health        - Health check
   GET /api/health/edgar  - EDGAR DB health
   GET /api/gex           - GEX snapshot: regime, gamma flip, walls, profilo per strike
+  GET /api/gex/pine      - Indicatore TradingView (Pine v6) con i livelli GEX incorporati
   GET /api/flows         - ETF flows IBIT: serie storica, correlazione, Granger
   GET /api/barriers      - Barriere attive da SEC EDGAR
   GET /api/notes[/by-url] - Drill-down note strutturate
