@@ -218,3 +218,66 @@ class TestSummary:
         assert s["total_notional_usd"] == 10_000_000.0
         assert "autocallable" in s["by_product_type"]
         assert "JPMorgan" in s["by_issuer"]
+
+
+class TestRefreshRuns:
+    """Un mercato tranquillo non deve far sembrare rotta una pipeline sana.
+
+    Il workflow gira due volte a settimana; se in quella finestra nessuna banca
+    deposita note IBIT, MAX(created_at) non si muove. Registrare l'esito del run
+    separa "il refresh non gira" da "il refresh gira e non trova niente".
+    """
+
+    def test_senza_run_registrati_torna_none(self, db):
+        assert db.get_last_refresh_run() is None
+
+    def test_registra_e_rilegge(self, db):
+        db.record_refresh_run(filings_seen=12, notes_written=3, ok=True)
+        run = db.get_last_refresh_run()
+        assert run["filings_seen"] == 12
+        assert run["notes_written"] == 3
+        assert run["ok"] is True
+        assert run["run_at"]
+
+    def test_registra_anche_un_run_a_vuoto(self, db):
+        """Il caso che ha generato il falso allarme: zero filing, run riuscito."""
+        db.record_refresh_run(filings_seen=0, notes_written=0, ok=True)
+        run = db.get_last_refresh_run()
+        assert run["ok"] is True
+        assert run["notes_written"] == 0
+
+    def test_registra_un_fallimento(self, db):
+        db.record_refresh_run(filings_seen=0, notes_written=0, ok=False)
+        assert db.get_last_refresh_run()["ok"] is False
+
+    def test_tiene_il_piu_recente(self, db):
+        db.record_refresh_run(filings_seen=1, notes_written=1, ok=True)
+        db.record_refresh_run(filings_seen=9, notes_written=0, ok=True)
+        assert db.get_last_refresh_run()["filings_seen"] == 9
+
+    def test_conserva_lo_storico(self, db):
+        for i in range(3):
+            db.record_refresh_run(filings_seen=i, notes_written=0, ok=True)
+        with db._conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM refresh_runs").fetchone()[0] == 3
+
+
+class TestEdgarStatsDistingueRefreshDaScrittura:
+    def test_espone_entrambe_le_date(self, db, sample_note):
+        db.upsert_note(sample_note)
+        db.record_refresh_run(filings_seen=0, notes_written=0, ok=True)
+        stats = db.get_edgar_stats()
+        assert stats["last_refresh_at"] is not None
+        assert stats["last_note_written_at"] is not None
+
+    def test_senza_refresh_registrati_la_data_e_none(self, db, sample_note):
+        """Retrocompatibile: un DB che precede la tabella non deve esplodere."""
+        db.upsert_note(sample_note)
+        stats = db.get_edgar_stats()
+        assert stats["last_refresh_at"] is None
+        assert stats["last_note_written_at"] is not None
+
+    def test_last_update_resta_per_compatibilita(self, db, sample_note):
+        db.upsert_note(sample_note)
+        stats = db.get_edgar_stats()
+        assert stats["last_update"] == stats["last_note_written_at"]

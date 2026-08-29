@@ -116,7 +116,12 @@ mercoledì 06:30 UTC, committa il DB su `main` → deploy DO). Lo User-Agent SEC
 `config/settings.yaml` (email reale) — non servono variabili esterne. Override opzionale
 via env var `EDGAR_USER_AGENT`. In caso di fallimento, il workflow invia una notifica
 Telegram (richiede `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` nei Repository secrets).
-Endpoint di monitoraggio: `GET /api/health/edgar` (freschezza DB, conteggi).
+Endpoint di monitoraggio: `GET /api/health/edgar`. La salute si misura sull'**ultimo
+refresh riuscito** (tabella `refresh_runs`, soglia 10 giorni), non sull'ultima nota
+scritta: il workflow gira due volte a settimana e in una finestra tranquilla può
+legittimamente non trovare filing nuovi — misurare l'età delle note faceva sembrare
+rotta una pipeline sana. `notes_age_days` resta esposto come informazione sul mercato
+primario, e `reason` dice a parole cosa sta succedendo.
 I supplement *preliminari* hanno `is_preliminary=1` e `initial_level`/`notional` = NULL;
 `/api/barriers` mostra solo i finali.
 
