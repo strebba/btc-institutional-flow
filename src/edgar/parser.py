@@ -19,6 +19,10 @@ from src.edgar.models import BarrierLevel, StructuredNote
 
 _log = setup_logging("edgar.parser")
 
+# Tag inline che vanno sciolti prima di estrarre il testo: gli emittenti li usano
+# per lo styling in mezzo alle parole, e un separatore fra elementi le spezzerebbe.
+_INLINE_TAGS = ("span", "font", "b", "i", "u", "em", "strong", "sub", "sup", "a", "small")
+
 # ─── Regex patterns ──────────────────────────────────────────────────────────
 
 _RE_NOTIONAL = re.compile(
@@ -48,9 +52,40 @@ _RE_NOTIONAL_AGGREGATE = re.compile(
     re.IGNORECASE,
 )
 
+# Tabella commissioni del 424B2: "Total $1,135,000 $48,237" oppure
+# "Total: $11,803,000". È la struttura più affidabile perché comune a tutti gli
+# emittenti, JPMorgan compreso — che nel corpo non nomina mai un aggregato.
+_RE_NOTIONAL_FEE_TABLE = re.compile(
+    r"\bTotal\s*:?\s*\$\s*([\d,]+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+# Citigroup: "Aggregate stated principal amount: $11,803,000".
+# Goldman:   "the aggregate face amount is $5,000,000".
+_RE_NOTIONAL_AGGREGATE_ALT = re.compile(
+    r"aggregate\s+(?:stated\s+)?(?:principal|face)\s+amount"
+    r"[^$\d]{0,30}\$\s*([\d,]+(?:\.\d+)?)\s*(million|billion|M|B)?",
+    re.IGNORECASE,
+)
+
+# Goldman: "We will sell $593,000 in the aggregate on the original issue date".
+_RE_NOTIONAL_IN_AGGREGATE = re.compile(
+    r"\$\s*([\d,]+(?:\.\d+)?)\s*(million|billion|M|B)?\s+in\s+the\s+aggregate",
+    re.IGNORECASE,
+)
+
 # Soglia sotto la quale un "notional" è in realtà la denominazione per-nota
 # (es. $1,000 "stated principal amount"), non la size dell'offering.
+# È ciò che impedisce di scambiare il "$1,000 face amount" di Goldman per il totale.
 _MIN_NOTIONAL_USD = 50_000.0
+
+# Intervallo credibile per un livello di barriera, in % dell'initial value.
+# Sui dati osservati: buffer fra 55 e 90, autocall fra 50 e 200, knock-in fino al
+# 15% sulle note più lunghe. Sotto il 10% non ci sono barriere, solo percentuali
+# di prosa (rapporti di perdita, commissioni annue) che il parser scambierebbe
+# per livelli.
+_BARRIERA_MIN_PCT = 10.0
+_BARRIERA_MAX_PCT = 200.0
 
 # Filing preliminare ("subject to completion"): Initial Value e aggregate principal
 # non sono ancora fissati → non vanno inventati.
@@ -290,17 +325,18 @@ def _parse_date(s: str) -> Optional[date]:
 def _parse_notional(text: str) -> Optional[float]:
     """Estrae il nozionale in USD dalla stringa.
 
-    Tenta i pattern in ordine di specificità:
-    1. _RE_NOTIONAL     — "aggregate principal amount ... $5M"
-    2. _RE_NOTIONAL_ALT — "$5,000,000 aggregate principal"  (già esistente)
-    3. _RE_NOTIONAL_ALT2 — "$5,000,000 notional/face value"
-    4. _RE_NOTIONAL_PLAIN_M — "$5.2 million" (generico, usato per ultimo)
+    Tenta i pattern dal più affidabile al più generico. L'ordine conta: la
+    tabella commissioni ("Total $X") viene prima perché è struttura, non prosa,
+    ed è l'unica forma comune a tutti gli emittenti — JPMorgan nel corpo non
+    nomina mai un aggregato, e senza quella riga resterebbe scoperto.
 
     Args:
         text: testo grezzo.
 
     Returns:
-        float | None: nozionale in USD o None.
+        float | None: nozionale in USD o None. Sotto _MIN_NOTIONAL_USD si
+        restituisce None: quello è il taglio della singola nota ($1,000), non la
+        size dell'offering, ed è la trappola in cui cadono i filing di Goldman.
     """
     def _scaled(num: str, suffix: str) -> float:
         val = float(num.replace(",", ""))
@@ -311,9 +347,32 @@ def _parse_notional(text: str) -> Optional[float]:
             val *= 1_000_000_000
         return val
 
-    # Pattern 0 (prioritario) — "Aggregate principal amount: $X": la size reale
-    # dell'offering nei supplement finali.
+    # Pattern 0 (prioritario) — tabella commissioni "Total $X": struttura
+    # standard del 424B2, presente in tutti gli emittenti.
+    m = _RE_NOTIONAL_FEE_TABLE.search(text)
+    if m:
+        val = float(m.group(1).replace(",", ""))
+        if val >= _MIN_NOTIONAL_USD:
+            return val
+
+    # Pattern 1 — "Aggregate principal amount: $X": la size reale dell'offering
+    # nei supplement finali.
     m = _RE_NOTIONAL_AGGREGATE.search(text)
+    if m:
+        val = _scaled(m.group(1), m.group(2))
+        if val >= _MIN_NOTIONAL_USD:
+            return val
+
+    # Pattern 2 — "Aggregate stated principal amount" (Citigroup) e
+    # "aggregate face amount" (Goldman): stesse cose dette in altro modo.
+    m = _RE_NOTIONAL_AGGREGATE_ALT.search(text)
+    if m:
+        val = _scaled(m.group(1), m.group(2))
+        if val >= _MIN_NOTIONAL_USD:
+            return val
+
+    # Pattern 3 — "$X in the aggregate" (Goldman).
+    m = _RE_NOTIONAL_IN_AGGREGATE.search(text)
     if m:
         val = _scaled(m.group(1), m.group(2))
         if val >= _MIN_NOTIONAL_USD:
@@ -441,8 +500,14 @@ def _extract_barrier_levels(text: str, initial_level: Optional[float]) -> list[B
 
     for m in pattern.finditer(text):
         pct     = float(m.group(1))
-        # Scarta barriere con percentuale nulla o impossibile (>200%)
-        if pct <= 0.0 or pct > 200.0:
+        # Scarta le percentuali fuori dall'intervallo credibile per una nota su ETF.
+        # Il limite inferiore non e' cosmetico: i prospetti sono pieni di
+        # percentuali piccole che non sono barriere — "you will lose 1% of the
+        # principal for every 1% that the Final Value declines" e' formula
+        # standard, e senza questa guardia diventa un knock_in all'1%. Sui dati
+        # osservati i buffer stanno fra 55 e 90 e i knock-in piu' profondi
+        # arrivano al 15%, quindi il 10% non taglia nulla di legittimo.
+        if pct < _BARRIERA_MIN_PCT or pct > _BARRIERA_MAX_PCT:
             _log.debug("Barriera scartata (pct=%s fuori range)", pct)
             continue
         if pct in seen_pcts:
@@ -578,7 +643,19 @@ class ProspectusParser:
         for tag in soup(["script", "style", "header", "footer", "nav"]):
             tag.decompose()
 
-        # Estrae testo pulito — usa separatore spazio per gestire PDF-converted HTML
+        # Scioglie i tag inline PRIMA di estrarre il testo. Senza questo passaggio
+        # il separatore spazio, che serve a tenere separati i blocchi del formato
+        # PDF-converted, finisce per spezzare anche le parole: i 424B2 di JPMorgan
+        # usano <span> per lo styling e "notional financing cost" esce come
+        # "n otional fina ncing co st", che nessuna regex puo' matchare.
+        # unwrap() toglie il tag e tiene il contenuto; smooth() fonde i nodi di
+        # testo adiacenti, cosi' get_text ne vede uno solo.
+        for tag in soup.find_all(_INLINE_TAGS):
+            tag.unwrap()
+        soup.smooth()
+
+        # Estrae testo pulito — il separatore spazio tiene distinti i blocchi
+        # (celle di tabella, paragrafi) che altrimenti si incollerebbero.
         full_text = soup.get_text(separator=" ", strip=True)
         # Normalizza spazi multipli
         full_text = re.sub(r" {2,}", " ", full_text)
