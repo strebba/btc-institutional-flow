@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import pandas as pd
 
 from src.analytics.pillars import (
@@ -187,6 +188,78 @@ def test_composite_no_data_returns_caution():
     assert res.signal == "CAUTION"
     assert res.score == 50.0
 
+
+
+# ─── Copertura dei fattori (coverage) ─────────────────────────────────────────
+
+def test_macro_pillar_reports_partial_coverage():
+    """Con solo put_call disponibile la copertura è il suo peso di fattore (0.15)."""
+    only_pc = score_macro_pillar(put_call_ratio=0.45)
+    assert only_pc.score is not None
+    assert only_pc.coverage == pytest.approx(0.15, abs=1e-6)
+
+
+def test_macro_pillar_full_coverage_is_one():
+    full = score_macro_pillar(
+        funding_rate_annualized_pct=5, oi_change_7d_pct=3, long_short_ratio=1.1,
+        put_call_ratio=0.9, liquidations_long_24h_usd=1e6,
+        liquidations_short_24h_usd=2e6,
+    )
+    assert full.coverage == pytest.approx(1.0, abs=1e-6)
+
+
+def test_pillar_without_data_has_zero_coverage():
+    assert score_macro_pillar().coverage == 0.0
+
+
+def test_composite_downweights_thinly_covered_pillar():
+    """Un pilastro con 1 fattore su 5 non deve pesare quanto uno completo.
+
+    Riproduce il caso produzione: CoinGlass giù → macro regge solo su put_call,
+    ma prendeva comunque il 20% nominale del composito.
+    """
+    inputs = CompositeInputs(
+        gex_usd=6e8, gamma_flip_price=95_000, spot_price=100_000,
+        etf_flow_3d_usd=600e6,
+        put_call_ratio=0.45,          # unico fattore macro disponibile
+        active_barriers=[{"barrier_type": "knock_in", "level_price_btc": 60_000}],
+    )
+    res = CompositeSignal().compute(inputs)
+    macro_w = res.weights_used["macro"]
+    gex_w = res.weights_used["gex"]
+
+    # macro nominale 0.20 vs gex 0.25 → con copertura 0.15 macro deve pesare
+    # molto meno di gex, non i 4/5 che pesava prima del fix
+    assert macro_w < gex_w * 0.25
+    assert abs(sum(res.weights_used.values()) - 1.0) < 1e-3
+
+
+def test_composite_full_coverage_keeps_nominal_ratios():
+    """Con tutti i fattori presenti i rapporti fra pesi restano quelli nominali."""
+    inputs = CompositeInputs(
+        gex_usd=6e8, gamma_flip_price=95_000, spot_price=100_000,
+        etf_flow_3d_usd=600e6,
+        flow_history_df=_coverage_flow_history(),
+        funding_rate_annualized_pct=5, oi_change_7d_pct=3, long_short_ratio=1.1,
+        put_call_ratio=0.9, liquidations_long_24h_usd=1e6,
+        liquidations_short_24h_usd=2e6,
+        active_barriers=[{"barrier_type": "knock_in", "level_price_btc": 60_000}],
+    )
+    res = CompositeSignal().compute(inputs)
+    ratio = res.weights_used["macro"] / res.weights_used["gex"]
+    assert ratio == pytest.approx(PILLAR_WEIGHTS["macro"] / PILLAR_WEIGHTS["gex"], rel=1e-3)
+
+
+def _coverage_flow_history():
+    idx = pd.date_range("2025-01-01", periods=60, freq="D")
+    return pd.DataFrame(
+        {
+            "ibit_flow_usd": np.linspace(10e6, 300e6, 60),
+            "total_flow_usd": np.linspace(20e6, 400e6, 60),
+            "btc_close": np.linspace(60_000, 100_000, 60),
+        },
+        index=idx,
+    )
 
 # ─── CompositeSignal.compute_series (backtest) ────────────────────────────────
 
