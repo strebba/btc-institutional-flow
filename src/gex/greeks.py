@@ -191,3 +191,140 @@ def option_vanna_usd(
         * spot
         * dealer_sign(option_type)
     )
+
+
+# ─── Aggregazione sulla chain ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CharmProjectionDay:
+    """Charm netto atteso per un giorno futuro."""
+
+    days_ahead: int
+    charm_usd_day: float
+    #: Strumenti ancora vivi quel giorno: il crollo dopo una scadenza si legge qui.
+    live_instruments: int
+
+
+@dataclass
+class ChainGreeks:
+    """Charm e vanna aggregati su tutta la chain."""
+
+    spot: float
+    total_charm_usd_day: float
+    total_vanna_usd: float
+    #: {strike: charm in USD/giorno}, per trovare lo strike magnete.
+    charm_by_strike: dict[float, float]
+    #: Proiezione a N giorni con decadimento di T e caduta degli scaduti.
+    projection: list[CharmProjectionDay]
+    n_instruments: int
+    n_skipped: int
+
+    @property
+    def magnet_strike(self) -> float | None:
+        """Lo strike che tira di più: massimo |charm|."""
+        if not self.charm_by_strike:
+            return None
+        return max(self.charm_by_strike, key=lambda k: abs(self.charm_by_strike[k]))
+
+
+def aggregate_chain_greeks(
+    options: list[dict],
+    *,
+    spot: float,
+    now_ms: float,
+    contract_size: float = 1.0,
+    projection_days: int = 10,
+) -> ChainGreeks | None:
+    """Calcola charm e vanna su tutta la chain e proietta il charm in avanti.
+
+    La proiezione ricalcola il charm per ogni giorno futuro facendo decadere la
+    vita residua e lasciando cadere gli strumenti scaduti: è così che si vede la
+    marea giornaliera e il salto che segue una scadenza.
+
+    Args:
+        options: chain da ``DeribitClient.fetch_all_options``.
+        spot: prezzo spot corrente.
+        now_ms: istante di riferimento in millisecondi.
+        contract_size: dimensione del contratto (da settings.yaml).
+        projection_days: quanti giorni proiettare in avanti.
+
+    Returns:
+        ChainGreeks, oppure None se nessuno strumento è calcolabile — senza
+        nulla da sommare non si restituisce uno zero che sembrerebbe un dato.
+    """
+    if not options or spot <= 0:
+        return None
+
+    charm_by_strike: dict[float, float] = {}
+    tot_charm = tot_vanna = 0.0
+    validi: list[tuple[dict, float]] = []   # (opzione, vita residua in anni)
+    saltati = 0
+
+    for o in options:
+        t = time_to_expiry_years(o.get("expiration_timestamp", 0), now_ms)
+        g = black_scholes_greeks(
+            spot=o.get("underlying_price") or spot,
+            strike=o.get("strike", 0.0),
+            t_years=t,
+            sigma=(o.get("mark_iv") or 0.0) / 100.0,   # Deribit quota la IV in %
+            option_type=o.get("option_type", ""),
+        )
+        oi = o.get("open_interest") or 0.0
+        if g is None or oi <= 0:
+            saltati += 1
+            continue
+
+        tipo = o.get("option_type", "")
+        c = option_charm_usd_day(
+            g, open_interest=oi, spot=spot, contract_size=contract_size, option_type=tipo
+        )
+        v = option_vanna_usd(
+            g, open_interest=oi, spot=spot, contract_size=contract_size, option_type=tipo
+        )
+        tot_charm += c
+        tot_vanna += v
+        strike = o["strike"]
+        charm_by_strike[strike] = charm_by_strike.get(strike, 0.0) + c
+        validi.append((o, t))
+
+    if not validi:
+        return None
+
+    projection: list[CharmProjectionDay] = []
+    for giorno in range(projection_days):
+        offset = giorno / DAYS_PER_YEAR
+        somma = 0.0
+        vivi = 0
+        for o, t in validi:
+            residua = t - offset
+            g = black_scholes_greeks(
+                spot=o.get("underlying_price") or spot,
+                strike=o.get("strike", 0.0),
+                t_years=residua,
+                sigma=(o.get("mark_iv") or 0.0) / 100.0,
+                option_type=o.get("option_type", ""),
+            )
+            if g is None:   # scaduto entro quel giorno: esce dal calcolo
+                continue
+            vivi += 1
+            somma += option_charm_usd_day(
+                g,
+                open_interest=o.get("open_interest") or 0.0,
+                spot=spot,
+                contract_size=contract_size,
+                option_type=o.get("option_type", ""),
+            )
+        projection.append(
+            CharmProjectionDay(days_ahead=giorno, charm_usd_day=somma, live_instruments=vivi)
+        )
+
+    return ChainGreeks(
+        spot=spot,
+        total_charm_usd_day=tot_charm,
+        total_vanna_usd=tot_vanna,
+        charm_by_strike=charm_by_strike,
+        projection=projection,
+        n_instruments=len(validi),
+        n_skipped=saltati,
+    )

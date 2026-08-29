@@ -218,3 +218,83 @@ class TestValidazioneControDeribit:
         )
         mediana = rapporti[len(rapporti) // 2]
         assert 0.95 < mediana < 1.05, f"rapporto mediano gamma fuori scala: {mediana}"
+
+
+class TestAggregazioneChain:
+    @staticmethod
+    def _opt(strike: float, tipo: str, giorni: float, oi: float = 100.0) -> dict:
+        return {
+            "strike": strike, "option_type": tipo, "open_interest": oi,
+            "mark_iv": 60.0, "underlying_price": 100_000.0,
+            "expiration_timestamp": 1_700_000_000_000 + int(giorni * 86_400 * 1000),
+        }
+
+    _NOW = 1_700_000_000_000
+
+    def test_chain_vuota_da_none(self):
+        from src.gex.greeks import aggregate_chain_greeks
+
+        assert aggregate_chain_greeks([], spot=100_000.0, now_ms=self._NOW) is None
+
+    def test_solo_strumenti_scaduti_da_none(self):
+        """Senza nulla da sommare non si restituisce uno zero che sembra un dato."""
+        from src.gex.greeks import aggregate_chain_greeks
+
+        scaduti = [self._opt(100_000.0, "call", giorni=-1)]
+        assert aggregate_chain_greeks(scaduti, spot=100_000.0, now_ms=self._NOW) is None
+
+    def test_aggrega_per_strike(self):
+        from src.gex.greeks import aggregate_chain_greeks
+
+        chain = [self._opt(90_000.0, "call", 30), self._opt(90_000.0, "put", 30),
+                 self._opt(110_000.0, "call", 30)]
+        agg = aggregate_chain_greeks(chain, spot=100_000.0, now_ms=self._NOW)
+        assert set(agg.charm_by_strike) == {90_000.0, 110_000.0}
+        assert agg.n_instruments == 3
+
+    def test_conta_gli_strumenti_saltati(self):
+        from src.gex.greeks import aggregate_chain_greeks
+
+        chain = [self._opt(90_000.0, "call", 30),
+                 self._opt(90_000.0, "call", 30, oi=0.0),      # nessun OI
+                 {**self._opt(90_000.0, "call", 30), "mark_iv": 0.0}]  # IV assente
+        agg = aggregate_chain_greeks(chain, spot=100_000.0, now_ms=self._NOW)
+        assert agg.n_instruments == 1
+        assert agg.n_skipped == 2
+
+    def test_lo_strike_magnete_e_quello_col_charm_maggiore(self):
+        from src.gex.greeks import aggregate_chain_greeks
+
+        chain = [self._opt(90_000.0, "call", 30, oi=10.0),
+                 self._opt(95_000.0, "call", 30, oi=5_000.0)]
+        agg = aggregate_chain_greeks(chain, spot=100_000.0, now_ms=self._NOW)
+        assert agg.magnet_strike == 95_000.0
+
+    def test_la_proiezione_ha_un_giorno_per_passo(self):
+        from src.gex.greeks import aggregate_chain_greeks
+
+        agg = aggregate_chain_greeks(
+            [self._opt(95_000.0, "call", 30)], spot=100_000.0,
+            now_ms=self._NOW, projection_days=10,
+        )
+        assert [p.days_ahead for p in agg.projection] == list(range(10))
+
+    def test_la_scadenza_fa_cadere_gli_strumenti(self):
+        """È il salto post-expiry: dopo la scadenza settimanale il flusso crolla."""
+        from src.gex.greeks import aggregate_chain_greeks
+
+        chain = [self._opt(95_000.0, "call", 3), self._opt(95_000.0, "call", 60)]
+        agg = aggregate_chain_greeks(
+            chain, spot=100_000.0, now_ms=self._NOW, projection_days=6
+        )
+        assert agg.projection[0].live_instruments == 2
+        assert agg.projection[5].live_instruments == 1
+
+    def test_il_charm_del_giorno_zero_coincide_col_totale(self):
+        from src.gex.greeks import aggregate_chain_greeks
+
+        chain = [self._opt(95_000.0, "call", 30), self._opt(105_000.0, "put", 45)]
+        agg = aggregate_chain_greeks(chain, spot=100_000.0, now_ms=self._NOW)
+        assert agg.projection[0].charm_usd_day == pytest.approx(
+            agg.total_charm_usd_day, rel=1e-9
+        )
