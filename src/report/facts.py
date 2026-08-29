@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any
 
 from src.report import formatting as fmt
@@ -29,6 +30,8 @@ SIGN_NEUTRAL = "neutral"
 #: Pubblicare "+0M di ETF in tre giorni" sarebbe un fatto falso col marchio sopra.
 _MIN_FLOW_USD_M = 25.0
 _MIN_GEX_USD_M = 5.0
+_MIN_CHARM_USD_M = 5.0
+_MIN_VANNA_USD_M = 5.0
 
 
 @dataclass
@@ -525,6 +528,8 @@ def extract_all(
         ("barrier_nearest", lambda: fact_barrier_nearest(barriers or {})),
         ("flows_3d", lambda: fact_flows_3d(flows or {}, signals or {})),
         ("flows_rotation", lambda: fact_flows_rotation(flows or {})),
+        ("charm_tide", lambda: fact_charm_tide(gex or {})),
+        ("vanna_sign", lambda: fact_vanna_sign(gex or {})),
         ("signal_scoreboard", lambda: fact_signal_scoreboard(signals or {}, forecast)),
     ]
 
@@ -541,3 +546,138 @@ def extract_all(
         if f is not None:
             out.append(f)
     return out
+
+
+# ─── Fatti charm e vanna ──────────────────────────────────────────────────────
+
+
+def fact_charm_tide(gex: dict) -> Fact | None:
+    """Il flusso di hedging che arriva su un calendario, non in reazione al prezzo.
+
+    E' il fatto piu' insolito della serie: tutte le altre card raccontano cosa
+    succede *se* il prezzo si muove, questa racconta cosa succede comunque.
+    """
+    charm = (gex or {}).get("charm")
+    if not charm:
+        return None
+
+    oggi = charm.get("total_charm_usd_day")
+    proj = charm.get("projection") or []
+    magnete = charm.get("magnet_strike")
+    if oggi is None or abs(oggi) < _MIN_CHARM_USD_M * 1e6:
+        return None
+
+    # il picco della marea nei prossimi giorni, e quando arriva
+    picco = max(proj, key=lambda p: abs(p.get("charm_usd_day") or 0), default=None)
+    totale = sum(abs(p.get("charm_usd_day") or 0) for p in proj)
+
+    # il crollo post-expiry: dove il numero di strumenti vivi scende di piu'
+    salto = None
+    for prima, dopo in pairwise(proj):
+        persi = (prima.get("live_instruments") or 0) - (dopo.get("live_instruments") or 0)
+        if persi > 0 and (salto is None or persi > salto[1]):
+            salto = (dopo.get("days_ahead"), persi)
+
+    compra = oggi > 0
+    salience = _clamp01(0.35 + 0.5 * min(1.0, abs(oggi) / 60e6))
+
+    seconda = (
+        f"Nei prossimi {fmt.count(len(proj))} giorni il calendario muove in tutto "
+        f"{fmt.usd_millions(totale, force_sign=False)}"
+    )
+    if picco is not None:
+        seconda += (
+            f", col massimo di {fmt.usd_millions(picco['charm_usd_day'])} "
+            f"fra {fmt.count(picco['days_ahead'])} giorni"
+        )
+    if salto:
+        seconda += (
+            f". Poi la scadenza fra {fmt.count(salto[0])} giorni spegne "
+            f"{fmt.count(salto[1])} strumenti e il flusso cala"
+        )
+    seconda += "."
+
+    return Fact(
+        key="charm_tide",
+        topic="charm",
+        salience=salience,
+        headline=(
+            f"{fmt.usd_millions(oggi)} al giorno già in calendario"
+            if compra
+            else f"{fmt.usd_millions(oggi)} al giorno di vendita programmata"
+        ),
+        body=[
+            (
+                "Il charm è la deriva di copertura che il tempo programma da solo: "
+                "l'unico flusso che i dealer devono eseguire anche se il prezzo non "
+                "si muove."
+            ),
+            seconda,
+        ],
+        hero_value=fmt.usd_millions(oggi),
+        hero_caption=(
+            "Copertura già programmata\nper oggi"
+            + (f" · magnete {fmt.price(magnete)}" if magnete else "")
+        ),
+        sign=SIGN_POSITIVE if compra else SIGN_NEGATIVE,
+        takeaway=f"{fmt.usd_millions(oggi)} al giorno di copertura già in calendario.",
+        meta={"charm_usd_day": oggi, "magnet_strike": magnete},
+    )
+
+
+def fact_vanna_sign(gex: dict) -> Fact | None:
+    """Cosa fa il delta dei dealer quando si muove la volatilità implicita.
+
+    Con vanna negativa una IV in discesa smette di essere carburante per il
+    rialzo: e' la lettura che spiega i rialzi che si spengono da soli.
+    """
+    charm = (gex or {}).get("charm")
+    if not charm:
+        return None
+
+    vanna = charm.get("total_vanna_usd_per_iv_pt")
+    if vanna is None or abs(vanna) < _MIN_VANNA_USD_M * 1e6:
+        return None
+
+    positiva = vanna > 0
+    salience = _clamp01(0.30 + 0.45 * min(1.0, abs(vanna) / 60e6))
+
+    if positiva:
+        conseguenza = (
+            "Con vanna positiva una volatilità implicita in discesa costringe i "
+            "dealer a comprare: il tape calmo diventa carburante per il rialzo."
+        )
+    else:
+        conseguenza = (
+            "Con vanna negativa una volatilità implicita in discesa non aiuta più "
+            "il rialzo — anzi lo toglie. È così che un rialzo si spegne da solo."
+        )
+
+    return Fact(
+        key="vanna_sign",
+        topic="charm",
+        salience=salience,
+        headline=(
+            "La volatilità che scende ora compra"
+            if positiva
+            else "La volatilità che scende non spinge più"
+        ),
+        body=[
+            (
+                "La vanna dice quanto si muove la copertura dei dealer quando si "
+                "muove la volatilità implicita, non il prezzo."
+            ),
+            (
+                f"Oggi vale {fmt.usd_millions(vanna)} per ogni punto di implicita. "
+                f"{conseguenza}"
+            ),
+        ],
+        hero_value=fmt.usd_millions(vanna),
+        hero_caption="Vanna netta\nper punto di volatilità implicita",
+        sign=SIGN_POSITIVE if positiva else SIGN_NEGATIVE,
+        takeaway=(
+            f"Vanna {fmt.usd_millions(vanna)} per punto di implicita: "
+            + ("la vol in calo compra." if positiva else "la vol in calo non spinge più.")
+        ),
+        meta={"vanna_usd": vanna},
+    )

@@ -6,12 +6,14 @@ from src.report.facts import (
     SIGN_POSITIVE,
     extract_all,
     fact_barrier_nearest,
+    fact_charm_tide,
     fact_flows_3d,
     fact_flows_rotation,
     fact_gex_asymmetry,
     fact_gex_flip,
     fact_gex_walls,
     fact_signal_scoreboard,
+    fact_vanna_sign,
 )
 
 _TUTTI = [
@@ -196,3 +198,83 @@ class TestExtractAll:
             flows=flows_payload, signals=signals_payload,
         )
         assert all(0.0 <= f.salience <= 1.0 for f in facts)
+
+
+_CHARM = {
+    "charm": {
+        "total_charm_usd_day": -67_900_000.0,
+        "total_vanna_usd_per_iv_pt": 71_000_000.0,
+        "magnet_strike": 82_000.0,
+        "projection": [
+            {"days_ahead": 0, "charm_usd_day": -67_900_000.0, "live_instruments": 854},
+            {"days_ahead": 1, "charm_usd_day": -56_800_000.0, "live_instruments": 817},
+            {"days_ahead": 2, "charm_usd_day": -31_000_000.0, "live_instruments": 654},
+        ],
+    }
+}
+
+
+class TestCharmTide:
+    def test_senza_blocco_charm_torna_none(self):
+        assert fact_charm_tide({}) is None
+        assert fact_charm_tide({"charm": None}) is None
+
+    def test_charm_trascurabile_non_e_un_fatto(self):
+        piccolo = {"charm": {**_CHARM["charm"], "total_charm_usd_day": 1_000_000.0}}
+        assert fact_charm_tide(piccolo) is None
+
+    def test_charm_negativo_e_vendita_programmata(self):
+        f = fact_charm_tide(_CHARM)
+        assert f.sign == SIGN_NEGATIVE
+        assert "vendita programmata" in f.headline
+
+    def test_charm_positivo_e_acquisto_in_calendario(self):
+        pos = {"charm": {**_CHARM["charm"], "total_charm_usd_day": 40_000_000.0}}
+        f = fact_charm_tide(pos)
+        assert f.sign == SIGN_POSITIVE
+        assert "calendario" in f.headline
+
+    def test_nomina_il_salto_post_expiry(self):
+        """È il dettaglio che rende il charm una notizia con una scadenza."""
+        f = fact_charm_tide(_CHARM)
+        assert "scadenza fra 2 giorni" in f.body[1]
+        assert "163" in f.body[1]  # 817 - 654 strumenti spenti
+
+    def test_cita_lo_strike_magnete(self):
+        assert "82.000" in fact_charm_tide(_CHARM).hero_caption
+
+    def test_piu_grande_e_piu_saliente(self):
+        piccolo = {"charm": {**_CHARM["charm"], "total_charm_usd_day": 8_000_000.0}}
+        assert fact_charm_tide(_CHARM).salience > fact_charm_tide(piccolo).salience
+
+
+class TestVannaSign:
+    def test_senza_blocco_charm_torna_none(self):
+        assert fact_vanna_sign({}) is None
+
+    def test_vanna_trascurabile_non_e_un_fatto(self):
+        piccola = {"charm": {**_CHARM["charm"], "total_vanna_usd_per_iv_pt": 500_000.0}}
+        assert fact_vanna_sign(piccola) is None
+
+    def test_vanna_positiva_la_vol_in_calo_compra(self):
+        f = fact_vanna_sign(_CHARM)
+        assert f.sign == SIGN_POSITIVE
+        assert "compra" in f.headline
+
+    def test_vanna_negativa_toglie_carburante(self):
+        neg = {"charm": {**_CHARM["charm"], "total_vanna_usd_per_iv_pt": -71_000_000.0}}
+        f = fact_vanna_sign(neg)
+        assert f.sign == SIGN_NEGATIVE
+        assert "spegne da solo" in " ".join(f.body)
+
+
+class TestCharmNelRegistro:
+    def test_extract_all_include_i_due_nuovi(self, gex_payload):
+        arricchito = {**gex_payload, **_CHARM}
+        chiavi = {f.key for f in extract_all(gex=arricchito)}
+        assert "charm_tide" in chiavi
+        assert "vanna_sign" in chiavi
+
+    def test_condividono_la_famiglia_per_non_monopolizzare(self, gex_payload):
+        """Stesso topic: il cap per famiglia impedisce un'edizione tutta di greche."""
+        assert fact_charm_tide(_CHARM).topic == fact_vanna_sign(_CHARM).topic
