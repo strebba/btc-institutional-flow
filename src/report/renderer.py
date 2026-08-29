@@ -11,9 +11,15 @@ puro e verde Wagmi — cosi' le card e la dashboard sembrano la stessa cosa.
 """
 from __future__ import annotations
 
+import base64
+from functools import lru_cache
 from html import escape
+from pathlib import Path
 
 from src.report.narrative import Card, DeskNote
+
+#: Cartella dei woff2 incorporati (vedi fonts/README.md per licenza e motivazione).
+_FONTS_DIR = Path(__file__).parent / "fonts"
 
 #: Geometria nativa di una card, in pixel. 4:5 e' il formato dei caroselli.
 CARD_W = 1080
@@ -32,6 +38,35 @@ _FONT_SANS = (
     "'IBM Plex Sans','Helvetica Neue',Helvetica,Arial,'Segoe UI',Roboto,sans-serif"
 )
 _FONT_MONO = "'IBM Plex Mono','SF Mono',Menlo,Consolas,'Liberation Mono',monospace"
+
+
+@lru_cache(maxsize=1)
+def _font_faces() -> str:
+    """Regole @font-face con i woff2 incorporati come data URI.
+
+    Le card diventano PNG col marchio sopra: la tipografia non puo' dipendere
+    dal fatto che il container raggiunga o meno fonts.gstatic.com. Se un file
+    manca si degrada in silenzio sul fallback di sistema — meglio una card col
+    font sbagliato che nessuna card.
+    """
+    facce = [
+        ("IBM Plex Sans", "IBMPlexSans-var-latin.woff2", "100 700"),
+        ("IBM Plex Mono", "IBMPlexMono-400-latin.woff2", "400"),
+        ("IBM Plex Mono", "IBMPlexMono-500-latin.woff2", "500"),
+        ("IBM Plex Mono", "IBMPlexMono-600-latin.woff2", "600"),
+    ]
+    out = []
+    for famiglia, nome, peso in facce:
+        path = _FONTS_DIR / nome
+        if not path.exists():
+            continue
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        out.append(
+            f"@font-face{{font-family:'{famiglia}';font-style:normal;"
+            f"font-weight:{peso};font-display:block;"
+            f"src:url(data:font/woff2;base64,{b64}) format('woff2');}}"
+        )
+    return "".join(out)
 
 
 def _hero_color(sign: str) -> str:
@@ -106,14 +141,21 @@ def _css(export: bool) -> str:
   .body p {{ margin:0 0 .85em; color:{_CORPO}; }}
   .body p:last-child {{ margin-bottom:0; }}
   .body b {{ color:{_BIANCO}; font-weight:600; }}
-  .takeaways {{ margin-top:1.9em; flex:1; display:flex; flex-direction:column; gap:1.15em; }}
-  .takeaway {{ display:grid; grid-template-columns:2.4em 1fr; gap:.7em; align-items:baseline; }}
+  .takeaways {{
+    margin-top:auto; display:flex; flex-direction:column;
+    border-top:1px solid {_RIGA};
+  }}
+  .takeaway {{
+    display:grid; grid-template-columns:2.4em 1fr; gap:.9em; align-items:baseline;
+    padding:1.15em 0; border-bottom:1px solid {_RIGA};
+  }}
+  .takeaway:last-child {{ border-bottom:none; }}
   .takeaway .n {{
     font-family:{_FONT_MONO}; font-size:.82em; font-weight:600; color:{_NEON};
     letter-spacing:.06em;
   }}
   .takeaway .t {{ color:{_CORPO}; }}
-  .hero {{ margin-top:1em; }}
+  .hero {{ margin-top:1.4em; }}
   .hero .n {{
     font-family:{_FONT_MONO}; font-weight:600; font-size:3.15em; line-height:.95;
     letter-spacing:-.045em; font-variant-numeric:tabular-nums; display:block;
@@ -123,7 +165,7 @@ def _css(export: bool) -> str:
     text-transform:uppercase; color:{_DIM}; line-height:1.45; margin-top:.7em; display:block;
   }}
   footer {{
-    display:flex; justify-content:space-between; align-items:center; margin-top:1.5em;
+    display:flex; justify-content:space-between; align-items:center; margin-top:2.6em;
     font-family:{_FONT_MONO}; font-size:.78em; letter-spacing:.1em; color:{_DIM};
   }}
   footer .mark {{ color:{_BIANCO}; font-weight:600; letter-spacing:.14em; }}
@@ -182,8 +224,8 @@ def render_html(note: DeskNote, *, export: bool = False, title: str = "Wagmi Des
         title: titolo della pagina.
 
     Returns:
-        Il documento HTML come stringa, autoconsistente: nessun asset esterno
-        oltre al webfont, che ha comunque un fallback di sistema.
+        Il documento HTML come stringa, completamente autoconsistente: font
+        incorporati, nessuna richiesta di rete.
     """
     cards = "".join(_render_card(c, note.tape) for c in note.cards)
 
@@ -212,12 +254,7 @@ def render_html(note: DeskNote, *, export: bool = False, title: str = "Wagmi Des
         "<!doctype html><html lang=\"it\"><head><meta charset=\"utf-8\">"
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{escape(title)}</title>"
-        '<link rel="preconnect" href="https://fonts.googleapis.com">'
-        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
-        "family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600"
-        '&display=swap">'
-        f"<style>{_css(export)}</style></head><body>"
+        f"<style>{_font_faces()}{_css(export)}</style></head><body>"
         f'{intestazione}{vuoto}<div class="page">{cards}</div>'
         "</body></html>"
     )

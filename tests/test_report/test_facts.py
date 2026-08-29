@@ -103,6 +103,45 @@ class TestBarrierNearest:
         ).salience
 
 
+class TestFlussoNonMaterialeNonEUnFatto:
+    """Un flusso a zero significa quasi sempre 'non lo sappiamo', non 'zero'.
+
+    Quando Farside e yfinance sono irraggiungibili /api/signals restituisce
+    ibit_flow_3d_usd_m = 0.0, indistinguibile da un flusso realmente nullo.
+    Pubblicare '+0M di ETF in tre giorni' sarebbe un fatto falso col marchio sopra.
+    """
+
+    def test_flusso_zero_non_produce_card(self, flows_payload, signals_payload):
+        zero = {**signals_payload, "inputs": {"ibit_flow_3d_usd_m": 0.0}}
+        assert fact_flows_3d(flows_payload, zero) is None
+
+    def test_flusso_trascurabile_non_produce_card(self, flows_payload, signals_payload):
+        briciole = {**signals_payload, "inputs": {"ibit_flow_3d_usd_m": 3.0}}
+        assert fact_flows_3d(flows_payload, briciole) is None
+
+    def test_senza_storico_flussi_non_produce_card(self, signals_payload):
+        """Senza il riepilogo non c'è modo di corroborare il numero."""
+        assert fact_flows_3d({}, signals_payload) is None
+
+    def test_flusso_grande_e_piu_saliente_di_uno_piccolo(self, flows_payload, signals_payload):
+        piccolo = {**signals_payload, "inputs": {"ibit_flow_3d_usd_m": 60.0}}
+        grande = {**signals_payload, "inputs": {"ibit_flow_3d_usd_m": 700.0}}
+        assert (
+            fact_flows_3d(flows_payload, grande).salience
+            > fact_flows_3d(flows_payload, piccolo).salience
+        )
+
+
+class TestGexNonMaterialeNonEUnFatto:
+    def test_profilo_piatto_non_produce_card(self, gex_payload):
+        """Con gamma trascurabile su entrambi i lati non c'è niente da dire."""
+        piatto = {**gex_payload, "strike_profile": [
+            {"strike": 75_000.0, "net_gex_m": 0.0, "call_oi": 0, "put_oi": 0},
+            {"strike": 82_000.0, "net_gex_m": 0.0, "call_oi": 0, "put_oi": 0},
+        ]}
+        assert fact_gex_asymmetry(piatto) is None
+
+
 class TestFlows:
     def test_flusso_positivo_e_positivo(self, flows_payload, signals_payload):
         f = fact_flows_3d(flows_payload, signals_payload)

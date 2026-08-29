@@ -24,6 +24,12 @@ SIGN_POSITIVE = "positive"
 SIGN_NEGATIVE = "negative"
 SIGN_NEUTRAL = "neutral"
 
+#: Sotto queste grandezze un numero non e' un fatto ma rumore — e quando la
+#: fonte a monte e' giu' arriva comunque zero, indistinguibile da un vero zero.
+#: Pubblicare "+0M di ETF in tre giorni" sarebbe un fatto falso col marchio sopra.
+_MIN_FLOW_USD_M = 25.0
+_MIN_GEX_USD_M = 5.0
+
 
 @dataclass
 class Fact:
@@ -105,6 +111,9 @@ def fact_gex_asymmetry(gex: dict) -> Fact | None:
 
     below = sum(r["net_gex_m"] for r in profile if r.get("strike", 0) < spot) * 1e6
     above = sum(r["net_gex_m"] for r in profile if r.get("strike", 0) >= spot) * 1e6
+
+    if abs(below) + abs(above) < _MIN_GEX_USD_M * 1e6:
+        return None  # profilo piatto: non c'e' niente da raccontare
 
     contraddizione = total > 0 > below
     salience = 0.88 if contraddizione else _clamp01(
@@ -347,7 +356,10 @@ def fact_barrier_nearest(barriers: dict) -> Fact | None:
 def fact_flows_3d(flows: dict, signals: dict) -> Fact | None:
     """Il flusso IBIT a 3 giorni, letto insieme al punteggio del pilastro."""
     flow_3d = _num(signals, "inputs", "ibit_flow_3d_usd_m")
-    if flow_3d is None:
+    summary = (flows or {}).get("summary") or {}
+    # senza riepilogo non c'e' modo di corroborare il numero, e sotto la soglia
+    # di materialita' e' quasi sempre "non lo sappiamo" travestito da zero
+    if flow_3d is None or not summary or abs(flow_3d) < _MIN_FLOW_USD_M:
         return None
     flow_usd = flow_3d * 1e6
 
@@ -355,13 +367,13 @@ def fact_flows_3d(flows: dict, signals: dict) -> Fact | None:
         (p for p in (signals or {}).get("pillars", []) if p.get("name") == "etf_flows"), None
     )
     score = (pillar or {}).get("score")
-    summary = (flows or {}).get("summary") or {}
     ibit_net = _num(summary, "ibit", "net_flow_usd_b")
     corr = summary.get("full_period_corr_ibit_btc_next1d")
     giorni = _num(summary, "ibit", "days_with_data")
 
-    # un flusso e' notizia quando e' grosso in valore assoluto
-    salience = _clamp01(0.35 + 0.55 * min(1.0, abs(flow_3d) / 600.0))
+    # salienza proporzionale alla grandezza, senza pavimento: un flusso appena
+    # sopra la soglia non deve competere con una barriera all'1%
+    salience = _clamp01(0.90 * min(1.0, abs(flow_3d) / 600.0))
 
     seconda = []
     if ibit_net is not None:
