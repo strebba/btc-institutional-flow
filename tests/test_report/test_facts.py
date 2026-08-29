@@ -278,3 +278,62 @@ class TestCharmNelRegistro:
     def test_condividono_la_famiglia_per_non_monopolizzare(self, gex_payload):
         """Stesso topic: il cap per famiglia impedisce un'edizione tutta di greche."""
         assert fact_charm_tide(_CHARM).topic == fact_vanna_sign(_CHARM).topic
+
+
+class TestBarriereConNozionale:
+    """Dopo il re-parse l'88% delle barriere attive ha un nozionale.
+
+    È la differenza fra "quattro barriere entro il 2%" e "x milioni di note che
+    si attivano entro il 2%" — il motivo per cui il re-parse valeva la pena.
+    """
+
+    @staticmethod
+    def _payload(notional: float | None, n_note: int = 3) -> dict:
+        return {
+            "spot_price": 77_722.68,
+            "meta": {"total_active": 293},
+            "barriers": [
+                {
+                    "note_id": i,
+                    "barrier_type": "knock_in",
+                    "level_price_btc": 77_000.0 - i * 50,
+                    "issuer": "JPMorgan",
+                    "notional_usd": notional,
+                }
+                for i in range(n_note)
+            ],
+        }
+
+    def test_il_titolo_dice_i_dollari_quando_ci_sono(self):
+        f = fact_barrier_nearest(self._payload(50_000_000.0))
+        assert "150M" in f.headline
+        assert "si attivano" in f.headline
+        assert f.hero_value == "150M"
+
+    def test_ripiega_sui_conteggi_sotto_soglia(self):
+        """Un numero piccolo in cifra tonda impressiona meno di "tre barriere"."""
+        f = fact_barrier_nearest(self._payload(1_000_000.0))
+        assert "barriere bancarie" in f.headline
+        assert "M" not in f.hero_value
+
+    def test_ripiega_sui_conteggi_senza_nozionale(self):
+        f = fact_barrier_nearest(self._payload(None))
+        assert "barriere bancarie" in f.headline
+
+    def test_non_conta_la_stessa_nota_piu_volte(self):
+        """Una nota con tre livelli non vale il triplo: si somma per nota."""
+        tre_livelli = {
+            "spot_price": 77_722.68,
+            "meta": {"total_active": 293},
+            "barriers": [
+                {"note_id": 1, "barrier_type": "knock_in", "level_price_btc": lvl,
+                 "issuer": "JPMorgan", "notional_usd": 100_000_000.0}
+                for lvl in (77_000.0, 76_900.0, 76_800.0)
+            ],
+        }
+        f = fact_barrier_nearest(tre_livelli)
+        assert f.meta["notional_within_2pct_usd"] == 100_000_000.0
+
+    def test_il_nozionale_finisce_nel_meta(self):
+        f = fact_barrier_nearest(self._payload(50_000_000.0))
+        assert f.meta["notional_within_2pct_usd"] == 150_000_000.0

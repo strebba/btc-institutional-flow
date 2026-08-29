@@ -33,6 +33,10 @@ _MIN_GEX_USD_M = 5.0
 _MIN_CHARM_USD_M = 5.0
 _MIN_VANNA_USD_M = 5.0
 
+#: Sotto questo nozionale la card parla di conteggi invece che di dollari: un
+#: numero piccolo in cifra tonda impressiona meno di "quattro barriere all'1%".
+_MIN_NOTIONAL_CARD_USD_M = 20.0
+
 
 @dataclass
 class Fact:
@@ -303,11 +307,34 @@ def fact_barrier_nearest(barriers: dict) -> Fact | None:
         per_issuer[iss] = per_issuer.get(iss, 0) + 1
     top_issuer = max(per_issuer.items(), key=lambda kv: kv[1]) if per_issuer else None
 
+    # Il nozionale, dove c'è. Sommato per nota e non per barriera: una nota con
+    # tre livelli non vale il triplo, e contarla tre volte gonfierebbe il numero
+    # più visibile della card.
+    def _notional_note(righe: list[dict]) -> tuple[float, int]:
+        per_nota = {
+            b.get("note_id"): b["notional_usd"]
+            for b in righe
+            if b.get("note_id") is not None and b.get("notional_usd")
+        }
+        return sum(per_nota.values()), len(per_nota)
+
+    notional_vicine, n_note_vicine = _notional_note(vicine)
+    notional_20, _ = _notional_note(entro_20)
+
     meta_info = (barriers or {}).get("meta") or {}
     totale = meta_info.get("total_active") or (barriers or {}).get("count") or len(rows)
     tipo = _TIPO_IT.get(nearest.get("barrier_type", ""), nearest.get("barrier_type", "barriera"))
 
-    if len(sotto_2) >= 2:
+    # Il titolo dice dollari solo quando i dollari ci sono davvero: e' la
+    # differenza fra "quattro barriere" e "x milioni di note che si attivano".
+    ha_soldi = notional_vicine >= _MIN_NOTIONAL_CARD_USD_M * 1e6 and len(vicine) >= 2
+    if ha_soldi:
+        dove = "sotto di te" if len(sotto_2) >= len(vicine) / 2 else "da qui"
+        headline = (
+            f"{fmt.usd_millions(notional_vicine, force_sign=False)} di note "
+            f"si attivano entro il 2% {dove}"
+        )
+    elif len(sotto_2) >= 2:
         headline = (
             f"{fmt.count(len(sotto_2))} barriere bancarie a meno del 2% sotto di te"
         )
@@ -322,6 +349,11 @@ def fact_barrier_nearest(barriers: dict) -> Fact | None:
     if top_issuer:
         seconda += f", e {top_issuer[0]} da sola ne ha {fmt.count(top_issuer[1])}"
     seconda += "."
+    if notional_20 >= _MIN_NOTIONAL_CARD_USD_M * 1e6:
+        seconda += (
+            f" In tutto valgono {fmt.usd_millions(notional_20, force_sign=False)} "
+            f"di nozionale depositato."
+        )
 
     return Fact(
         key="barrier_nearest",
@@ -336,20 +368,36 @@ def fact_barrier_nearest(barriers: dict) -> Fact | None:
             ),
             seconda,
         ],
-        hero_value=fmt.price(nearest["level_price_btc"]),
+        hero_value=(
+            fmt.usd_millions(notional_vicine, force_sign=False)
+            if ha_soldi
+            else fmt.price(nearest["level_price_btc"])
+        ),
         hero_caption=(
-            f"{tipo.capitalize()} più vicino · {nearest.get('issuer', 'n/d')}\n"
-            f"{fmt.percent(dist)} dallo spot"
+            f"Nozionale che si attiva entro il 2%\n"
+            f"su {fmt.count(n_note_vicine)} note depositate alla SEC"
+            if ha_soldi
+            else f"{tipo.capitalize()} più vicino · {nearest.get('issuer', 'n/d')}\n"
+                 f"{fmt.percent(dist)} dallo spot"
         ),
         sign=SIGN_NEGATIVE if dist < 0 else SIGN_POSITIVE,
         takeaway=(
-            f"{fmt.count(len(sotto_2))} barriere bancarie entro il 2%: la più vicina "
+            f"{fmt.usd_millions(notional_vicine, force_sign=False)} di note bancarie "
+            f"si attivano entro il 2%."
+            if ha_soldi
+            else f"{fmt.count(len(sotto_2))} barriere bancarie entro il 2%: la più vicina "
             f"{nearest.get('issuer', 'n/d')} a {fmt.price(nearest['level_price_btc'])}."
             if len(sotto_2) >= 2
             else f"Barriera {nearest.get('issuer', 'n/d')} a "
             f"{fmt.price(nearest['level_price_btc'])}, {fmt.percent(dist)} da qui."
         ),
-        meta={"distance_pct": dist, "n_within_2pct": len(vicine), "n_within_20pct": len(entro_20)},
+        meta={
+            "distance_pct": dist,
+            "n_within_2pct": len(vicine),
+            "n_within_20pct": len(entro_20),
+            "notional_within_2pct_usd": notional_vicine or None,
+            "notional_within_20pct_usd": notional_20 or None,
+        },
     )
 
 
