@@ -54,6 +54,7 @@ def _compose() -> tuple[str, int]:
         flows=fonti["flows"],
         signals=fonti["signals"],
         forecast=fonti["forecast"],
+        macro=fonti["macro"],
     )
     for avviso in note.warnings:
         _log.warning("Dati incompleti: %s", avviso)

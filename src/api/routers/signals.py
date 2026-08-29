@@ -363,7 +363,27 @@ def get_macro() -> JSONResponse:
         except Exception as _e:
             _log.warning("Taker volume fetch fallito in /macro: %s", _e)
 
+        # Perche' i campi sono vuoti: senza questo un consumatore non distingue
+        # "nessun dato" da "mercato piatto".
+        from src.flows.macro_fetcher import (
+            STATUS_NO_API_KEY,
+            STATUS_OK,
+            STATUS_UNAVAILABLE,
+        )
+
+        _valori = (
+            funding_rate_ann_pct, oi_change_7d_pct, long_short_ratio_latest,
+            liquidations_long_24h_usd, taker_buy_ratio_latest,
+        )
+        if any(v is not None for v in _valori):
+            source_status = STATUS_OK
+        elif not cg.has_api_key:
+            source_status = STATUS_NO_API_KEY
+        else:
+            source_status = STATUS_UNAVAILABLE
+
         macro_data = {
+            "source_status": source_status,
             "funding_rate_8h_pct": funding_rate_8h_pct,
             "funding_rate_annualized_pct": funding_rate_ann_pct,
             "futures_oi_usd": oi_latest_usd,

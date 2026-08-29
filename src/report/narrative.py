@@ -162,6 +162,7 @@ def build_desk_note(
     flows: dict | None = None,
     signals: dict | None = None,
     forecast: dict | None = None,
+    macro: dict | None = None,
     generated_at: datetime | None = None,
     eyebrow: str = "Wagmi Lab · Desk",
 ) -> DeskNote:
@@ -173,6 +174,8 @@ def build_desk_note(
         flows: payload di ``/api/flows``.
         signals: payload di ``/api/signals``.
         forecast: payload di ``/api/forecast/status``, opzionale.
+        macro: payload di ``/api/macro``, opzionale — serve solo a spiegare nei
+            warning *perche'* il pilastro macro e' scoperto.
         generated_at: istante dell'edizione, per test riproducibili.
         eyebrow: occhiello ripetuto su tutte le card.
 
@@ -216,19 +219,35 @@ def build_desk_note(
         tape=_build_tape(gex, ts),
         cards=cards,
         facts_considered=len(facts),
-        warnings=_collect_warnings(signals),
+        warnings=_collect_warnings(signals, macro),
     )
 
 
-def _collect_warnings(signals: dict | None) -> list[str]:
+def _collect_warnings(
+    signals: dict | None, macro: dict | None = None
+) -> list[str]:
     """Avvisi che devono impedire la pubblicazione di una card, non decorarla.
 
-    Oggi l'unico caso reale è il pilastro macro senza dati CoinGlass: il
-    composito resta calcolabile ma la card che lo espone va tenuta ferma.
+    Un avviso serve solo se dice cosa fare: "pilastro macro senza dati" manda a
+    indagare, "manca la chiave CoinGlass" si risolve in due minuti. Quando la
+    causa è nota la si nomina, invece di elencare i sintomi.
     """
     out: list[str] = []
+
+    stato_macro = (macro or {}).get("source_status")
+    if stato_macro == "no_api_key":
+        out.append(
+            "pilastro macro spento: COINGLASS_API_KEY non è configurata — "
+            "impostala fra gli envs dell'app (Console DO → Settings → App Spec)"
+        )
+    elif stato_macro == "unavailable":
+        out.append("pilastro macro senza dati: CoinGlass non risponde")
+
     pillars = (signals or {}).get("pillars") or []
     for p in pillars:
+        # la causa del macro è già stata nominata sopra: non ripeterla per sintomi
+        if p.get("name") == "macro" and stato_macro in ("no_api_key", "unavailable"):
+            continue
         comps = p.get("components") or {}
         vuoti = [k for k, v in comps.items() if v is None]
         if vuoti and len(vuoti) == len(comps):

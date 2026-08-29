@@ -42,7 +42,7 @@ def _payload(response: JSONResponse | dict | None) -> dict:
 
 
 def _gather() -> dict[str, dict]:
-    """Raccoglie i payload dei quattro endpoint, saltando quelli che falliscono."""
+    """Raccoglie i payload degli endpoint a monte, saltando quelli che falliscono."""
     from src.api.routers import barriers as r_barriers
     from src.api.routers import flows as r_flows
     from src.api.routers import forecast as r_forecast
@@ -55,6 +55,7 @@ def _gather() -> dict[str, dict]:
         "flows": r_flows.get_flows,
         "signals": r_signals.get_signals,
         "forecast": r_forecast.forecast_status,
+        "macro": r_signals.get_macro,
     }
 
     out: dict[str, dict] = {}
@@ -78,6 +79,7 @@ def _build_note():
         flows=fonti["flows"],
         signals=fonti["signals"],
         forecast=fonti["forecast"],
+        macro=fonti["macro"],
     ), fonti
 
 

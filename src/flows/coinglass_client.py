@@ -124,6 +124,16 @@ class CoinGlassClient:
         )
         _log.info("CoinGlass client initialized (API key present: %s)", bool(self._api_key))
 
+    @property
+    def has_api_key(self) -> bool:
+        """Vero se una chiave e' configurata.
+
+        Serve ai chiamanti per distinguere "non abbiamo i dati" da "non abbiamo le
+        credenziali": i metodi fetch_* catturano ogni eccezione e restituiscono una
+        serie vuota, quindi a valle i due casi sarebbero indistinguibili.
+        """
+        return bool(self._api_key)
+
     def _throttle(self) -> None:
         """Rispetta il rate limit configurato (req/s)."""
         if self._rate_limit > 0:
