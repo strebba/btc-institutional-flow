@@ -11,7 +11,7 @@ numpy>=1.26
 
 # Statistics
 scipy>=1.13
-statsmodels>=0.14
+statsmodels>=0.15
 
 # Visualisation & dashboard
 plotly>=5.22

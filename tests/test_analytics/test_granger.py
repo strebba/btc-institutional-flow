@@ -82,6 +82,24 @@ class TestRun:
         assert "flows→returns" in results
         assert "returns→flows" in results
 
+    def test_il_test_gira_davvero(self, analyzer, df, caplog):
+        """Su dati stazionari il test deve produrre risultati, non liste vuote.
+
+        run() avvolge grangercausalitytests in un try/except che logga e prosegue:
+        una rottura dell'API di statsmodels (come la rimozione del kwarg `verbose`
+        in 0.15) non solleva, restituisce direzioni vuote e lascia /api/flows con
+        `granger: {}` senza che nulla lo segnali. Questo test guarda la causa —
+        il test statistico e' stato eseguito — invece dei sintomi a valle.
+        """
+        import logging
+
+        with caplog.at_level(logging.ERROR, logger="analytics.granger"):
+            results = analyzer.run(df)
+
+        assert results["flows→returns"], "nessun risultato: il test non e' stato eseguito"
+        assert results["returns→flows"], "nessun risultato: il test non e' stato eseguito"
+        assert not [r for r in caplog.records if "Errore test" in r.message]
+
     def test_result_types(self, analyzer, df):
         results = analyzer.run(df)
         for direction, res_list in results.items():

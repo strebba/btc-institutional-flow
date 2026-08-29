@@ -50,4 +50,4 @@ def health_edgar() -> JSONResponse:
             },
         })
     except Exception as exc:
-        raise http_error(503, f"EDGAR health check failed: {exc}")
+        raise http_error(f"EDGAR health check failed: {exc}", code=503)

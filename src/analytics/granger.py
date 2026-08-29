@@ -84,7 +84,10 @@ class GrangerAnalysis:
             _log.warning("%s: troppo pochi dati per ADF (%d)", name, len(clean))
             return True  # assume stazionaria
 
-        result = adfuller(clean, autolag="AIC")
+        # result_object=False fissa il ritorno a tupla: dalla 0.16 statsmodels
+        # passera' a un ADFullerResult e l'indicizzazione posizionale qui sotto
+        # smetterebbe di funzionare in silenzio, come e' successo con `verbose`.
+        result = adfuller(clean, autolag="AIC", result_object=False)
         p_value = result[1]
         is_stat = p_value < 0.05
         _log.info(
@@ -227,7 +230,6 @@ class GrangerAnalysis:
             test1 = grangercausalitytests(
                 df[[return_col, flow_col]].values,
                 maxlag=max_lags,
-                verbose=False,
             )
             for lag, lag_result in test1.items():
                 f_stat = lag_result[0]["ssr_ftest"][0]
@@ -251,7 +253,6 @@ class GrangerAnalysis:
             test2 = grangercausalitytests(
                 df[[flow_col, return_col]].values,
                 maxlag=max_lags,
-                verbose=False,
             )
             for lag, lag_result in test2.items():
                 f_stat = lag_result[0]["ssr_ftest"][0]
