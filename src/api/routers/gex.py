@@ -143,7 +143,31 @@ def _get_gex_data() -> dict:
         except Exception as _e:
             _log.warning("GEX DB persist failed: %s", _e)
 
-        data = {"snapshot": snapshot, "spot": spot, "state": state, "gex_db": gex_db}
+        # Charm e vanna sulla stessa chain gia' scaricata: non serve un secondo
+        # fetch, e riusare gli stessi strumenti garantisce che i due blocchi di
+        # numeri parlino dello stesso istante.
+        chain_greeks = None
+        try:
+            import time as _time
+
+            from src.gex.greeks import aggregate_chain_greeks
+
+            chain_greeks = aggregate_chain_greeks(
+                options,
+                spot=spot,
+                now_ms=_time.time() * 1000,
+                contract_size=calculator._cfg.get("contract_size", 1.0),
+            )
+        except Exception as _e:  # noqa: BLE001 — il GEX esce comunque
+            _log.warning("Calcolo charm/vanna fallito: %s", _e)
+
+        data = {
+            "snapshot": snapshot,
+            "spot": spot,
+            "state": state,
+            "gex_db": gex_db,
+            "chain_greeks": chain_greeks,
+        }
         cache_set("_gex_data", data)
         return data
 
@@ -186,7 +210,34 @@ def get_gex() -> JSONResponse:
 
         enrichment = _enrich_gex_with_coinglass(snapshot.total_call_oi, snapshot.total_put_oi)
 
+        # Charm e vanna. Il blocco resta None quando la chain non e' calcolabile:
+        # e' un dato mancante, non uno zero.
+        cg = gex_data.get("chain_greeks")
+        charm_block = None
+        if cg is not None:
+            charm_block = {
+                "total_charm_usd_day": round(cg.total_charm_usd_day, 0),
+                "total_vanna_usd_per_iv_pt": round(cg.total_vanna_usd, 0),
+                "magnet_strike": cg.magnet_strike,
+                "charm_by_strike": [
+                    {"strike": k, "charm_usd_day": round(v, 0)}
+                    for k, v in sorted(cg.charm_by_strike.items())
+                    if spot > 0 and abs(k - spot) / spot < 0.40
+                ],
+                "projection": [
+                    {
+                        "days_ahead": p.days_ahead,
+                        "charm_usd_day": round(p.charm_usd_day, 0),
+                        "live_instruments": p.live_instruments,
+                    }
+                    for p in cg.projection
+                ],
+                "n_instruments": cg.n_instruments,
+                "n_skipped": cg.n_skipped,
+            }
+
         response = ok({
+            "charm": charm_block,
             "snapshot": gex_dict,
             "regime": {
                 "label": state.regime,

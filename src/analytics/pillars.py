@@ -89,6 +89,10 @@ class PillarScore:
         name: identificatore pilastro (gex|barrier|etf_flows|macro).
         score: punteggio 0-100, oppure None se nessun dato disponibile.
         weight: peso effettivo nel composito (dopo rescaling), 0-1.
+        coverage: quota di peso dei fattori interni realmente disponibili, 0-1.
+            1.0 = tutti i fattori presenti, 0.0 = pilastro senza dati. Scala il
+            peso nominale nel composito, così un pilastro retto da un solo
+            fattore non conta quanto uno completo.
         components: contributo grezzo (0-1) dei fattori interni.
         reason: stringa human-readable.
     """
@@ -96,6 +100,7 @@ class PillarScore:
     name:       str
     score:      Optional[float]
     weight:     float = 0.0
+    coverage:   float = 0.0
     components: dict[str, Optional[float]] = field(default_factory=dict)
     reason:     str = ""
 
@@ -164,6 +169,19 @@ def _blend(parts: dict[str, Optional[float]], weights: dict[str, float]) -> Opti
     return sum(avail[k] * weights.get(k, 0.0) for k in avail) / wsum
 
 
+def _coverage(parts: dict[str, float | None], weights: dict[str, float]) -> float:
+    """Quota 0-1 del peso dei fattori effettivamente disponibili.
+
+    Con MACRO_FACTOR_WEIGHTS e il solo put_call presente restituisce 0.15: il
+    pilastro macro pesa poi 0.20 x 0.15 nel composito invece di 0.20 pieno.
+    """
+    total = sum(weights.get(k, 0.0) for k in parts)
+    if total <= 0:
+        return 0.0
+    avail = sum(weights.get(k, 0.0) for k, v in parts.items() if v is not None)
+    return avail / total
+
+
 def _to_score(v: Optional[float]) -> Optional[float]:
     return round(v * 100.0, 1) if v is not None else None
 
@@ -208,7 +226,8 @@ def score_gex_pillar(
         if factors["flip"] is not None:
             reason += ", spot " + ("sopra" if factors["flip"] > 0.5 else "sotto") + " gamma flip"
 
-    return PillarScore("gex", score, components=factors, reason=reason)
+    return PillarScore("gex", score, coverage=_coverage(factors, GEX_FACTOR_WEIGHTS),
+                       components=factors, reason=reason)
 
 
 # ─── Pillar 2: BARRIER (direzionale, notional-weighted) ───────────────────────
@@ -270,7 +289,7 @@ def score_barrier_pillar(
 
     components["n_active"] = len(rows)
     if not rows:
-        return PillarScore("barrier", 50.0, components=components,
+        return PillarScore("barrier", 50.0, coverage=1.0, components=components,
                            reason="Barriere senza prezzo BTC calcolabile")
 
     num = den = 0.0
@@ -328,7 +347,8 @@ def score_barrier_pillar(
             f"a {nb.get('distance_pct')}% → {dominant.replace('_', ' ')}"
         )
 
-    return PillarScore("barrier", _to_score(score_01), components=components, reason=reason)
+    return PillarScore("barrier", _to_score(score_01), coverage=1.0,
+                       components=components, reason=reason)
 
 
 # ─── Pillar 3: ETF FLOWS ──────────────────────────────────────────────────────
@@ -376,7 +396,9 @@ def score_etf_flows_pillar(
         if is_estimate:
             reason += " (stima yfinance, bassa qualità)"
 
-    return PillarScore("etf_flows", _to_score(blended), components=factors, reason=reason)
+    return PillarScore("etf_flows", _to_score(blended),
+                       coverage=_coverage(factors, ETF_FACTOR_WEIGHTS),
+                       components=factors, reason=reason)
 
 
 # ─── Pillar 4: MACRO ──────────────────────────────────────────────────────────
@@ -422,7 +444,9 @@ def score_macro_pillar(
         reason_parts.append(f"L/S {long_short_ratio:.2f}")
     reason = " | ".join(reason_parts)
 
-    return PillarScore("macro", _to_score(blended), components=factors, reason=reason)
+    return PillarScore("macro", _to_score(blended),
+                       coverage=_coverage(factors, MACRO_FACTOR_WEIGHTS),
+                       components=factors, reason=reason)
 
 
 # ─── Orchestratore ────────────────────────────────────────────────────────────
@@ -476,8 +500,16 @@ class CompositeSignal:
                 reason="Dati insufficienti", weights_used={},
             )
 
-        wsum = sum(self._weights[k] for k in avail)
-        weights_used = {k: round(self._weights[k] / wsum, 4) for k in avail}
+        # Peso efficace = nominale x copertura dei fattori: un pilastro retto da
+        # un solo sotto-fattore (es. macro con la sola put/call quando CoinGlass
+        # è giù) non deve pesare quanto uno completo.
+        cover = {p.name: p.coverage for p in pillars}
+        eff = {k: self._weights[k] * max(0.0, min(1.0, cover.get(k, 1.0))) for k in avail}
+        wsum = sum(eff.values())
+        if wsum <= 0:  # copertura nulla ovunque: torna ai pesi nominali
+            eff = {k: self._weights[k] for k in avail}
+            wsum = sum(eff.values())
+        weights_used = {k: round(eff[k] / wsum, 4) for k in avail}
         for p in pillars:
             p.weight = weights_used.get(p.name, 0.0)
 

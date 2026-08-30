@@ -48,22 +48,29 @@ def main() -> None:
 
     _log.info("Refresh EDGAR incrementale: finestra da %s (lookback %dg)", start, lookback)
 
+    db = StructuredNotesDB()
+
     searcher = EdgarEftsSearcher()
     try:
         filings = searcher.collect_all_filings(start_date=start)
     except Exception as exc:
         _log.error("Ricerca EDGAR fallita: %s", exc)
+        db.record_refresh_run(filings_seen=0, notes_written=0, ok=False)
+        db.checkpoint()
         sys.exit(1)
 
     if not filings:
+        # Registrare anche il giro a vuoto e' il punto di tutto: senza, un mercato
+        # tranquillo e una pipeline ferma sono indistinguibili nell'health check.
         _log.info("Nessun filing nella finestra: niente da aggiornare.")
+        db.record_refresh_run(filings_seen=0, notes_written=0, ok=True)
+        db.checkpoint()
         print(f"[OK] 0 filing da {start} — nessun aggiornamento")
         return
 
     _log.info("Trovati %d filing unici: parsing...", len(filings))
     notes = ProspectusParser().parse_batch(filings)
 
-    db  = StructuredNotesDB()
     ids = db.upsert_notes(notes)
 
     # Pre-calcola e persiste level_price_btc: così il DB versionato committato dal
@@ -74,6 +81,8 @@ def main() -> None:
         _log.info("Aggiornati prezzi BTC per %d barriere", n_priced)
     except Exception as exc:
         _log.warning("Calcolo prezzi BTC barriere fallito (proseguo): %s", exc)
+
+    db.record_refresh_run(filings_seen=len(filings), notes_written=len(ids), ok=True)
 
     db.checkpoint()   # forza il WAL nel .db prima del commit git nel workflow
     stats = db.summary()

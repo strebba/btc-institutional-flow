@@ -31,7 +31,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from src.api.routers import health, gex, flows, barriers, signals, forecast
+from src.api.routers import health, gex, flows, barriers, signals, forecast, report
 from src.api.scheduler import (
     _alert_monitor,
     start_alert_scheduler,
@@ -89,6 +89,7 @@ app.include_router(flows.router)
 app.include_router(barriers.router)
 app.include_router(signals.router)
 app.include_router(forecast.router)
+app.include_router(report.router)
 
 # ─── Root redirect ───────────────────────────────────────────────────────────
 

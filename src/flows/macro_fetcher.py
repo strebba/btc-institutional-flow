@@ -2,12 +2,15 @@
 
 Singola fonte di verità usata da /api/signals, /api/macro e dashboard data_loader.
 Sostituisce i 3 blocchi duplicati di fetch macro che avevano caching inconsistente.
+
+Ogni campo può essere ``None``, ma ``source_status`` dice **perché**: senza quella
+distinzione "non lo sappiamo" e "il mercato è piatto" sono lo stesso valore, e il
+pilastro macro finisce per pubblicare un giudizio che nessun dato sostiene.
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 import requests
 
@@ -15,14 +18,25 @@ from src.flows.coinglass_client import CoinGlassClient, CoinGlassError
 
 _log = logging.getLogger(__name__)
 
+#: Almeno un fattore è stato letto davvero.
+STATUS_OK = "ok"
+
+#: Nessuna chiave CoinGlass configurata — è un problema di configurazione, non di
+#: mercato, e si risolve valorizzando COINGLASS_API_KEY nella spec DO.
+STATUS_NO_API_KEY = "no_api_key"
+
+#: Chiave presente ma nessun dato ottenuto (API giù, tier insufficiente, rate limit).
+STATUS_UNAVAILABLE = "unavailable"
+
 
 @dataclass
 class MacroData:
-    funding_rate_annualized_pct: Optional[float] = None
-    oi_change_7d_pct: Optional[float] = None
-    long_short_ratio: Optional[float] = None
-    liquidations_long_24h_usd: Optional[float] = None
-    liquidations_short_24h_usd: Optional[float] = None
+    funding_rate_annualized_pct: float | None = None
+    oi_change_7d_pct: float | None = None
+    long_short_ratio: float | None = None
+    liquidations_long_24h_usd: float | None = None
+    liquidations_short_24h_usd: float | None = None
+    source_status: str = STATUS_UNAVAILABLE
 
     def to_dict(self) -> dict:
         return {
@@ -31,6 +45,7 @@ class MacroData:
             "long_short_ratio": self.long_short_ratio,
             "liquidations_long_24h_usd": self.liquidations_long_24h_usd,
             "liquidations_short_24h_usd": self.liquidations_short_24h_usd,
+            "source_status": self.source_status,
         }
 
     @classmethod
@@ -41,13 +56,28 @@ class MacroData:
             long_short_ratio=d.get("long_short_ratio"),
             liquidations_long_24h_usd=d.get("liquidations_long_24h_usd"),
             liquidations_short_24h_usd=d.get("liquidations_short_24h_usd"),
+            # una cache serializzata prima di questo campo resta leggibile
+            source_status=d.get("source_status", STATUS_UNAVAILABLE),
+        )
+
+    def has_any_value(self) -> bool:
+        """Vero se almeno un fattore è stato ottenuto."""
+        return any(
+            v is not None
+            for v in (
+                self.funding_rate_annualized_pct,
+                self.oi_change_7d_pct,
+                self.long_short_ratio,
+                self.liquidations_long_24h_usd,
+                self.liquidations_short_24h_usd,
+            )
         )
 
 
 def fetch_macro_data(
     *,
     cg_client=None,
-    cache_data: Optional[dict] = None,
+    cache_data: dict | None = None,
 ) -> MacroData:
     """Fetch dati macro CoinGlass con fallback a cache opzionale.
 
@@ -57,11 +87,22 @@ def fetch_macro_data(
                     (es. cache_get("macro_data") nell'API).
 
     Returns:
-        MacroData con i valori disponibili (None per quelli non fetchabili).
+        MacroData con i valori disponibili (None per quelli non fetchabili) e
+        ``source_status`` che spiega il perché di eventuali None.
     """
     cache_data = cache_data or {}
     out = MacroData.from_dict(cache_data)
     cg = cg_client or CoinGlassClient()
+
+    if not cg.has_api_key:
+        # Senza chiave ogni chiamata fallirebbe: cinque richieste e cinque warning
+        # per niente, a ogni giro di /api/signals. Meglio dirlo e fermarsi.
+        _log.warning(
+            "COINGLASS_API_KEY non configurata: pilastro macro senza dati. "
+            "Impostala fra gli envs dell'app (o in config/settings.yaml) per abilitarlo."
+        )
+        out.source_status = STATUS_OK if out.has_any_value() else STATUS_NO_API_KEY
+        return out
 
     if out.funding_rate_annualized_pct is None:
         try:
@@ -99,4 +140,5 @@ def fetch_macro_data(
         except (CoinGlassError, requests.RequestException) as exc:
             _log.warning("Liquidations fetch failed: %s", exc)
 
+    out.source_status = STATUS_OK if out.has_any_value() else STATUS_UNAVAILABLE
     return out

@@ -82,6 +82,17 @@ CREATE TABLE IF NOT EXISTS barrier_levels (
 );
 """
 
+_DDL_REFRESH_RUNS = """
+CREATE TABLE IF NOT EXISTS refresh_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at        TEXT    NOT NULL,          -- ISO UTC datetime
+    filings_seen  INTEGER NOT NULL DEFAULT 0,
+    notes_written INTEGER NOT NULL DEFAULT 0,
+    ok            INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_runs_at ON refresh_runs(run_at);
+"""
+
 _DDL_IDX = """
 CREATE INDEX IF NOT EXISTS idx_notes_issuer       ON notes(issuer);
 CREATE INDEX IF NOT EXISTS idx_notes_product      ON notes(product_type);
@@ -127,21 +138,71 @@ class StructuredNotesDB:
         finally:
             conn.close()
 
-    def get_edgar_stats(self) -> dict:
-        """Restituisce statistiche aggregate del DB per health check.
+    def record_refresh_run(
+        self, *, filings_seen: int, notes_written: int, ok: bool = True
+    ) -> None:
+        """Registra l'esito di un refresh EDGAR, anche quando non scrive nulla.
 
-        Returns:
-            dict con last_update, total_notes, total_barriers, active_barriers.
+        E' proprio il run a vuoto quello che conta: senza, un mercato tranquillo
+        e una pipeline ferma sono indistinguibili nell'health check.
         """
         with self._conn() as conn:
-            last = conn.execute("SELECT MAX(created_at) FROM notes").fetchone()[0]
+            conn.execute(
+                "INSERT INTO refresh_runs (run_at, filings_seen, notes_written, ok) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    int(filings_seen),
+                    int(notes_written),
+                    1 if ok else 0,
+                ),
+            )
+
+    def get_last_refresh_run(self) -> dict | None:
+        """Ultimo refresh registrato, None se la tabella e' vuota o assente."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT run_at, filings_seen, notes_written, ok "
+                "FROM refresh_runs ORDER BY run_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "run_at": row["run_at"],
+            "filings_seen": row["filings_seen"],
+            "notes_written": row["notes_written"],
+            "ok": bool(row["ok"]),
+        }
+
+    def get_edgar_stats(self) -> dict:
+        """Statistiche aggregate del DB per l'health check.
+
+        Tiene distinte due cose che prima erano confuse in un solo campo:
+        ``last_refresh_at`` (l'ultima volta che il refresh e' girato) e
+        ``last_note_written_at`` (l'ultima nota effettivamente scritta). La
+        salute della pipeline si misura sulla prima; la seconda dice solo se il
+        mercato primario si e' mosso.
+
+        Returns:
+            dict con last_refresh_at, last_note_written_at, last_update (alias
+            storico della seconda), i conteggi e l'esito dell'ultimo run.
+        """
+        with self._conn() as conn:
+            last_note = conn.execute("SELECT MAX(created_at) FROM notes").fetchone()[0]
             total_notes = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
             total_barriers = conn.execute("SELECT COUNT(*) FROM barrier_levels").fetchone()[0]
             active_barriers = conn.execute(
                 "SELECT COUNT(*) FROM barrier_levels WHERE status='active'"
             ).fetchone()[0]
+
+        run = self.get_last_refresh_run()
         return {
-            "last_update": last,
+            "last_refresh_at": run["run_at"] if run else None,
+            "last_refresh_ok": run["ok"] if run else None,
+            "last_refresh_filings_seen": run["filings_seen"] if run else None,
+            "last_note_written_at": last_note,
+            # alias storico: alcuni consumatori leggono ancora last_update
+            "last_update": last_note,
             "total_notes": total_notes,
             "total_barriers": total_barriers,
             "active_barriers": active_barriers,
@@ -150,7 +211,10 @@ class StructuredNotesDB:
     def _init_schema(self) -> None:
         """Crea le tabelle, gli indici e applica le migrazioni incrementali."""
         with self._conn() as conn:
-            conn.executescript(_DDL_NOTES + _DDL_BARRIERS + _DDL_BARRIER_SNAPSHOTS + _DDL_IDX)
+            conn.executescript(
+                _DDL_NOTES + _DDL_BARRIERS + _DDL_BARRIER_SNAPSHOTS
+                + _DDL_REFRESH_RUNS + _DDL_IDX
+            )
             self._migrate(conn)
         _log.info("Schema inizializzato: %s", self._path)
 

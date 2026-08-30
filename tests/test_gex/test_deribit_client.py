@@ -60,11 +60,19 @@ class TestCircuitBreaker:
         assert cb.is_open() is True
 
     def test_recovery_after_timeout(self):
-        cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0)
+        """Aperto subito dopo il fallimento, chiuso una volta scaduto il timeout.
+
+        Il timeout deve essere non nullo: con recovery_timeout=0 bastano pochi
+        microsecondi perche' `time.time() - last_failure_time > 0`, quindi il
+        breaker si richiude prima ancora di poter essere osservato aperto e i due
+        stati diventano indistinguibili.
+        """
+        import time
+
+        cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
         cb.record_failure()
         assert cb.is_open() is True
-        import time
-        time.sleep(0.05)
+        time.sleep(0.1)
         assert cb.is_open() is False
 
 

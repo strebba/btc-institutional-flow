@@ -19,6 +19,7 @@ _TTL: dict[str, int] = {
     "signals":        300,   # 5 min  — dipende da gex + flows
     "macro":          3600,  # 1 ora  — dati CoinGlass giornalieri
     "ifi":            900,   # 15 min — serie giornaliera, cambia lentamente
+    "report_cards":   300,   # 5 min  — dipende da gex + signals + barriers
     "pillars_series": 900,   # 15 min — compute_series + Farside scrape (costoso)
 }
 

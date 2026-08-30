@@ -15,7 +15,7 @@ make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
 make compose-up     # replica ambiente DO: nginx:8080 + API + dashboard (docker compose)
-make test           # pytest tests/ -v  (~679 test)
+make test           # pytest tests/ -v  (~834 test)
 make test-unit      # pytest tests/unit/ -v -q (esclude integration)
 make lint           # ruff check src/ tests/
 make update-all     # update-gex + update-flows + update-edgar (cron data refresh)
@@ -40,9 +40,10 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati) |
 | `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
 | `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (6 moduli con validation tab), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
-| `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (6 file: health, gex, flows, barriers, signals, forecast), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`, `schemas.py` |
+| `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`, `schemas.py` |
 | `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |
+| `src/report/` | **Desk Note** — report a card pubblicabili. `facts.py` (estrattori + salienza), `narrative.py` (selezione e composizione), `events.py` (trigger di pubblicazione + `ReportStateDB`), `renderer.py` (HTML per web e PNG), `formatting.py` (numeri all'italiana), `fonts/` (IBM Plex incorporato) |
 
 DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignorato).
 `StructuredNotesDB` e `GexDB` puntano **sempre** a `structured_notes.db` (path hardcodato,
@@ -98,7 +99,7 @@ container unico con **supervisord** che gestisce 3 processi:
 - `uvicorn` :8000 → FastAPI backend (solo loopback, `/api/*`)
 - `streamlit` :8501 → dashboard (solo loopback, tema Wagmi Lab da `.streamlit/config.toml`)
 
-nginx: `/api/*` → FastAPI, `/*` → Streamlit (con WebSocket `/_stcore/*`); rimuove
+nginx: `/api/*` e `/report` → FastAPI, `/*` → Streamlit (con WebSocket `/_stcore/*`); rimuove
 `X-Frame-Options` e imposta `Content-Security-Policy: frame-ancestors` per **wagmi-lab.com**
 (embed iframe). App Platform non supporta volumi → i dati sono condivisi via **DB versionato
 nel repo** (refresh EDGAR → commit → redeploy). Config nginx: `nginx.conf`; processi:
@@ -115,7 +116,12 @@ mercoledì 06:30 UTC, committa il DB su `main` → deploy DO). Lo User-Agent SEC
 `config/settings.yaml` (email reale) — non servono variabili esterne. Override opzionale
 via env var `EDGAR_USER_AGENT`. In caso di fallimento, il workflow invia una notifica
 Telegram (richiede `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` nei Repository secrets).
-Endpoint di monitoraggio: `GET /api/health/edgar` (freschezza DB, conteggi).
+Endpoint di monitoraggio: `GET /api/health/edgar`. La salute si misura sull'**ultimo
+refresh riuscito** (tabella `refresh_runs`, soglia 10 giorni), non sull'ultima nota
+scritta: il workflow gira due volte a settimana e in una finestra tranquilla può
+legittimamente non trovare filing nuovi — misurare l'età delle note faceva sembrare
+rotta una pipeline sana. `notes_age_days` resta esposto come informazione sul mercato
+primario, e `reason` dice a parole cosa sta succedendo.
 I supplement *preliminari* hanno `is_preliminary=1` e `initial_level`/`notional` = NULL;
 `/api/barriers` mostra solo i finali.
 
@@ -124,3 +130,32 @@ I search terms includono anche FBTC/BITB/ARKB: il parser estrae il ticker reale 
 `compute_btc_prices()` e `update_barrier_statuses()` operano **solo sulle note IBIT** (default) —
 i prezzi/ratio IBIT non si applicano agli altri ETF. `data/runtime.db` (predizioni/cache runtime,
 usato da `make run-api` via `DB_PATH`) è invece **ignorato** da git, separato dal seed versionato.
+
+## Desk Note (report a card)
+
+Report pubblicabile a sei card generato dagli endpoint esistenti — nato per
+rispondere ai post a carosello dei competitor, che le persone leggono mentre la
+dashboard richiede di saperla leggere.
+
+```bash
+python3 scripts/export_desk_note.py                 # -> out/desk-note/*.png (1080x1350)
+python3 scripts/export_desk_note.py --only-on-event # esporta solo se e' notizia
+```
+
+- `GET /report` — la pagina (via nginx, fuori da `/api/`). `?export=true` toglie
+  la riduzione responsive e l'intestazione: e' cio' che fotografa Playwright.
+- `GET /api/report/cards` — le card in JSON, sorgente di tutti i renderer.
+- `GET /api/report/events` — cosa e' cambiato (sola lettura, non consuma gli eventi).
+- `POST /api/report/events/commit` — fissa la linea di base dopo la pubblicazione.
+
+**Pubblicazione su evento, non a calendario**: l'edizione esce quando il regime
+gamma si ribalta, lo spot attraversa il gamma flip o una barriera SEC, un muro
+viene superato, o il segnale cambia lato delle soglie 40/65. Soglia in
+`events.PUBLISH_THRESHOLD`.
+
+**Il motore non inventa mai.** Un estrattore senza dati restituisce `None` e
+costa una card, non l'edizione; sotto le soglie di materialita'
+(`facts._MIN_FLOW_USD_M`, `_MIN_GEX_USD_M`) un numero non diventa un fatto —
+quando Farside e' giu' i flussi arrivano a `0.0`, che e' "non lo sappiamo", non
+"zero". I pilastri scoperti finiscono in `DeskNote.warnings`, che e' cio' che
+tiene ferma la card del punteggio finche' CoinGlass non torna.
