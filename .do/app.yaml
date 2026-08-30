@@ -7,7 +7,7 @@
 #   streamlit :8501 → dashboard Streamlit (solo loopback)
 #
 # Routing (gestito da nginx nel container):
-#   /api/* → FastAPI   |   /* → Streamlit dashboard
+#   /api/* → FastAPI   |   /report → FastAPI (Desk Note)   |   /* → Streamlit
 #
 # I dati sono condivisi via DB versionato nel repo (App Platform non supporta
 # volumi): il workflow EDGAR committa data/structured_notes.db su main →
