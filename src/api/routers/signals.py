@@ -366,17 +366,49 @@ def get_macro() -> JSONResponse:
         # Perche' i campi sono vuoti: senza questo un consumatore non distingue
         # "nessun dato" da "mercato piatto".
         from src.flows.macro_fetcher import (
+            SOURCE_COINGECKO,
+            SOURCE_COINGLASS,
             STATUS_NO_API_KEY,
             STATUS_OK,
+            STATUS_PARTIAL_COINGECKO,
             STATUS_UNAVAILABLE,
         )
 
-        _valori = (
-            funding_rate_ann_pct, oi_change_7d_pct, long_short_ratio_latest,
-            liquidations_long_24h_usd, taker_buy_ratio_latest,
+        da_coinglass = any(
+            v is not None
+            for v in (
+                funding_rate_ann_pct, oi_change_7d_pct, long_short_ratio_latest,
+                liquidations_long_24h_usd, taker_buy_ratio_latest,
+            )
         )
-        if any(v is not None for v in _valori):
+        funding_source = SOURCE_COINGLASS if funding_rate_ann_pct is not None else None
+
+        # Ripiego: CoinGecko copre funding e open interest senza chiave. Non ha
+        # storico, quindi le serie restano vuote e la variazione a 7 giorni la
+        # ricostruiamo dagli snapshot che accumuliamo noi.
+        da_coingecko = False
+        if funding_rate_ann_pct is None:
+            try:
+                from src.flows.coingecko_client import CoinGeckoClient
+                from src.flows.macro_fetcher import _oi_change_dallo_storico
+
+                _f, _oi, _n = CoinGeckoClient().fetch_funding_and_oi()
+                if _f is not None:
+                    funding_rate_ann_pct = round(_f, 2)
+                    funding_rate_8h_pct = round(_f / (3 * 365), 4)
+                    funding_source = SOURCE_COINGECKO
+                    da_coingecko = True
+                    if _oi is not None and oi_latest_usd is None:
+                        oi_latest_usd = round(_oi, 0)
+                    if oi_change_7d_pct is None:
+                        oi_change_7d_pct = _oi_change_dallo_storico(None)
+            except Exception as _e:
+                _log.warning("Ripiego CoinGecko fallito in /macro: %s", _e)
+
+        if da_coinglass:
             source_status = STATUS_OK
+        elif da_coingecko:
+            source_status = STATUS_PARTIAL_COINGECKO
         elif not cg.has_api_key:
             source_status = STATUS_NO_API_KEY
         else:
@@ -384,6 +416,7 @@ def get_macro() -> JSONResponse:
 
         macro_data = {
             "source_status": source_status,
+            "funding_source": funding_source,
             "funding_rate_8h_pct": funding_rate_8h_pct,
             "funding_rate_annualized_pct": funding_rate_ann_pct,
             "futures_oi_usd": oi_latest_usd,

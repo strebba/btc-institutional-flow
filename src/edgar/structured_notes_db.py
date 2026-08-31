@@ -12,7 +12,7 @@ import sqlite3
 
 import pandas as pd
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -91,6 +91,16 @@ CREATE TABLE IF NOT EXISTS refresh_runs (
     ok            INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_runs_at ON refresh_runs(run_at);
+"""
+
+_DDL_MACRO_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS macro_snapshots (
+    snapshot_date   TEXT PRIMARY KEY,     -- una riga al giorno, in upsert
+    captured_at     TEXT NOT NULL,        -- ISO UTC datetime
+    funding_ann_pct REAL,
+    oi_usd          REAL,
+    n_contracts     INTEGER
+);
 """
 
 _DDL_IDX = """
@@ -174,6 +184,82 @@ class StructuredNotesDB:
             "ok": bool(row["ok"]),
         }
 
+    # ─── Storico macro (open interest) ───────────────────────────────────────
+
+    def record_macro_snapshot(
+        self,
+        *,
+        funding_ann_pct: float | None,
+        oi_usd: float | None,
+        n_contracts: int = 0,
+        snapshot_date: str | None = None,
+    ) -> None:
+        """Registra la fotografia macro del giorno, in upsert.
+
+        Una riga al giorno: due giri ravvicinati aggiornano invece di duplicare,
+        cosi' la serie resta a passo giornaliero anche se il job gira due volte.
+        """
+        giorno = snapshot_date or date.today().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO macro_snapshots "
+                "(snapshot_date, captured_at, funding_ann_pct, oi_usd, n_contracts) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(snapshot_date) DO UPDATE SET "
+                "captured_at = excluded.captured_at, "
+                "funding_ann_pct = excluded.funding_ann_pct, "
+                "oi_usd = excluded.oi_usd, n_contracts = excluded.n_contracts",
+                (
+                    giorno,
+                    datetime.now(timezone.utc).isoformat(),
+                    funding_ann_pct,
+                    oi_usd,
+                    int(n_contracts),
+                ),
+            )
+
+    def get_last_macro_snapshot(self) -> dict | None:
+        """Ultima fotografia macro registrata, None se la tabella e' vuota."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT snapshot_date, captured_at, funding_ann_pct, oi_usd, n_contracts "
+                "FROM macro_snapshots ORDER BY snapshot_date DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_oi_change_pct(self, days: int = 7) -> float | None:
+        """Variazione percentuale dell'open interest sulla finestra richiesta.
+
+        Restituisce None finche' non ci sono due punti abbastanza distanti: un
+        solo campione non fa una variazione, e riempire il campo con uno zero
+        darebbe al pilastro macro un fattore che nessun dato sostiene.
+
+        La finestra e' tollerante (meta' dei giorni richiesti come minimo) perche'
+        il job giornaliero puo' saltare un giro senza che la misura diventi
+        inutilizzabile.
+        """
+        minimo_giorni = max(1, days // 2)
+        with self._conn() as conn:
+            recente = conn.execute(
+                "SELECT snapshot_date, oi_usd FROM macro_snapshots "
+                "WHERE oi_usd IS NOT NULL ORDER BY snapshot_date DESC LIMIT 1"
+            ).fetchone()
+            if not recente:
+                return None
+            limite = (
+                date.fromisoformat(recente["snapshot_date"]) - timedelta(days=minimo_giorni)
+            ).isoformat()
+            passato = conn.execute(
+                "SELECT oi_usd FROM macro_snapshots "
+                "WHERE oi_usd IS NOT NULL AND snapshot_date <= ? "
+                "ORDER BY snapshot_date DESC LIMIT 1",
+                (limite,),
+            ).fetchone()
+
+        if not passato or not passato["oi_usd"]:
+            return None
+        return (recente["oi_usd"] - passato["oi_usd"]) / passato["oi_usd"] * 100.0
+
     def get_edgar_stats(self) -> dict:
         """Statistiche aggregate del DB per l'health check.
 
@@ -213,7 +299,7 @@ class StructuredNotesDB:
         with self._conn() as conn:
             conn.executescript(
                 _DDL_NOTES + _DDL_BARRIERS + _DDL_BARRIER_SNAPSHOTS
-                + _DDL_REFRESH_RUNS + _DDL_IDX
+                + _DDL_REFRESH_RUNS + _DDL_MACRO_SNAPSHOTS + _DDL_IDX
             )
             self._migrate(conn)
         _log.info("Schema inizializzato: %s", self._path)

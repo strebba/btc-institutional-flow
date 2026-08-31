@@ -1,36 +1,29 @@
-name: EDGAR refresh (settimanale)
+name: Macro snapshot (giornaliero)
 
-# Refresh incrementale delle note strutturate IBIT da SEC EDGAR.
-# Esegue scripts/cron_edgar.py e committa il DB aggiornato su main (il filesystem
-# di DigitalOcean App Platform è effimero, quindi la fonte di verità è il DB
-# versionato nel repo; il push su main triggera il deploy).
+# Fotografa funding rate e open interest dei perpetui BTC da CoinGecko e committa
+# il DB aggiornato su main.
 #
-# Lo User-Agent SEC è in config/settings.yaml (email reale), quindi non servono
-# variabili esterne. Override opzionale via env var EDGAR_USER_AGENT.
+# Serve a far maturare la finestra a 7 giorni della variazione di open interest:
+# CoinGecko dà il livello istantaneo, non la serie, e il filesystem di DO App
+# Platform è effimero — quindi lo storico deve stare nel DB versionato, esattamente
+# come le note SEC di edgar-refresh.yml.
+#
+# La chiave CoinGecko è facoltativa: l'endpoint /derivatives risponde anche senza.
 
 on:
   schedule:
-    - cron: "30 6 * * 1"   # lunedì 06:30 UTC — primario
-    - cron: "30 6 * * 3"   # mercoledì 06:30 UTC — backup (recupera se lunedì fallisce)
+    - cron: "10 6 * * *"   # ogni giorno 06:10 UTC, prima del refresh EDGAR
   workflow_dispatch:
-    inputs:
-      lookback_days:
-        description: "Giorni di lookback (default 30 per il run schedulato)"
-        required: false
-        default: "30"
-        type: string
 
 permissions:
   contents: write           # per committare il DB aggiornato
 
 concurrency:
-  # stesso gruppo di macro-snapshot.yml: i due workflow committano lo stesso
-  # file .db, e due push concorrenti sullo stesso file finiscono in conflitto
-  group: db-write
+  group: db-write           # non deve sovrapporsi a edgar-refresh: stesso file .db
   cancel-in-progress: false
 
 jobs:
-  refresh:
+  snapshot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,12 +38,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run EDGAR refresh
+      - name: Run macro snapshot
         env:
           PYTHONPATH: .
-          EDGAR_USER_AGENT: ${{ vars.EDGAR_USER_AGENT }}
-          EDGAR_LOOKBACK_DAYS: ${{ inputs.lookback_days || '30' }}
-        run: python scripts/cron_edgar.py
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+        run: python scripts/cron_macro.py
 
       - name: Commit DB if changed
         run: |
@@ -58,7 +50,9 @@ jobs:
             git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add data/structured_notes.db
-            git commit -m "chore(edgar): refresh settimanale automatico"
+            # rebase prima del push: edgar-refresh committa lo stesso file
+            git commit -m "chore(macro): snapshot giornaliero funding/OI"
+            git pull --rebase origin main
             git push
           else
             echo "Nessuna modifica al DB — niente da committare."
@@ -75,7 +69,7 @@ jobs:
             echo "Telegram secrets non configurati — skip notifica"
             exit 0
           fi
-          python3 scripts/notify_telegram.py "⚠️ <b>EDGAR refresh FALLITO</b>
+          python3 scripts/notify_telegram.py "⚠️ <b>Macro snapshot FALLITO</b>
           Run: <a href='${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}'>${GITHUB_RUN_ID}</a>
           Data: $(date -u +'%Y-%m-%d %H:%M UTC')
-          Branch: ${GITHUB_REF_NAME}"
+          La finestra a 7 giorni dell'open interest non avanza."

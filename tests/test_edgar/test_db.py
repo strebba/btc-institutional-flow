@@ -281,3 +281,71 @@ class TestEdgarStatsDistingueRefreshDaScrittura:
         db.upsert_note(sample_note)
         stats = db.get_edgar_stats()
         assert stats["last_update"] == stats["last_note_written_at"]
+
+
+class TestMacroSnapshots:
+    """Storico dell'open interest, per la variazione a 7 giorni.
+
+    Sta nel DB versionato e non in runtime.db perche' il filesystem di DO e'
+    effimero: uno storico li' sparirebbe a ogni redeploy e la finestra a sette
+    giorni non maturerebbe mai.
+    """
+
+    def test_senza_storico_la_variazione_e_none(self, db):
+        assert db.get_oi_change_pct(days=7) is None
+
+    def test_con_un_solo_punto_la_variazione_e_none(self, db):
+        """Un punto non fa una variazione: meglio None che un numero inventato."""
+        db.record_macro_snapshot(funding_ann_pct=12.3, oi_usd=66e9, n_contracts=138)
+        assert db.get_oi_change_pct(days=7) is None
+
+    def test_registra_e_rilegge(self, db):
+        db.record_macro_snapshot(funding_ann_pct=12.3, oi_usd=66e9, n_contracts=138)
+        ultimo = db.get_last_macro_snapshot()
+        assert ultimo["funding_ann_pct"] == 12.3
+        assert ultimo["oi_usd"] == 66e9
+        assert ultimo["n_contracts"] == 138
+
+    def test_un_solo_snapshot_al_giorno(self, db):
+        """Due giri nello stesso giorno aggiornano la riga invece di duplicarla."""
+        db.record_macro_snapshot(funding_ann_pct=10.0, oi_usd=60e9, n_contracts=100)
+        db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=66e9, n_contracts=138)
+        with db._conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM macro_snapshots").fetchone()[0] == 1
+        assert db.get_last_macro_snapshot()["oi_usd"] == 66e9
+
+    def test_calcola_la_variazione_su_due_punti_distanti(self, db):
+        from datetime import date, timedelta
+
+        vecchio = (date.today() - timedelta(days=7)).isoformat()
+        db.record_macro_snapshot(funding_ann_pct=10.0, oi_usd=60e9, n_contracts=100,
+                                 snapshot_date=vecchio)
+        db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=66e9, n_contracts=138)
+        # da 60B a 66B = +10%
+        assert db.get_oi_change_pct(days=7) == pytest.approx(10.0, abs=0.01)
+
+    def test_ignora_i_punti_troppo_recenti(self, db):
+        """Con soli due giorni di storico la finestra a sette non e' ancora matura."""
+        from datetime import date, timedelta
+
+        db.record_macro_snapshot(funding_ann_pct=10.0, oi_usd=60e9, n_contracts=100,
+                                 snapshot_date=(date.today() - timedelta(days=2)).isoformat())
+        db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=66e9, n_contracts=138)
+        assert db.get_oi_change_pct(days=7) is None
+
+    def test_tollera_una_finestra_approssimata(self, db):
+        """Il workflow gira una volta al giorno ma puo' saltare: 6 o 9 giorni vanno bene."""
+        from datetime import date, timedelta
+
+        db.record_macro_snapshot(funding_ann_pct=10.0, oi_usd=50e9, n_contracts=100,
+                                 snapshot_date=(date.today() - timedelta(days=9)).isoformat())
+        db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=55e9, n_contracts=138)
+        assert db.get_oi_change_pct(days=7) == pytest.approx(10.0, abs=0.01)
+
+    def test_oi_zero_non_divide_per_zero(self, db):
+        from datetime import date, timedelta
+
+        db.record_macro_snapshot(funding_ann_pct=10.0, oi_usd=0.0, n_contracts=0,
+                                 snapshot_date=(date.today() - timedelta(days=7)).isoformat())
+        db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=66e9, n_contracts=138)
+        assert db.get_oi_change_pct(days=7) is None

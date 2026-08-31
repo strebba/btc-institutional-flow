@@ -242,11 +242,21 @@ def _collect_warnings(
         )
     elif stato_macro == "unavailable":
         out.append("pilastro macro senza dati: CoinGlass non risponde")
+    elif stato_macro == "partial_coingecko":
+        # Non e' spento: funding e open interest ci sono, e il funding da solo
+        # pesa 0,30 del pilastro. Dire "spento" manderebbe a cercare una chiave
+        # che ora serve per completare, non per accendere.
+        out.append(
+            "pilastro macro a metà: funding e open interest arrivano da CoinGecko, "
+            "long/short ratio e liquidazioni restano scoperti (servirebbe CoinGlass)"
+        )
 
     pillars = (signals or {}).get("pillars") or []
     for p in pillars:
         # la causa del macro è già stata nominata sopra: non ripeterla per sintomi
-        if p.get("name") == "macro" and stato_macro in ("no_api_key", "unavailable"):
+        if p.get("name") == "macro" and stato_macro in (
+            "no_api_key", "unavailable", "partial_coingecko"
+        ):
             continue
         comps = p.get("components") or {}
         vuoti = [k for k, v in comps.items() if v is None]

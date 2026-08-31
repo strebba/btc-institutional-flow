@@ -166,6 +166,38 @@ class TestWarningMacroAzionabile:
         assert "non risponde" in avviso
         assert "COINGLASS_API_KEY" not in avviso
 
+    def test_ripiego_coingecko_non_dice_che_il_pilastro_e_spento(
+        self, gex_payload, signals_payload
+    ):
+        """Con funding e OI da CoinGecko il pilastro non e' spento: e' a meta'.
+
+        Dire "spento" sarebbe falso e manderebbe a cercare una chiave che ora
+        serve solo per completare, non per accendere.
+        """
+        note = build_desk_note(
+            gex=gex_payload, signals=signals_payload,
+            macro={"source_status": "partial_coingecko"}, generated_at=_TS,
+        )
+        avviso = " ".join(note.warnings)
+        assert "spento" not in avviso
+        assert "CoinGecko" in avviso
+
+    def test_il_ripiego_dice_cosa_manca_ancora(self, gex_payload, signals_payload):
+        note = build_desk_note(
+            gex=gex_payload, signals=signals_payload,
+            macro={"source_status": "partial_coingecko"}, generated_at=_TS,
+        )
+        avviso = " ".join(note.warnings).lower()
+        assert "long/short" in avviso
+        assert "liquidazioni" in avviso
+
+    def test_il_ripiego_non_ripete_i_sintomi(self, gex_payload, signals_payload):
+        note = build_desk_note(
+            gex=gex_payload, signals=signals_payload,
+            macro={"source_status": "partial_coingecko"}, generated_at=_TS,
+        )
+        assert len([w for w in note.warnings if "macro" in w]) == 1
+
     def test_non_ripete_i_sintomi_dopo_aver_nominato_la_causa(
         self, gex_payload, signals_payload
     ):
