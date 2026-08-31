@@ -248,6 +248,35 @@ class TestCharmTide:
         piccolo = {"charm": {**_CHARM["charm"], "total_charm_usd_day": 8_000_000.0}}
         assert fact_charm_tide(_CHARM).salience > fact_charm_tide(piccolo).salience
 
+    def test_non_ripete_il_numero_del_titolo_come_se_fosse_una_notizia(self):
+        """Quando il picco e' oggi coincide col titolo: ripeterlo non aggiunge nulla.
+
+        Prima usciva "col massimo di −82,1M fra 0 giorni", che diceva due volte
+        lo stesso numero e per giunta contava i giorni a partire da zero.
+        """
+        corpo = " ".join(fact_charm_tide(_CHARM).body)
+        assert "fra 0 giorni" not in corpo
+        assert "il massimo è oggi" in corpo
+
+    def test_un_picco_futuro_viene_nominato_con_la_sua_distanza(self):
+        """Se la marea cresce, quando arriva il colmo e' l'informazione utile."""
+        cresce = {
+            "charm": {
+                **_CHARM["charm"],
+                "projection": [
+                    {"days_ahead": 0, "charm_usd_day": -20_000_000.0,
+                     "live_instruments": 854},
+                    {"days_ahead": 1, "charm_usd_day": -95_000_000.0,
+                     "live_instruments": 817},
+                    {"days_ahead": 2, "charm_usd_day": -31_000_000.0,
+                     "live_instruments": 654},
+                ],
+            }
+        }
+        corpo = " ".join(fact_charm_tide(cresce).body)
+        assert "95M" in corpo
+        assert "fra 1 giorno" in corpo, "un giorno solo non e' 'fra 1 giorni'"
+
 
 class TestVannaSign:
     def test_senza_blocco_charm_torna_none(self):

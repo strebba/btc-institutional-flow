@@ -91,6 +91,20 @@ def _extremity(percentile: float | None) -> float:
     return min(1.0, abs(percentile - 50.0) / 50.0)
 
 
+def _fra_giorni(days: int | float | None) -> str:
+    """Distanza temporale in italiano leggibile: 0 -> 'oggi', 1 -> 'fra 1 giorno'.
+
+    "fra 0 giorni" e "fra 1 giorni" sono due modi diversi di far sembrare il
+    report generato da una macchina.
+    """
+    if days is None:
+        return "n/d"
+    n = int(days)
+    if n <= 0:
+        return "oggi"
+    return "fra 1 giorno" if n == 1 else f"fra {fmt.count(n)} giorni"
+
+
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
@@ -621,7 +635,8 @@ def fact_charm_tide(gex: dict) -> Fact | None:
     if oggi is None or abs(oggi) < _MIN_CHARM_USD_M * 1e6:
         return None
 
-    # il picco della marea nei prossimi giorni, e quando arriva
+    # Il picco della marea, e quando arriva. Se cade oggi coincide col titolo:
+    # ripeterlo non aggiunge niente, quindi si dice solo che il colmo e' adesso.
     picco = max(proj, key=lambda p: abs(p.get("charm_usd_day") or 0), default=None)
     totale = sum(abs(p.get("charm_usd_day") or 0) for p in proj)
 
@@ -640,13 +655,16 @@ def fact_charm_tide(gex: dict) -> Fact | None:
         f"{fmt.usd_millions(totale, force_sign=False)}"
     )
     if picco is not None:
-        seconda += (
-            f", col massimo di {fmt.usd_millions(picco['charm_usd_day'])} "
-            f"fra {fmt.count(picco['days_ahead'])} giorni"
-        )
+        if int(picco.get("days_ahead") or 0) <= 0:
+            seconda += ", e il massimo è oggi"
+        else:
+            seconda += (
+                f", col massimo di {fmt.usd_millions(picco['charm_usd_day'])} "
+                f"{_fra_giorni(picco['days_ahead'])}"
+            )
     if salto:
         seconda += (
-            f". Poi la scadenza fra {fmt.count(salto[0])} giorni spegne "
+            f". Poi la scadenza {_fra_giorni(salto[0])} spegne "
             f"{fmt.count(salto[1])} strumenti e il flusso cala"
         )
     seconda += "."
