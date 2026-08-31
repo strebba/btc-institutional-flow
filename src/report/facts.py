@@ -33,6 +33,10 @@ _MIN_GEX_USD_M = 5.0
 _MIN_CHARM_USD_M = 5.0
 _MIN_VANNA_USD_M = 5.0
 
+#: Sotto questo funding annualizzato non c'e' niente da raccontare: e' il
+#: rendimento di un titolo di stato, non una posizione affollata.
+_MIN_FUNDING_ANN_PCT = 4.0
+
 #: Sotto questo nozionale la card parla di conteggi invece che di dollari: un
 #: numero piccolo in cifra tonda impressiona meno di "quattro barriere all'1%".
 _MIN_NOTIONAL_CARD_USD_M = 20.0
@@ -561,6 +565,7 @@ def extract_all(
     flows: dict | None = None,
     signals: dict | None = None,
     forecast: dict | None = None,
+    macro: dict | None = None,
 ) -> list[Fact]:
     """Esegue tutti gli estrattori, scartando quelli senza dati.
 
@@ -578,6 +583,7 @@ def extract_all(
         ("flows_rotation", lambda: fact_flows_rotation(flows or {})),
         ("charm_tide", lambda: fact_charm_tide(gex or {})),
         ("vanna_sign", lambda: fact_vanna_sign(gex or {})),
+        ("funding_cost", lambda: fact_funding_cost(macro or {})),
         ("signal_scoreboard", lambda: fact_signal_scoreboard(signals or {}, forecast)),
     ]
 
@@ -728,4 +734,72 @@ def fact_vanna_sign(gex: dict) -> Fact | None:
             + ("la vol in calo compra." if positiva else "la vol in calo non spinge più.")
         ),
         meta={"vanna_usd": vanna},
+    )
+
+
+# ─── Fatto macro ──────────────────────────────────────────────────────────────
+
+
+def fact_funding_cost(macro: dict) -> Fact | None:
+    """Quanto costa restare long, in percentuale annua.
+
+    E' l'unico fatto della serie che non viene dalle opzioni, e forse il piu'
+    leggibile di tutti: chiunque abbia pagato un interesse capisce cosa vuol
+    dire pagare il 12% l'anno per tenere aperta una posizione. Il segno dice
+    da che parte sta l'affollamento — i long pagano quando sono troppi.
+    """
+    funding = (macro or {}).get("funding_rate_annualized_pct")
+    if not isinstance(funding, (int, float)):
+        return None
+    if abs(funding) < _MIN_FUNDING_ANN_PCT:
+        return None
+
+    oi = (macro or {}).get("futures_oi_usd") or (macro or {}).get("oi_usd")
+    long_pagano = funding > 0
+
+    # 0,50 a soglia, 1,0 oltre il 60% annuo: sopra quella soglia il funding
+    # smette di essere un costo e diventa il fatto principale della giornata.
+    salience = _clamp01(0.35 + 0.55 * min(1.0, abs(funding) / 60.0))
+
+    chi_paga = "I long pagano gli short" if long_pagano else "Gli short pagano i long"
+    verso = (
+        "la leva è tutta da una parte, e quella parte è quella lunga"
+        if long_pagano
+        else "a pagare sono gli short: il ribasso è affollato, non il rialzo"
+    )
+
+    corpo = [
+        (
+            f"{chi_paga} {fmt.percent(abs(funding), decimals=1, force_sign=False)} l'anno per tenere "
+            f"aperta la posizione sui perpetui. È il prezzo dell'affollamento: "
+            f"{verso}."
+        )
+    ]
+    if isinstance(oi, (int, float)) and oi > 0:
+        # senza la scala il 12% non dice quanto pesa: su 66 miliardi sono
+        # miliardi di dollari l'anno che cambiano mano fra le due parti
+        annuo = abs(funding) / 100.0 * oi
+        corpo.append(
+            f"Su {fmt.usd_millions(oi, force_sign=False)} di posizioni aperte fa circa "
+            f"{fmt.usd_millions(annuo, force_sign=False)} l'anno che passano da una parte all'altra."
+        )
+
+    return Fact(
+        key="funding_cost",
+        topic="macro",
+        salience=salience,
+        headline=(
+            f"Stare long costa {fmt.percent(abs(funding), decimals=1, force_sign=False)} l'anno"
+            if long_pagano
+            else f"Stare short costa {fmt.percent(abs(funding), decimals=1, force_sign=False)} l'anno"
+        ),
+        body=corpo,
+        hero_value=fmt.percent(funding, decimals=1),
+        hero_caption="Funding annualizzato\nsui perpetui BTC",
+        sign=SIGN_NEGATIVE if long_pagano else SIGN_POSITIVE,
+        takeaway=(
+            f"{chi_paga} {fmt.percent(abs(funding), decimals=1, force_sign=False)} "
+            f"l'anno per restare esposti."
+        ),
+        meta={"funding_ann_pct": funding, "oi_usd": oi},
     )

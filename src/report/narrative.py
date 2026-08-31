@@ -186,7 +186,8 @@ def build_desk_note(
     ts = generated_at or datetime.now(timezone.utc)
 
     facts = extract_all(
-        gex=gex, barriers=barriers, flows=flows, signals=signals, forecast=forecast
+        gex=gex, barriers=barriers, flows=flows, signals=signals,
+        forecast=forecast, macro=macro,
     )
     scelti = select_facts(facts)
 

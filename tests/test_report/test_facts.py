@@ -9,6 +9,7 @@ from src.report.facts import (
     fact_charm_tide,
     fact_flows_3d,
     fact_flows_rotation,
+    fact_funding_cost,
     fact_gex_asymmetry,
     fact_gex_flip,
     fact_gex_walls,
@@ -337,3 +338,64 @@ class TestBarriereConNozionale:
     def test_il_nozionale_finisce_nel_meta(self):
         f = fact_barrier_nearest(self._payload(50_000_000.0))
         assert f.meta["notional_within_2pct_usd"] == 150_000_000.0
+
+
+class TestFundingPerpetui:
+    """Il costo di restare long, che e' il fatto che CoinGecko ha reso disponibile.
+
+    E' l'unico numero della serie che non viene dalle opzioni: dice quanto pagano
+    i long agli short ogni anno per tenere la posizione aperta, ed e' leggibile
+    da chiunque abbia mai pagato un interesse.
+    """
+
+    _MACRO = {
+        "source_status": "partial_coingecko",
+        "funding_source": "coingecko",
+        "funding_rate_annualized_pct": 12.33,
+        "futures_oi_usd": 66_238_576_882.0,
+    }
+
+    def test_senza_macro_non_produce_niente(self):
+        assert fact_funding_cost({}) is None
+
+    def test_senza_funding_non_produce_niente(self):
+        assert fact_funding_cost({"futures_oi_usd": 6.6e10}) is None
+
+    def test_funding_positivo_dice_chi_paga(self):
+        f = fact_funding_cost(self._MACRO)
+        assert f is not None
+        assert "12,3" in f.hero_value
+        assert "long" in " ".join(f.body).lower()
+
+    def test_funding_negativo_ribalta_il_verso(self):
+        f = fact_funding_cost({**self._MACRO, "funding_rate_annualized_pct": -8.0})
+        assert f is not None
+        corpo = " ".join(f.body).lower()
+        assert "short" in corpo and "pagano" in corpo
+
+    def test_un_funding_piatto_non_e_un_fatto(self):
+        """Sotto la soglia non c'e' niente da raccontare: e' il costo di un BTP."""
+        assert fact_funding_cost({**self._MACRO, "funding_rate_annualized_pct": 1.2}) is None
+
+    def test_l_open_interest_da_la_scala(self):
+        f = fact_funding_cost(self._MACRO)
+        assert "66" in " ".join(f.body), "senza l'OI il 12% non dice quanto pesa"
+
+    def test_un_funding_estremo_e_piu_saliente(self):
+        tiepido = fact_funding_cost(self._MACRO)
+        rovente = fact_funding_cost({**self._MACRO, "funding_rate_annualized_pct": 60.0})
+        assert rovente.salience > tiepido.salience
+
+    def test_ha_una_famiglia_sua(self):
+        """Non e' ne' gex ne' flows: senza un topic proprio il cap per famiglia
+        lo farebbe competere con card che non gli somigliano."""
+        f = fact_funding_cost(self._MACRO)
+        assert f.topic == "macro"
+
+    def test_entra_nel_registro_degli_estrattori(self, gex_payload):
+        chiavi = {f.key for f in extract_all(gex=gex_payload, macro=self._MACRO)}
+        assert "funding_cost" in chiavi
+
+    def test_il_registro_regge_un_macro_assente(self, gex_payload):
+        """Il macro e' opzionale: chi chiamava extract_all senza non deve rompersi."""
+        extract_all(gex=gex_payload)

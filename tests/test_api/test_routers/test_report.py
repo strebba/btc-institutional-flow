@@ -58,6 +58,19 @@ _SIGNALS = {
 }
 _FORECAST = {"open": 12, "total": 12}
 
+#: Coerente con _SIGNALS, dove il pilastro macro ha tutti i fattori a None.
+#: Va mockato come gli altri: senza, ogni test di questo file uscirebbe in rete
+#: verso CoinGlass e CoinGecko, e il risultato cambierebbe col mercato.
+_MACRO = {"source_status": "no_api_key"}
+
+#: Il ripiego CoinGecko: due fattori su cinque, ma il funding e' quello che pesa.
+_MACRO_COINGECKO = {
+    "source_status": "partial_coingecko",
+    "funding_source": "coingecko",
+    "funding_rate_annualized_pct": 12.33,
+    "futures_oi_usd": 66_238_576_882.0,
+}
+
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
@@ -73,13 +86,14 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def fonti():
-    """Mocka i cinque endpoint a monte del Desk Note."""
+    """Mocka i sei endpoint a monte del Desk Note."""
     with (
         patch("src.api.routers.gex.get_gex", return_value=_resp(_GEX)),
         patch("src.api.routers.barriers.get_barriers", return_value=_resp(_BARRIERS)),
         patch("src.api.routers.flows.get_flows", return_value=_resp(_FLOWS)),
         patch("src.api.routers.signals.get_signals", return_value=_resp(_SIGNALS)),
         patch("src.api.routers.forecast.forecast_status", return_value=_resp(_FORECAST)),
+        patch("src.api.routers.signals.get_macro", return_value=_resp(_MACRO)),
     ):
         yield
 
@@ -108,6 +122,7 @@ class TestCards:
             patch("src.api.routers.flows.get_flows", return_value=_resp(_FLOWS)),
             patch("src.api.routers.signals.get_signals", return_value=_resp(_SIGNALS)),
             patch("src.api.routers.forecast.forecast_status", return_value=_resp(_FORECAST)),
+            patch("src.api.routers.signals.get_macro", return_value=_resp(_MACRO)),
         ):
             r = client.get("/api/report/cards")
         assert r.status_code == 200
@@ -120,10 +135,47 @@ class TestCards:
             patch("src.api.routers.flows.get_flows", side_effect=RuntimeError("giù")),
             patch("src.api.routers.signals.get_signals", side_effect=RuntimeError("giù")),
             patch("src.api.routers.forecast.forecast_status", side_effect=RuntimeError("giù")),
+            patch("src.api.routers.signals.get_macro", side_effect=RuntimeError("giù")),
         ):
             r = client.get("/api/report/cards")
         assert r.status_code == 200
         assert r.json()["data"]["cards"] == []
+
+    @staticmethod
+    def _con_macro(client, macro: dict) -> dict:
+        # l'edizione e' in cache: senza svuotarla la seconda chiamata
+        # restituirebbe la prima, e il confronto sarebbe fra due copie uguali
+        from src.api import cache
+
+        cache.cache_clear()
+        with (
+            patch("src.api.routers.gex.get_gex", return_value=_resp(_GEX)),
+            patch("src.api.routers.barriers.get_barriers", return_value=_resp(_BARRIERS)),
+            patch("src.api.routers.flows.get_flows", return_value=_resp(_FLOWS)),
+            patch("src.api.routers.signals.get_signals", return_value=_resp(_SIGNALS)),
+            patch("src.api.routers.forecast.forecast_status", return_value=_resp(_FORECAST)),
+            patch("src.api.routers.signals.get_macro", return_value=_resp(macro)),
+        ):
+            return client.get("/api/report/cards").json()["data"]
+
+    def test_il_ripiego_non_dice_piu_che_il_pilastro_e_spento(self, client):
+        d = self._con_macro(client, _MACRO_COINGECKO)
+        assert not any("spento" in w for w in d["warnings"])
+        assert any("CoinGecko" in w for w in d["warnings"])
+
+    def test_il_funding_entra_fra_i_candidati(self, client):
+        """Con 12,3% il funding e' un fatto vero, ma non per forza uno dei cinque:
+        in questo tape ci sono cinque fatti piu' salienti, e la selezione lo dice."""
+        senza = self._con_macro(client, _MACRO)
+        con = self._con_macro(client, _MACRO_COINGECKO)
+        assert con["facts_considered"] == senza["facts_considered"] + 1
+
+    def test_un_funding_rovente_si_prende_una_card(self, client):
+        """A 60% annuo il costo del carry diventa la notizia, e vince uno slot."""
+        d = self._con_macro(
+            client, {**_MACRO_COINGECKO, "funding_rate_annualized_pct": 60.0}
+        )
+        assert any(c["source_key"] == "funding_cost" for c in d["cards"])
 
     def test_il_payload_e_json_serializzabile(self, client, fonti):
         json.dumps(client.get("/api/report/cards").json())
