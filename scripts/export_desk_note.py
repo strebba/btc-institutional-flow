@@ -76,6 +76,22 @@ def _has_event() -> bool:
     return should_publish(eventi)
 
 
+def _fetch(url: str) -> str:
+    """Scarica l'HTML della pagina invece di far navigare il browser.
+
+    Chromium non eredita il proxy dell'ambiente, quindi `page.goto` fallisce con
+    ERR_CONNECTION_RESET dove una normale richiesta HTTP passa senza problemi.
+    Scaricare qui e usare `set_content` aggira il problema, ed e' anche piu'
+    solido: la pagina del Desk Note e' autoconsistente — font incorporati, zero
+    risorse esterne — quindi al browser non serve rete per renderizzarla.
+    """
+    import requests
+
+    resp = requests.get(url, timeout=90)
+    resp.raise_for_status()
+    return resp.text
+
+
 def _launch(playwright):
     """Avvia Chromium, aggirando i disallineamenti di versione dei browser.
 
@@ -148,7 +164,7 @@ def main() -> int:
     parser.add_argument(
         "--url",
         default=None,
-        help="Renderizza da un'istanza in ascolto invece che in-process.",
+        help="Scarica la pagina da un'istanza in ascolto invece di comporla in-process.",
     )
     parser.add_argument(
         "--only-on-event",
@@ -170,8 +186,14 @@ def main() -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    html = None
-    if not args.url:
+    if args.url:
+        try:
+            html = _fetch(args.url)
+        except Exception as exc:  # noqa: BLE001 — l'export e' un job, non un servizio
+            _log.error("Impossibile scaricare %s: %s", args.url, exc)
+            return 1
+        _log.info("Scaricati %d KB da %s", len(html) // 1024, args.url)
+    else:
         html, n_cards = _compose()
         if n_cards == 0:
             _log.error("Edizione vuota: i dati non bastano a comporre nessuna card.")
@@ -182,10 +204,7 @@ def main() -> int:
             browser = _launch(p)
             # deviceScaleFactor 1: la card è già 1080px, non serve raddoppiare
             page = browser.new_page(viewport=_VIEWPORT, device_scale_factor=1)
-            if args.url:
-                page.goto(args.url, wait_until="networkidle", timeout=45_000)
-            else:
-                page.set_content(html, wait_until="networkidle", timeout=45_000)
+            page.set_content(html, wait_until="networkidle", timeout=45_000)
             scritti = _shoot(page, out_dir)
             browser.close()
     except Exception as exc:  # noqa: BLE001 — l'export è un job, non un servizio
