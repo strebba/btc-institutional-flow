@@ -50,12 +50,20 @@ services:
         value: "data/structured_notes.db"
         scope: RUN_TIME
         type: GENERAL
-      # Abilita il pilastro macro (funding, OI, long/short, liquidazioni) e
-      # l'enrichment GEX. Senza, /api/macro risponde source_status=no_api_key e
-      # il pilastro viene declassato dal peso di copertura invece di inventare un
-      # punteggio. Il valore va inserito da Console → Settings → App Spec: non
-      # deve stare nel repo.
+      # Completa il pilastro macro (funding, OI, long/short, liquidazioni) e
+      # abilita l'enrichment GEX. Senza, il ripiego CoinGecko copre funding e
+      # open interest e /api/macro risponde source_status=partial_coingecko: il
+      # pilastro resta a copertura parziale e viene pesato di conseguenza,
+      # invece di inventare i due fattori mancanti. Il valore va inserito da
+      # Console → Settings → App Spec: non deve stare nel repo.
       - key: COINGLASS_API_KEY
+        value: ""
+        scope: RUN_TIME
+        type: SECRET
+      # Facoltativa: l'endpoint /derivatives di CoinGecko risponde anche senza
+      # chiave, quella del tier Demo alza solo i limiti di frequenza. Predisposta
+      # vuota per poterla valorizzare senza toccare la spec.
+      - key: COINGECKO_API_KEY
         value: ""
         scope: RUN_TIME
         type: SECRET

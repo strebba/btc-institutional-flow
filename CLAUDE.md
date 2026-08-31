@@ -18,7 +18,7 @@ make compose-up     # replica ambiente DO: nginx:8080 + API + dashboard (docker 
 make test           # pytest tests/ -v  (~834 test)
 make test-unit      # pytest tests/unit/ -v -q (esclude integration)
 make lint           # ruff check src/ tests/
-make update-all     # update-gex + update-flows + update-edgar (cron data refresh)
+make update-all     # update-gex + update-flows + update-edgar + update-macro (cron refresh)
 ```
 
 Lint/type: `ruff` (configurato in `pyproject.toml`), `.pre-commit-config.yaml`.
@@ -37,7 +37,7 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 |--------|-------|
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
-| `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati) |
+| `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati), `coingecko_client.py` (ripiego funding/OI) |
 | `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
 | `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (6 moduli con validation tab), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
 | `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`, `schemas.py` |
@@ -106,6 +106,29 @@ nel repo** (refresh EDGAR → commit → redeploy). Config nginx: `nginx.conf`; 
 `supervisord.conf`. Modifiche alla spec DO: applicare da Console → Settings → App Spec.
 Local mirror: `docker compose up -d --build` → http://localhost:8080 (dash) e /api/docs (API).
 La dashboard gira anche in locale standalone (`make run-dashboard`, porta 8501).
+
+## Fonti macro: CoinGlass preferito, CoinGecko di ripiego
+
+`macro_fetcher.fetch_macro_data()` prova prima **CoinGlass** (tutti e cinque i
+fattori, richiede `COINGLASS_API_KEY`). Se il funding manca ancora, ripiega su
+**CoinGecko** — `GET /api/v3/derivatives`, che risponde anche senza chiave — e
+ne ricava funding rate pesato per open interest e OI aggregato: due fattori su
+cinque, ma il funding da solo pesa 0,30 del pilastro.
+
+Attenzione alle **convenzioni**: CoinGlass restituisce una frazione (`0.0001`) e
+si annualizza con `×3×365×100`; CoinGecko restituisce già una percentuale
+(`0.01`), quindi il fattore 100 va tolto. Sbagliarlo dà 1230% invece di 12,3% e
+lo scorer legge panico estremo dove c'è un mercato tiepido.
+
+`source_status` ha quattro stati: `ok`, `partial_coingecko` (ripiego attivo),
+`no_api_key`, `unavailable`. Il Desk Note li distingue nei warning.
+
+CoinGecko non ha storico, quindi la **variazione a 7 giorni dell'OI** arriva
+dalla tabella `macro_snapshots` nel DB versionato, alimentata da
+`scripts/cron_macro.py` + `.github/workflows/macro-snapshot.yml` (giornaliero,
+committa il DB). Lo storico non può stare in `runtime.db`: il filesystem DO è
+effimero e la finestra non maturerebbe mai. I due workflow che scrivono il DB
+condividono il gruppo di concorrenza `db-write`.
 
 ## Refresh dati EDGAR (note IBIT)
 

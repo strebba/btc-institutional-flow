@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration lint typecheck install run-api run-dashboard compose-up compose-down update-gex update-flows update-edgar update-all
+.PHONY: test test-unit test-integration lint typecheck install run-api run-dashboard compose-up compose-down update-gex update-flows update-edgar update-macro update-all
 
 install:
 	pip install -e ".[dev]"
@@ -34,7 +34,11 @@ update-flows:
 update-edgar:
 	python3 scripts/run_edgar.py
 
-update-all: update-gex update-flows update-edgar
+# fotografia giornaliera di funding e OI: fa maturare la finestra a 7 giorni
+update-macro:
+	python3 scripts/cron_macro.py
+
+update-all: update-gex update-flows update-edgar update-macro
 
 run-api:
 	DB_PATH=data/runtime.db python3 run_api.py
