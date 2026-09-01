@@ -115,10 +115,16 @@ fattori, richiede `COINGLASS_API_KEY`). Se il funding manca ancora, ripiega su
 ne ricava funding rate pesato per open interest e OI aggregato: due fattori su
 cinque, ma il funding da solo pesa 0,30 del pilastro.
 
-Attenzione alle **convenzioni**: CoinGlass restituisce una frazione (`0.0001`) e
-si annualizza con `×3×365×100`; CoinGecko restituisce già una percentuale
-(`0.01`), quindi il fattore 100 va tolto. Sbagliarlo dà 1230% invece di 12,3% e
-lo scorer legge panico estremo dove c'è un mercato tiepido.
+**Convenzione del funding — una sola, per entrambe le fonti.** CoinGlass e
+CoinGecko restituiscono tutte e due punti percentuali per 8 ore (`0.01` = 0,01%),
+quindi si annualizzano con `×3×365` e basta. Verificato confrontando le due
+metriche OI-weighted nello stesso istante: 0,005477 e 0,007499, rapporto 0,73× —
+se le convenzioni fossero diverse sarebbe ~100×.
+
+La conversione sta **solo** in `src/flows/funding.py`: era duplicata in cinque
+punti e in quattro applicava un `×100` di troppo, che dava 599% invece di 6% e
+faceva leggere allo scorer "flush imminente" dove il mercato era tiepido. Non
+reintrodurla nei chiamanti.
 
 `source_status` ha quattro stati: `ok`, `partial_coingecko` (ripiego attivo),
 `no_api_key`, `unavailable`. Il Desk Note li distingue nei warning.

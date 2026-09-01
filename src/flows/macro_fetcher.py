@@ -28,6 +28,7 @@ import requests
 
 from src.flows.coingecko_client import CoinGeckoClient
 from src.flows.coinglass_client import CoinGlassClient, CoinGlassError
+from src.flows.funding import annualize_funding_pct
 
 _log = logging.getLogger(__name__)
 
@@ -115,9 +116,7 @@ def _fetch_coinglass(cg, out: MacroData) -> bool:
         try:
             fr = cg.fetch_funding_rate_history(days=14)
             if not fr.empty:
-                # CoinGlass restituisce una frazione (0.0001 = 0,01% per 8h):
-                # il x100 qui e' quello che CoinGecko *non* vuole.
-                out.funding_rate_annualized_pct = float(fr.iloc[-1]) * 3 * 365 * 100
+                out.funding_rate_annualized_pct = annualize_funding_pct(float(fr.iloc[-1]))
                 out.funding_source = SOURCE_COINGLASS
         except (CoinGlassError, requests.RequestException) as exc:
             _log.warning("Funding rate fetch failed: %s", exc)

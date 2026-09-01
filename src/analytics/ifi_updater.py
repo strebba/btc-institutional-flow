@@ -48,12 +48,13 @@ def _build_df(fetch_days: int) -> pd.DataFrame:
     cg_days = min(fetch_days, 500)
     try:
         from src.flows.coinglass_client import CoinGlassClient
+        from src.flows.funding import annualize_funding_pct
         cg = CoinGlassClient()
 
         try:
             fr = cg.fetch_funding_rate_history(days=min(cg_days, 333))
             if not fr.empty:
-                fr_ann = (fr * 3 * 365 * 100).rename("funding_rate")
+                fr_ann = annualize_funding_pct(fr).rename("funding_rate")
                 fr_daily = fr_ann.resample("D").last()
                 fr_daily.index = fr_daily.index.tz_localize(None).normalize()
                 merged = merged.join(fr_daily, how="left")

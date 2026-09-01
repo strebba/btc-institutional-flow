@@ -276,6 +276,7 @@ def get_macro() -> JSONResponse:
 
     try:
         from src.flows.coinglass_client import CoinGlassClient
+        from src.flows.funding import annualize_funding_pct
 
         cg = CoinGlassClient()
 
@@ -285,11 +286,13 @@ def get_macro() -> JSONResponse:
         try:
             fr_series = cg.fetch_funding_rate_history(days=90)
             if not fr_series.empty:
-                funding_rate_8h_pct = round(float(fr_series.iloc[-1]) * 100, 4)
-                funding_rate_ann_pct = round(float(fr_series.iloc[-1]) * 3 * 365 * 100, 2)
+                # CoinGlass restituisce gia' punti percentuali per 8 ore:
+                # nessun x100, cfr. src/flows/funding.py
+                funding_rate_8h_pct = round(float(fr_series.iloc[-1]), 4)
+                funding_rate_ann_pct = round(annualize_funding_pct(float(fr_series.iloc[-1])), 2)
                 funding_history = [
                     {"date": str(ts.date()) if hasattr(ts, "date") else str(ts),
-                     "rate_8h_pct": round(float(v) * 100, 4)}
+                     "rate_8h_pct": round(float(v), 4)}
                     for ts, v in fr_series.tail(90).items()
                 ]
         except Exception as _e:
@@ -395,7 +398,7 @@ def get_macro() -> JSONResponse:
                 _f, _oi, _n = CoinGeckoClient().fetch_funding_and_oi()
                 if _f is not None:
                     funding_rate_ann_pct = round(_f, 2)
-                    funding_rate_8h_pct = round(_f / (3 * 365), 4)
+                    funding_rate_8h_pct = round(_f / (3 * 365), 4)  # gia' annualizzato
                     funding_source = SOURCE_COINGECKO
                     da_coingecko = True
                     if _oi is not None and oi_latest_usd is None:

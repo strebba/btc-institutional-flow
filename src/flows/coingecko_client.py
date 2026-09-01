@@ -17,28 +17,15 @@ from typing import Any
 import requests
 
 from src.config import get_settings, setup_logging
+from src.flows.funding import annualize_funding_pct
 
 _log = setup_logging("flows.coingecko")
 
-#: Un funding rate si annualizza su tre finestre da 8 ore al giorno.
-_FUNDING_WINDOWS_PER_DAY = 3
-_DAYS_PER_YEAR = 365
+__all__ = ["CoinGeckoClient", "CoinGeckoError", "annualize_funding_pct"]
 
 
 class CoinGeckoError(Exception):
     """Errore nel raggiungere o interpretare l'API CoinGecko."""
-
-
-def annualize_funding_pct(rate_pct_8h: float) -> float:
-    """Annualizza un funding rate già espresso in percentuale.
-
-    CoinGecko restituisce ``0.01`` per intendere *lo 0,01% per 8 ore*, mentre
-    CoinGlass restituisce la stessa cosa come frazione (``0.0001``). Per questo
-    ``macro_fetcher`` moltiplica i valori CoinGlass anche per 100 e qui no:
-    applicare quel fattore in più darebbe 1230% invece di 12,3%, e lo scorer del
-    funding leggerebbe panico estremo dove c'è un mercato tiepido.
-    """
-    return rate_pct_8h * _FUNDING_WINDOWS_PER_DAY * _DAYS_PER_YEAR
 
 
 def _num(value: Any) -> float | None:

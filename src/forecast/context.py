@@ -120,11 +120,12 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
     liquidations_long = liquidations_short = None
     try:
         from src.flows.coinglass_client import CoinGlassClient
+        from src.flows.funding import annualize_funding_pct
         cg = CoinGlassClient()
         try:
             fr = cg.fetch_funding_rate_history(days=14)
             if not fr.empty:
-                funding_rate_ann = float(fr.iloc[-1]) * 3 * 365 * 100
+                funding_rate_ann = annualize_funding_pct(float(fr.iloc[-1]))
         except Exception as exc:
             _log.warning("Funding rate non disponibile: %s", exc)
         try:

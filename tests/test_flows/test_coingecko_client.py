@@ -4,8 +4,8 @@ Serve a coprire i due fattori macro che CoinGlass darebbe ma che senza chiave
 mancano: funding rate e open interest. Non copre long/short né liquidazioni —
 CoinGecko non li espone.
 
-Il test che conta di più è :class:`TestConversioneFunding`: le due fonti usano
-convenzioni diverse e sbagliarle sposta il numero di due ordini di grandezza.
+La conversione del funding è testata in ``test_funding.py``: è condivisa con
+CoinGlass e sbagliarla sposta il numero di due ordini di grandezza.
 """
 from __future__ import annotations
 
@@ -44,12 +44,11 @@ def _con_risposta(payload):
 
 
 class TestConversioneFunding:
-    """CoinGecko dà percentuali, CoinGlass frazioni.
+    """Entrambe le fonti danno punti percentuali per 8 ore.
 
-    CoinGlass restituisce 0.0001 e macro_fetcher annualizza con x3x365x100.
-    CoinGecko restituisce già 0.01 (che *è* lo 0,01%), quindi va annualizzato con
-    x3x365 e basta. Applicare il fattore 100 di troppo darebbe 1230% invece di
-    12,3%, e lo scorer lo leggerebbe come panico estremo invece che mercato tiepido.
+    La convenzione unica vive in :mod:`src.flows.funding`, con i test che la
+    verificano sui valori reali delle due API. Qui si controlla solo che il
+    client CoinGecko la usi invece di rifarsi la propria.
     """
 
     def test_lo_zero_virgola_zero_uno_percento_fa_dodici_percento(self):
