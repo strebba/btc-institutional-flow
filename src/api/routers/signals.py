@@ -393,12 +393,13 @@ def get_macro() -> JSONResponse:
         if funding_rate_ann_pct is None:
             try:
                 from src.flows.coingecko_client import CoinGeckoClient
+                from src.flows.funding import funding_pct_8h_from_annual
                 from src.flows.macro_fetcher import _oi_change_dallo_storico
 
                 _f, _oi, _n = CoinGeckoClient().fetch_funding_and_oi()
                 if _f is not None:
                     funding_rate_ann_pct = round(_f, 2)
-                    funding_rate_8h_pct = round(_f / (3 * 365), 4)  # gia' annualizzato
+                    funding_rate_8h_pct = round(funding_pct_8h_from_annual(_f), 4)
                     funding_source = SOURCE_COINGECKO
                     da_coingecko = True
                     if _oi is not None and oi_latest_usd is None:

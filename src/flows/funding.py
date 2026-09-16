@@ -38,3 +38,14 @@ def annualize_funding_pct(rate_pct_8h: float) -> float:
         Il tasso annualizzato in punti percentuali: ``0.01`` → ``10.95``.
     """
     return rate_pct_8h * FUNDING_WINDOWS_PER_DAY * DAYS_PER_YEAR
+
+
+def funding_pct_8h_from_annual(rate_pct_annual: float) -> float:
+    """Inverte :func:`annualize_funding_pct`: dall'annualizzato al tasso per 8h.
+
+    Serve quando una fonte (es. CoinGecko) restituisce già il valore
+    annualizzato e va mostrato anche nella sua forma originale per finestra
+    da 8 ore. Stessa convenzione, stessa unica sede: non ricalcolare
+    ``/ (3 * 365)`` nei chiamanti.
+    """
+    return rate_pct_annual / (FUNDING_WINDOWS_PER_DAY * DAYS_PER_YEAR)
