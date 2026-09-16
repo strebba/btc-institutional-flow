@@ -66,9 +66,9 @@ class TestIbitBtcRatio:
     def test_ratio_calculation(self, fetcher):
         # Simula BTC=60000 e IBIT=60 → ratio=0.001
         import sqlite3
-        from datetime import datetime
+        from datetime import datetime, timezone
         with sqlite3.connect(fetcher._path) as conn:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             d   = date.today().isoformat()
             conn.execute(
                 "INSERT INTO prices (ticker,date,close,open,high,low,volume,created_at) "

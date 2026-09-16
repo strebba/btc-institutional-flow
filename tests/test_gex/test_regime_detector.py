@@ -1,7 +1,7 @@
 """Test unitari per RegimeDetector."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from src.gex.models import GexSnapshot
@@ -16,7 +16,7 @@ def _make_snapshot(
     flip: float = 70_000,
 ) -> GexSnapshot:
     return GexSnapshot(
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         spot_price=spot,
         total_net_gex=gex,
         gamma_flip_price=flip,

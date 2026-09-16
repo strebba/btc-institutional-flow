@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,6 +44,18 @@ from src.api.scheduler import (
 _log = logging.getLogger("api.main")
 
 
+# ─── Lifespan (startup / shutdown) ──────────────────────────────────────────
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    asyncio.create_task(start_alert_scheduler())
+    asyncio.create_task(start_ifi_scheduler())
+    asyncio.create_task(start_forecast_scheduler())
+    yield
+    stop_all_schedulers()
+
+
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -52,6 +65,7 @@ app = FastAPI(
     # Docs/OpenAPI sotto /api: la root del dominio è la dashboard Streamlit
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
+    lifespan=_lifespan,
 )
 
 # CORS
@@ -232,17 +246,3 @@ def health_scheduler() -> JSONResponse:
         "forecast": _forecast_scheduler is not None and getattr(_forecast_scheduler, "running", False),
     })
 
-
-# ─── Lifespan (startup / shutdown) ──────────────────────────────────────────
-
-
-@app.on_event("startup")
-async def _startup_schedulers():
-    asyncio.create_task(start_alert_scheduler())
-    asyncio.create_task(start_ifi_scheduler())
-    asyncio.create_task(start_forecast_scheduler())
-
-
-@app.on_event("shutdown")
-async def _shutdown_schedulers():
-    stop_all_schedulers()
