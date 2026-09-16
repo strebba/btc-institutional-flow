@@ -19,10 +19,10 @@ test-integration:
 	python3 -m pytest tests/integration/ -v --tb=short
 
 lint:
-	ruff check src/ tests/
+	.venv/bin/ruff check src/ tests/
 
 typecheck:
-	mypy src/ --ignore-missing-imports || true
+	.venv/bin/mypy src/ --ignore-missing-imports
 
 update-gex:
 	python3 scripts/cron_gex.py

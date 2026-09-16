@@ -56,3 +56,14 @@ jobs:
           Run: <a href='${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}'>${GITHUB_RUN_ID}</a>
           Data: $(date -u +'%Y-%m-%d %H:%M UTC')
           Branch: ${GITHUB_REF_NAME}"
+
+  docker-build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    # Solo un build, senza push: intercetta un Dockerfile rotto (path COPY,
+    # dipendenza mancante nello stage runtime) prima che arrivi al deploy DO,
+    # che builda dallo stesso Dockerfile su push a main.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker build -t btc-institutional-flow:ci .
