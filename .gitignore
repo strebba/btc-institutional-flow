@@ -15,6 +15,7 @@ data/*.db-wal
 # structured_notes.db, cosi git checkout/reset non azzera piu le predizioni runtime.
 data/runtime.db
 logs/
+out/tradingview/
 .claude/
 .DS_Store
 .agents/

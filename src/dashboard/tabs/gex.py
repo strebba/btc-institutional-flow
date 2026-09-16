@@ -7,6 +7,7 @@ import streamlit as st
 from src.config import setup_logging
 from src.dashboard.charts import gex_profile, gex_walls, regime_bars
 from src.dashboard.data_loader import run_regime
+from src.gex.pine_export import build_pine_indicator
 
 _log = setup_logging("dashboard.tabs.gex")
 
@@ -105,6 +106,25 @@ l'intensità dell'effetto. La linea verticale è il prezzo spot corrente.
         mc1, mc2 = st.columns(2)
         mc1.metric("Max Pain", f"${snap.get('max_pain') or 0:,.0f}")
         mc2.metric("Strumenti BTC", f"{snap.get('n_instruments') or 0}")
+
+    # Indicatore TradingView
+    with st.expander("📈 Indicatore TradingView (Pine Script)"):
+        st.caption(
+            "Congela i livelli GEX correnti (gamma flip, put/call wall, max pain) "
+            "in un indicatore Pine v6 da incollare nel Pine Editor di TradingView. "
+            "Pine Script non può leggere dati esterni in tempo reale: per aggiornare "
+            "i livelli bisogna rigenerare e incollare di nuovo."
+        )
+        if st.button("Genera indicatore TradingView", key="gen_pine_indicator"):
+            pine_code = build_pine_indicator(snap)
+            st.code(pine_code, language="text")
+            st.download_button(
+                "Scarica gex_levels.pine",
+                data=pine_code,
+                file_name="gex_levels.pine",
+                mime="text/plain",
+                key="dl_pine_indicator",
+            )
 
     # Expander tecnico
     with st.expander("🔬 Dettaglio tecnico: come calcoliamo il GEX"):
