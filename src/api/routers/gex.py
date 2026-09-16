@@ -17,14 +17,19 @@ router = APIRouter(prefix="/api/gex", tags=["gex"])
 def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
     cached = cache_get("gex_enrichment")
     if cached is not None:
+        our_total = our_call_oi + our_put_oi
         deribit_oi_contracts = cached.get("_deribit_oi_contracts", 0)
         if deribit_oi_contracts > 0:
-            our_total = our_call_oi + our_put_oi
             cov = round(min(our_total / deribit_oi_contracts * 100, 100.0), 1)
             label = "good" if cov >= 80 else "degraded" if cov >= 50 else "poor"
             cached["data_quality"]["coverage_pct"] = cov
             cached["data_quality"]["quality_label"] = label
             cached["data_quality"]["fetched_oi_contracts"] = round(our_total, 1)
+        all_oi_contracts = cached.get("_all_oi_contracts", 0)
+        if all_oi_contracts > 0:
+            cached["data_quality"]["market_coverage_pct"] = round(
+                min(our_total / all_oi_contracts * 100, 100.0), 1
+            )
         return cached
 
     from src.flows.coinglass_client import CoinGlassClient
@@ -38,13 +43,17 @@ def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
             "quality_label": "unknown",
             "deribit_oi_usd": None,
             "fetched_oi_contracts": round(our_call_oi + our_put_oi, 1),
+            "market_coverage_pct": None,
         },
         "market_context": {
             "market_pcr": None,
             "market_max_pain": None,
             "exchanges_included": [],
+            "exchange_oi": [],
+            "deribit_share_pct": None,
         },
         "_deribit_oi_contracts": 0,
+        "_all_oi_contracts": 0,
     }
 
     try:
@@ -67,6 +76,47 @@ def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
                 result["data_quality"]["coverage_pct"] = cov
                 result["data_quality"]["quality_label"] = label
                 result["data_quality"]["fetched_oi_contracts"] = round(our_total, 1)
+
+        # Breakdown OI per venue (incl. CME): /option/info traccia tutti gli
+        # exchange, mentre /option/max-pain non supporta CME (solo
+        # Deribit/OKX/Binance/Bybit per BTC). Il breakdown rende visibile quanto
+        # del mercato opzioni BTC resta fuori dal GEX Deribit-only.
+        exchange_oi: list[dict] = []
+        all_oi_contracts = 0.0
+        for x in options_info:
+            if not isinstance(x, dict):
+                continue
+            name = str(x.get("exchange_name") or "")
+            if not name or name.lower() == "all":
+                continue
+            exchange_oi.append(
+                {
+                    "exchange": name,
+                    "open_interest": round(float(x.get("open_interest") or 0), 1),
+                    "open_interest_usd": round(float(x.get("open_interest_usd") or 0), 0),
+                    "oi_market_share": round(float(x.get("oi_market_share") or 0), 2),
+                }
+            )
+        exchange_oi.sort(key=lambda e: e["open_interest_usd"], reverse=True)
+        result["market_context"]["exchange_oi"] = exchange_oi
+        result["market_context"]["deribit_share_pct"] = next(
+            (e["oi_market_share"] for e in exchange_oi if e["exchange"].lower() == "deribit"),
+            None,
+        )
+
+        all_info = next(
+            (x for x in options_info
+             if isinstance(x, dict) and str(x.get("exchange_name", "")).lower() == "all"),
+            None,
+        )
+        if all_info:
+            all_oi_contracts = float(all_info.get("open_interest") or 0)
+            result["_all_oi_contracts"] = all_oi_contracts
+        if all_oi_contracts > 0:
+            our_total = our_call_oi + our_put_oi
+            result["data_quality"]["market_coverage_pct"] = round(
+                min(our_total / all_oi_contracts * 100, 100.0), 1
+            )
 
         _EXCHANGES = ["Deribit", "Bybit", "Binance", "OKX"]
         total_call_notional = 0.0
