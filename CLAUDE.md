@@ -15,13 +15,17 @@ make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
 make compose-up     # replica ambiente DO: nginx:8080 + API + dashboard (docker compose)
-make test           # pytest tests/ -v  (~834 test)
-make test-unit      # pytest tests/unit/ -v -q (esclude integration)
-make lint           # ruff check src/ tests/
+make test           # pytest tests/ -v  (~1026 test)
+make test-unit      # pytest tests/ --ignore=tests/integration/ -v -q
+make lint           # .venv/bin/ruff check src/ tests/
+make typecheck      # .venv/bin/mypy src/ --ignore-missing-imports
 make update-all     # update-gex + update-flows + update-edgar + update-macro (cron refresh)
 ```
 
-Lint/type: `ruff` (configurato in `pyproject.toml`), `.pre-commit-config.yaml`.
+Lint: `ruff` (configurato in `pyproject.toml`, pin esatto in CI), `.pre-commit-config.yaml`.
+Type-check: `mypy` è disponibile via `make typecheck` ma non è (ancora) un gate CI —
+baseline di ~70 errori pre-esistenti al 2026-09, mai risolti perché il tool non era
+nemmeno installato prima d'ora. Da burn-down prima di attivarlo in `ci.yml`.
 Venv locale in `.venv`.
 
 ## Ruolo nell'ecosistema
@@ -40,7 +44,7 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati), `coingecko_client.py` (ripiego funding/OI) |
 | `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
 | `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (6 moduli con validation tab), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
-| `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`, `schemas.py` |
+| `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`. Nessun `schemas.py`/Pydantic sulle risposte: gli endpoint restituiscono dict via il wrapper `_ok()` |
 | `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |
 | `src/report/` | **Desk Note** — report a card pubblicabili. `facts.py` (estrattori + salienza), `narrative.py` (selezione e composizione), `events.py` (trigger di pubblicazione + `ReportStateDB`), `renderer.py` (HTML per web e PNG), `formatting.py` (numeri all'italiana), `fonts/` (IBM Plex incorporato) |
@@ -61,7 +65,7 @@ prima di iniziare — fornisce pattern, best practice, e reference aggiornati.
 
 | Skill | Trigger | File/Task |
 |-------|---------|-----------|
-| `fastapi-python` | Qualsiasi modifica a `src/api/` | `main.py`, `routers/*`, `schemas.py`, `auth.py`, `cache.py`, `scheduler.py` |
+| `fastapi-python` | Qualsiasi modifica a `src/api/` | `main.py`, `routers/*`, `auth.py`, `cache.py`, `scheduler.py` |
 | `developing-with-streamlit` | Qualsiasi modifica a `src/dashboard/` | `app.py`, `tabs/*`, `charts.py`, `data_loader.py`, `header.py`, `sidebar.py` |
 | `tdd` | Scrivere/aggiornare test (`tests/`) | Red-green-refactor, test first |
 | `systematic-debugging` | Qualsiasi bug o test failure | Root cause tracing, defense-in-depth |

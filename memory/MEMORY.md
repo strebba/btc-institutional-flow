@@ -204,7 +204,8 @@ Obiettivo: dimostrare statisticamente che i dati istituzionali anticipano la dir
 
 ### API Splitting (src/api/)
 - `main.py`: 1932 → 225 righe (-88%)
-- Nuovi moduli: `auth.py`, `cache.py`, `helpers.py`, `scheduler.py`, `schemas.py`
+- Nuovi moduli: `auth.py`, `cache.py`, `helpers.py`, `scheduler.py`
+  (nota 2026-09: `schemas.py` non esiste più/non fu mai creato — le risposte restano dict via `_ok()`, niente Pydantic su `src/api/`)
 - 6 router in `routers/`: `health.py`, `gex.py`, `flows.py`, `barriers.py`, `signals.py`, `forecast.py`
 - `GET /api/health/scheduler` — nuovo endpoint per monitorare stato APScheduler
 - Cache + lock anti-concorrenza spostati in `cache.py` con interfaccia pubblica
