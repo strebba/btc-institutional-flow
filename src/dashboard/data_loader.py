@@ -27,7 +27,7 @@ def _get_backtest_context(days: int = 365):
         if not bh.empty:
             barrier_history = bh
     except Exception:
-        pass
+        _log.warning("get_barrier_history fallito, pilastro barrier assente", exc_info=True)
     return gex_series, barrier_history
 
 

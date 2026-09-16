@@ -6,6 +6,7 @@ import streamlit as st
 
 from src.dashboard.charts import composite_gauge, pillar_gauges, backtest_equity
 
+from src.analytics.pillars import LONG_THRESHOLD, RISK_OFF_THRESHOLD
 from src.config import setup_logging
 from src.dashboard.data_loader import compute_composite, run_backtest
 from src.dashboard.data_loader import load_macro
@@ -75,9 +76,9 @@ performance futura.
     def _emoji(score):
         if score is None:
             return "⚪️ n/d"
-        if score >= 65:
+        if score >= LONG_THRESHOLD:
             return "🟢"
-        if score < 40:
+        if score < RISK_OFF_THRESHOLD:
             return "🔴"
         return "🟡"
 
