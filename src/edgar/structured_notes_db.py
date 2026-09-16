@@ -120,7 +120,12 @@ class StructuredNotesDB:
     """Gestisce il database SQLite delle note strutturate.
 
     Args:
-        db_path: percorso al file SQLite (default da settings.yaml).
+        db_path: percorso al file SQLite. Default: ``data/structured_notes.db``
+            (``_VERSIONED_DB``, path hardcodato in questo modulo) — a differenza
+            di ``SignalDB``/``PredictionDB``/``AlertDB``, questa classe ignora
+            la variabile d'ambiente ``DB_PATH`` e ``settings.yaml``. Il DB è
+            versionato nel repo (fonte di verità: filesystem DO effimero), non
+            va spostato con override runtime.
     """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
