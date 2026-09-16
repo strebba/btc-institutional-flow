@@ -67,3 +67,15 @@ services:
         value: ""
         scope: RUN_TIME
         type: SECRET
+      # Usate da src/api/scheduler.py e src/alerts/gex_alert_monitor.py. Senza,
+      # start_alert_scheduler() si disattiva con un solo log warning: bot
+      # silenziosamente muto, nessun crash. Valorizzare da Console → Settings →
+      # App Spec, non nel repo.
+      - key: TELEGRAM_BOT_TOKEN
+        value: ""
+        scope: RUN_TIME
+        type: SECRET
+      - key: TELEGRAM_CHAT_ID
+        value: ""
+        scope: RUN_TIME
+        type: SECRET
