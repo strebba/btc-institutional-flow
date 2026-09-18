@@ -16,7 +16,7 @@ import pandas as pd
 import yfinance as yf
 
 from src.config import get_settings, setup_logging
-from src.flows.models import PriceData
+
 
 _log = setup_logging("flows.prices")
 
@@ -336,27 +336,3 @@ class PriceFetcher:
 
         return merged.dropna(how="all")
 
-    def to_price_data_list(self, ticker: str, df: pd.DataFrame) -> list[PriceData]:
-        """Converte DataFrame in lista di PriceData dataclass.
-
-        Args:
-            ticker: ticker del dataframe.
-            df: DataFrame con colonne close, open, high, low, volume, daily_return.
-
-        Returns:
-            list[PriceData].
-        """
-        result: list[PriceData] = []
-        for idx, row in df.iterrows():
-            d = idx.date() if hasattr(idx, "date") else idx
-            result.append(PriceData(
-                date=d,
-                ticker=ticker,
-                open=float(row.get("open", 0)),
-                high=float(row.get("high", 0)),
-                low=float(row.get("low",  0)),
-                close=float(row.get("close", 0)),
-                volume=float(row.get("volume", 0)),
-                daily_return=float(row["daily_return"]) if pd.notna(row.get("daily_return")) else None,
-            ))
-        return result

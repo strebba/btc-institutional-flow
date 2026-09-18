@@ -30,11 +30,7 @@ _log = setup_logging("flows.coinglass")
 
 try:
     from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
-    _HAS_TENACITY = True
 except ImportError:
-    _HAS_TENACITY = False
-
     # Fallback senza tenacity: invece di un no-op silenzioso (che disattiverebbe
     # del tutto i retry sui transitori 429/5xx/timeout), implementiamo un retry
     # manuale minimale con backoff esponenziale. I parametri sono passati come

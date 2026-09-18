@@ -303,7 +303,3 @@ class TestFindOptimalLag:
         )
         assert result["optimal_lag"] is None
         assert not result["validated"]
-
-    def test_class_attribute_exists(self):
-        assert hasattr(GrangerAnalysis, "_GRANGER_LEAD_LAG")
-        assert isinstance(GrangerAnalysis._GRANGER_LEAD_LAG, int)

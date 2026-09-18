@@ -85,20 +85,6 @@ class TestComputeBtcPrices:
         assert any(abs(p - 31_500) < 1 for p in btc_prices)
 
 
-class TestUpdateBarrierStatus:
-    def test_knockin_triggered(self, db, sample_note):
-        db.upsert_note(sample_note)
-        # IBIT a 30 < 31.5 → knock_in triggered
-        counts = db.update_barrier_statuses(current_ibit_price=30.0)
-        assert counts["triggered"] >= 1
-
-    def test_no_trigger(self, db, sample_note):
-        db.upsert_note(sample_note)
-        # IBIT a 40: knock_in level=31.5 (40>31.5 → no), autocall level=45 (40<45 → no)
-        counts = db.update_barrier_statuses(current_ibit_price=40.0)
-        assert counts["triggered"] == 0
-
-
 class TestPreliminaryFlag:
     def _prelim_note(self) -> StructuredNote:
         return StructuredNote(
@@ -180,16 +166,6 @@ class TestUnderlyingFilter:
         ibit_prices = [b.level_price_btc for b in notes[sample_note.filing_url].barriers]
         assert all(p is None for p in fbtc_prices)
         assert all(p is not None for p in ibit_prices)
-
-    def test_update_statuses_skips_non_ibit(self, db, sample_note):
-        # IBIT a 30: la knock_in FBTC (56.0, in prezzi FBTC) non va confrontata
-        # col prezzo IBIT e deve restare active.
-        db.upsert_note(sample_note)
-        db.upsert_note(self._fbtc_note())
-        db.update_barrier_statuses(current_ibit_price=30.0)
-        fbtc_barriers = db.get_active_barriers(underlying="FBTC")
-        assert len(fbtc_barriers) == 1
-        assert fbtc_barriers[0]["status"] == "active"
 
 
 class TestCheckpoint:
@@ -301,10 +277,13 @@ class TestMacroSnapshots:
 
     def test_registra_e_rilegge(self, db):
         db.record_macro_snapshot(funding_ann_pct=12.3, oi_usd=66e9, n_contracts=138)
-        ultimo = db.get_last_macro_snapshot()
-        assert ultimo["funding_ann_pct"] == 12.3
-        assert ultimo["oi_usd"] == 66e9
-        assert ultimo["n_contracts"] == 138
+        with db._conn() as conn:
+            row = conn.execute(
+                "SELECT funding_ann_pct, oi_usd, n_contracts FROM macro_snapshots"
+            ).fetchone()
+        assert row["funding_ann_pct"] == 12.3
+        assert row["oi_usd"] == 66e9
+        assert row["n_contracts"] == 138
 
     def test_un_solo_snapshot_al_giorno(self, db):
         """Due giri nello stesso giorno aggiornano la riga invece di duplicarla."""
@@ -312,7 +291,8 @@ class TestMacroSnapshots:
         db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=66e9, n_contracts=138)
         with db._conn() as conn:
             assert conn.execute("SELECT COUNT(*) FROM macro_snapshots").fetchone()[0] == 1
-        assert db.get_last_macro_snapshot()["oi_usd"] == 66e9
+            oi = conn.execute("SELECT oi_usd FROM macro_snapshots").fetchone()[0]
+        assert oi == 66e9
 
     def test_calcola_la_variazione_su_due_punti_distanti(self, db):
         from datetime import date, timedelta

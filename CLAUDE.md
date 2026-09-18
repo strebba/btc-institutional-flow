@@ -15,7 +15,7 @@ make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
 make compose-up     # replica ambiente DO: nginx:8080 + API + dashboard (docker compose)
-make test           # pytest tests/ -v  (~1028 test)
+make test           # pytest tests/ -v  (~990 test)
 make test-unit      # pytest tests/ --ignore=tests/integration/ -v -q
 make lint           # .venv/bin/ruff check src/ tests/
 make typecheck      # .venv/bin/mypy src/ --ignore-missing-imports
@@ -43,17 +43,17 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati), `coingecko_client.py` (ripiego funding/OI) |
 | `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
-| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore + `st.navigation` lazy (solo la pagina attiva calcola), `app_pages/` (6 pagine, thin wrapper sulle funzioni `_tab_*`), `tabs/` (contenuto delle 6 sezioni), `data_loader.py` (cached), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/` (font IBM Plex self-hosted) |
-| `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`. Nessun `schemas.py`/Pydantic sulle risposte: gli endpoint restituiscono dict via il wrapper `_ok()` |
+| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore + `st.navigation` lazy (solo la pagina attiva calcola), `app_pages/` (7 pagine, thin wrapper sulle funzioni `_tab_*`), `tabs/` (contenuto delle 7 sezioni), `data_loader.py` (cached), `charts.py` (Plotly), `components.py` (design system), `header.py`, `sidebar.py`, `static/` (font IBM Plex self-hosted) |
+| `src/api/` | FastAPI — `main.py` orchestratore, `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `data_pipeline.py` (`get_flow_context`, pipeline flussi condivisa), `scheduler.py`. Nessun `schemas.py`/Pydantic sulle risposte: gli endpoint restituiscono dict via il wrapper `_ok()` |
 | `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
-| `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |
+| `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti |
 | `src/report/` | **Desk Note** — report a card pubblicabili. `facts.py` (estrattori + salienza), `narrative.py` (selezione e composizione), `events.py` (trigger di pubblicazione + `ReportStateDB`), `renderer.py` (HTML per web e PNG), `formatting.py` (numeri all'italiana), `fonts/` (IBM Plex incorporato) |
 
 DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignorato).
 `StructuredNotesDB` e `GexDB` puntano **sempre** a `structured_notes.db` (path hardcodato,
-ignorano `DB_PATH`). `SignalDB`, `PredictionDB`, `AlertDB` rispettano `DB_PATH` (default
+ignorano `DB_PATH`). `PredictionDB`, `AlertDB` rispettano `DB_PATH` (default
 `structured_notes.db`, override `data/runtime.db` in dev). Config: `config/settings.yaml` +
-`config/weights.yaml` via `src.config.get_settings()`. Scheduler/cron in `scripts/` (16 script).
+`config/weights.yaml` via `src.config.get_settings()`. Script CLI in `scripts/` (12).
 
 ## Dashboard: tema e navigazione (2026-09)
 
@@ -182,8 +182,8 @@ I supplement *preliminari* hanno `is_preliminary=1` e `initial_level`/`notional`
 `/api/barriers` mostra solo i finali.
 
 I search terms includono anche FBTC/BITB/ARKB: il parser estrae il ticker reale del sottostante
-(`_detect_underlying`, colonna `notes.underlying`), ma `get_active_barriers()`,
-`compute_btc_prices()` e `update_barrier_statuses()` operano **solo sulle note IBIT** (default) —
+(`_detect_underlying`, colonna `notes.underlying`), ma `get_active_barriers()` e
+`compute_btc_prices()` operano **solo sulle note IBIT** (default) —
 i prezzi/ratio IBIT non si applicano agli altri ETF. `data/runtime.db` (predizioni/cache runtime,
 usato da `make run-api` via `DB_PATH`) è invece **ignorato** da git, separato dal seed versionato.
 

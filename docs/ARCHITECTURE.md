@@ -95,11 +95,12 @@ Container **unico** su DO App Platform, gestito da `supervisord` (3 processi):
 
 ```
 1. SEC EDGAR → HTML filing → Parser → StructuredNote + BarrierLevel → SQLite
-2. Deribit API → OptionData[] → GexCalculator → GexSnapshot → RegimeState
+2. Deribit API → OptionData[] → GexCalculator → GexSnapshot → GammaRegime
 3. yfinance → OHLCV → SQLite cache → PriceFetcher
 4. FarsideScraper → AggregateFlows[] → FlowCorrelation.merge() → merged_df
+   (pipeline condivisa: src/api/data_pipeline.get_flow_context())
 5. merged_df + GexSnapshot → Analytics modules → metrics/charts
-6. Tutti i dati → Dashboard Streamlit → visualizzazione real-time
+6. Tutti i dati → Dashboard Streamlit / FastAPI / Desk Note
 ```
 
 ### Struttura dati centrale: `merged_df`
@@ -132,7 +133,8 @@ Il DataFrame `merged_df` è il cuore del sistema. Viene prodotto da `FlowCorrela
 |------|---------------|
 | `search.py` | Query EFTS API con paginazione, deduplicazione per accession number |
 | `parser.py` | Regex su HTML prospectus: barriere, notional, initial level, prodotto |
-| `structured_notes_db.py` | CRUD SQLite: note, barriere, status update |
+| `structured_notes_db.py` | CRUD SQLite: note, barriere, barrier/macro snapshots, refresh runs |
+| `barrier_utils.py` | Clustering barriere, confluenza GEX↔barriere, `barrier_sign()` |
 | `models.py` | `StructuredNote`, `BarrierLevel` dataclass |
 
 **Dettaglio URL EDGAR:**
@@ -166,8 +168,15 @@ GEX = sign × gamma × OI × contract_size × spot² × 0.01
 2. SoSoValue API → implementata (con retry)
 3. yfinance volume estimate → ATTIVO
    flow_estimate = sign(return) × volume × close × 0.08
-4. CSV manuale → FarsideScraper.from_csv(path)
 ```
+
+**Metriche macro:** `macro_fetcher.fetch_macro_data()` prova CoinGlass (5 fattori:
+funding, OI, long/short, put/call, liquidazioni), poi CoinGecko
+(`/api/v3/derivatives`) come ripiego (funding + OI). L'annualizzazione del funding
+sta solo in `funding.py` (×3×365).
+
+**Storico OI a 7 giorni:** tabella `macro_snapshots` nel DB versionato, alimentata da
+`scripts/cron_macro.py` + workflow GitHub giornaliero.
 
 **Fix yfinance multi-index:**
 ```python
@@ -179,22 +188,72 @@ if isinstance(df.columns, pd.MultiIndex):
 
 | Modulo | Test statistico | H0 |
 |--------|----------------|-----|
+| `pillars.py` | CompositeSignal a 4 pilastri (GEX/Barrier/Flows/Macro) | — |
+| `factor_scorers.py` | Libreria scoring a 8 fattori (ex `signal_model`) | — |
+| `signal_validation.py` | Spearman IC + null model + alpha decay | IC = 0 |
 | `granger.py` | F-test (statsmodels) | flows non precedono returns |
 | `event_study.py` | t-test a un campione | CAR = 0 intorno al barrier level |
 | `regime_analysis.py` | Welch t-test | mean_return(pos_gamma) = mean_return(neg_gamma) |
+| `walk_forward.py` | Rolling train→test OOS | — |
 | `backtest.py` | Sharpe, Drawdown, Win Rate | — |
 
 ### `src/dashboard/`
 
-- **`app.py`**: orchestrazione Streamlit, `@st.cache_data(ttl=900)` per tutti i moduli
+- **`app.py`**: orchestratore — carica GEX/flussi/barriere una volta in `st.session_state`,
+  poi `st.navigation(position="top")` con 7 pagine **lazy** (Panoramica di default)
+- **`app_pages/`**: thin wrapper `st.Page` → `tabs/` (funzioni `_tab_*`)
+- **`components.py`**: design system in `st.html` (classi `wx-`, stile Desk Note)
 - **`charts.py`**: funzioni pure `DataFrame → go.Figure`, riusabili fuori dalla dashboard
+- **`data_loader.py`**: funzioni `@st.cache_data(ttl=900)` condivise
+
+### `src/forecast/`
+
+Spine predizione → esito → calibrazione: `jobs.py` (predict/verify/calibrate, invocate
+dal scheduler in-process in `src/api/scheduler.py`), `prediction_db.py` (predictions,
+outcomes, weight_versions), `calibration.py` (proposta pesi **human-gated**),
+`sources/dealer_flow.py`.
+
+### `src/alerts/`
+
+Alert Telegram via APScheduler: daily recap, ETF flow check, comandi `/recap`, `/signal`,
+`/status`, `/help`. HTML escaping, retry con backoff, notifica errori.
+
+### `src/report/` — Desk Note
+
+Report a card pubblicabile (`facts.py`, `narrative.py`, `events.py`, `renderer.py`,
+`formatting.py`). Pubblicazione **su evento**, non a calendario; il motore non inventa
+(un estrattore senza dati restituisce `None`).
+
+### `src/api/` — FastAPI
+
+- **`main.py`**: orchestratore (~225 righe), middleware API key, lifespan scheduler
+- **`routers/`** (7): `health`, `gex`, `flows`, `barriers`, `signals`, `forecast`, `report`
+- **`cache.py`**: TTL cache in-memory + lock · **`scheduler.py`**: 3 APScheduler
+  (alert, IFI + barrier snapshot, forecast)
+- **`data_pipeline.py`**: `get_flow_context()` — pipeline flussi condivisa
+- **`helpers.py`**: serializzazione `_ok()` / `_sanitize()` (numpy/pandas → JSON)
+
+| Endpoint | Contenuto |
+|----------|-----------|
+| `GET /api/health`, `/api/health/edgar`, `/api/health/scheduler` | Health check |
+| `GET /api/gex` | Snapshot GEX, regime, walls, profilo per strike |
+| `GET /api/flows` | ETF flows, correlazione, Granger |
+| `GET /api/barriers`, `/api/notes`, `/api/notes/by-url` | Barriere e note EDGAR |
+| `GET /api/signals`, `/api/pillars/series` | Composite signal e serie pilastri |
+| `GET /api/macro`, `/api/ifi` (deprecato) | Macro e IFI |
+| `/api/predictions/*`, `/api/calibration`, `/api/forecast/status` | Forecast spine |
+| `GET /report`, `/api/report/cards`, `/api/report/events` | Desk Note |
 
 ## Database SQLite
 
 ### `data/structured_notes.db`
 
 DB SQLite unico (versionato in git). Contiene: `notes`, `barrier_levels`, `prices`
-(OHLCV BTC/IBIT), `gex_snapshots`, `barrier_snapshots`.
+(OHLCV BTC/IBIT), `gex_snapshots`, `barrier_snapshots`, `macro_snapshots`, `refresh_runs`.
+
+`data/runtime.db` (gitignorato) contiene i dati runtime: `predictions`, `outcomes`,
+`weight_versions`, `alerts`. `StructuredNotesDB` e `GexDB` ignorano `DB_PATH` e puntano
+sempre al DB versionato; `PredictionDB`/`AlertDB` rispettano `DB_PATH`.
 
 ```sql
 CREATE TABLE notes (
@@ -230,33 +289,45 @@ CREATE TABLE prices (
 ```yaml
 edgar:
   base_url: "https://efts.sec.gov/LATEST/search-index"
-  rate_limit_s: 0.5          # secondi tra richieste
-  max_results: 500
-  search_queries: ["IBIT", "iShares Bitcoin Trust"]
-  form_types: ["424B2", "424B3"]
+  user_agent: "ibit-gamma-tracker/1.0 (…)"   # override via EDGAR_USER_AGENT
+  rate_limit_rps: 8
+  page_size: 100
+  search_terms: ["IBIT", "iShares Bitcoin Trust", "FBTC", "BITB", "ARKB"]
+  forms: ["424B2", "424B3"]
+  start_date: "2024-01-01"
 
 deribit:
-  base_url: "https://www.deribit.com/api/v2"
-  rate_limit_s: 0.07         # ~15 req/s
-  gex_threshold_usd: 1000000 # threshold per classificazione regime
+  base_url: "https://www.deribit.com/api/v2/public"
+  rate_limit_rps: 15
+  gex_threshold_usd: 1_000_000
+
+flows:
+  farside_url: "https://farside.co.uk/bitcoin-etf-flow-all-data/"
+  lookback_days: 365
+
+coinglass:
+  api_key: ""                # override via COINGLASS_API_KEY
+  timeout_s: 15
 
 backtest:
-  long_gex_threshold: 0
-  long_flow_threshold_usd_m: 100    # M$
-  short_gex_threshold: 0
-  short_flow_threshold_usd_m: -200  # M$
   barrier_exclusion_pct: 5.0
+  transaction_cost_bps: 80
+  trading_days_per_year: 365
 
 analytics:
   granger_max_lags: 10
   event_window_days: 5
   barrier_proximity_pct: 2.0
 
+alerts:
+  telegram_enabled: true     # richiede TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
+  daily_recap: {hour_utc: 12, minute_utc: 45}
+
+forecast:
+  enabled: true
+  horizon_days: 5
+
 dashboard:
-  refresh_interval_s: 900    # 15 minuti
-  theme:
-    background: "#000000"
-    positive:   "#00FF9D"
-    negative:   "#ff4444"
-    neutral:    "#4488ff"
+  refresh_interval_s: 900
+  theme: {background: "#000000", positive: "#00FF9D", negative: "#FF0033", …}
 ```

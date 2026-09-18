@@ -335,17 +335,11 @@ class GexAlertMonitor:
         flow_history_df = None
         flow_is_estimate = False
         try:
-            from src.flows.scraper import FarsideScraper
-            from src.flows.price_fetcher import PriceFetcher
-            from src.flows.correlation import FlowCorrelation
+            from src.api.data_pipeline import get_flow_context
 
-            scraper = FarsideScraper()
-            raw_flows = await asyncio.to_thread(scraper.fetch)
-            aggs = await asyncio.to_thread(scraper.aggregate, raw_flows)
-            fetcher = PriceFetcher()
-            prices = await asyncio.to_thread(fetcher.get_all_prices)
-            corr_eng = FlowCorrelation()
-            merged = await asyncio.to_thread(corr_eng.merge, aggs, prices)
+            flow_ctx = await asyncio.to_thread(get_flow_context)
+            raw_flows = flow_ctx["raw"]
+            merged = flow_ctx["merged_df"]
 
             if not merged.empty and "ibit_flow_3d" in merged.columns:
                 last_val = merged["ibit_flow_3d"].dropna()

@@ -85,23 +85,6 @@ class TestClassifyRegime:
         assert analyzer.classify_regime(-1_000_001) == "negative_gamma"
 
 
-class TestBuildGexSeries:
-    def test_empty_snapshots(self, analyzer):
-        result = analyzer.build_gex_series([])
-        assert result.empty
-
-    def test_returns_series(self, analyzer):
-        snaps = [_make_snapshot(10e6, day_offset=0), _make_snapshot(-5e6, day_offset=1)]
-        result = analyzer.build_gex_series(snaps)
-        assert isinstance(result, pd.Series)
-        assert len(result) == 2
-
-    def test_sorted_index(self, analyzer):
-        snaps = [_make_snapshot(10e6, day_offset=0), _make_snapshot(-5e6, day_offset=1)]
-        result = analyzer.build_gex_series(snaps)
-        assert result.index.is_monotonic_increasing
-
-
 class TestAnalyze:
     def test_returns_regime_comparison_result(self, analyzer, merged_df, gex_series):
         result = analyzer.analyze(merged_df, gex_series)

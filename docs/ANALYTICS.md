@@ -145,7 +145,7 @@ Se negativa: più alto il GEX, più bassa la volatilità → conferma la teoria.
 
 ### Limitazione attuale
 
-Il sistema ha solo lo snapshot GEX odierno (un singolo punto). Per un'analisi regime completa servono almeno 30-60 snapshot storici giornalieri. Il DB accumulerà questi dati nel tempo con esecuzioni periodiche di `run_gex.py`.
+Il sistema ha solo lo snapshot GEX odierno (un singolo punto). Per un'analisi regime completa servono almeno 30-60 snapshot storici giornalieri. Lo storico si accumula con snapshot periodici di `cron_gex.py` (target `make update-gex`) nella tabella `gex_snapshots`.
 
 ### API
 

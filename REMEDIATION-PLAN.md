@@ -2,6 +2,12 @@
 
 **Data audit:** 2026-08-04 | **Data remediation sessione 1:** 2026-08-11 | **Data remediation sessione 2:** 2026-08-11
 
+> **Nota (2026-09-18)** — Documento storico. Il refactor "Dead Code Cleanup & DRY" ha chiuso
+> diverse voci rimaste aperte: `src/api/schemas.py` non esiste, `src/api/auth.py` è stato
+> rimosso (1.10.2), `data_pipeline.get_flow_context()` è ora in uso in 8 siti (3.1.1/3.1.2),
+> `src/analytics/signal_db.py` è stato rimosso (4.1.4). Il conteggio test della verifica
+> finale (679) è superato: vedi `memory/MEMORY.md`.
+
 ## FASE 5 COMPLETATA — Dettaglio sessione 2
 
 ## STATO COMPLESSIVO

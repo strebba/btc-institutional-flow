@@ -193,9 +193,9 @@ def _score_granger_lead(flow_lag_ago_usd: float) -> float:
     """ETF flow di N giorni fa come leading indicator (lag Granger validato).
 
     Il lag è determinato da GrangerAnalysis.find_optimal_lag() su training set
-    pre-2024 e validato su holdout. Il valore è in GrangerAnalysis._GRANGER_LEAD_LAG.
-    Usa la stessa curva di etf_flow (lineare ±1B) perché il segnale è lo stesso,
-    solo sfasato nel tempo.
+    pre-2024 e validato su holdout; qui arriva già sfasato nella colonna
+    ``ibit_flow_5d_ago`` (lag 5). Usa la stessa curva di etf_flow (lineare ±1B)
+    perché il segnale è lo stesso, solo sfasato nel tempo.
     """
     return _score_etf_flow(flow_lag_ago_usd)
 
@@ -388,10 +388,6 @@ class SignalModel:
         )
         scores = scores.fillna(50.0)
         return scores
-
-    def score_to_signal(self, score: float) -> str:
-        """Converte uno score numerico in etichetta segnale."""
-        return _score_to_signal(score)
 
     def signals_from_scores(self, scores: pd.Series) -> pd.Series:
         """Converte una Serie di score in segnali +1/0/-1 per il backtest.

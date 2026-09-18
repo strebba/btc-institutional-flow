@@ -1,5 +1,50 @@
 # ibit-gamma-tracker — Project Memory
 
+## Dead Code Cleanup & DRY Refactor (session 2026-09-18)
+
+Review completa + rimozione codice morto + wiring della pipeline condivisa.
+
+### Rimosso (dead code hard, 0 riferimenti repo-wide)
+- `DeribitClient.get_order_book`, `clear_cache`; `PriceFetcher.to_price_data_list` + `PriceData`;
+  `FarsideScraper.from_csv` + `SOSOVALUE_URL`; `EdgarSearcher` (classe intera — resta `EdgarEftsSearcher`);
+  `SignalModel.score_to_signal`; `FlowCorrelation.flow_concentration/flow_divergence/to_merged_records`
+  + `MergedRecord`; `ALL_REGIMES`; `_HAS_TENACITY`; branch irraggiungibile `_DIR_RESISTANCE` in `pillars.py`;
+  `PredictionDB.get_weight_history`; modulo `src/api/auth.py` (middleware `_api_key_guard` è la vera auth).
+
+### Scaffolding test-only rimosso
+- `confluence_backtest.py` (+ test), `forecast/sources/ema.py` e `portfolio.py` (+ test_sources.py),
+  macchina hit-rate/benchmark in `forecast/validation.py` (`direction_series`, `directional_hit_rate`,
+  `benchmarks`, `beats_benchmarks`) — resta `forward_returns` + `walk_forward_windows`.
+- Metodi test-only: `Backtest.plot`/`regime_coverage`, `EventStudy.plot`/`run_on_price_levels`,
+  `RegimeAnalysis.build_gex_series`, `GexDB.get_all_for_regime`/`get_walls_series`,
+  `StructuredNotesDB.get_last_macro_snapshot`/`update_barrier_statuses`.
+
+### SignalDB (write-only) rimosso
+- Scritto da `/api/signals` e `cron_signal.py`, letto da nessuno (get_latest/get_series/count: 0 ref).
+  Eliminati `src/analytics/signal_db.py`, `scripts/cron_signal.py` e l'insert nell'endpoint.
+
+### Script
+- Rimossi (duplicati dello scheduler in-process): `cron_calibrate/ifi/predict/verify.py` +
+  `cron_signal.py`; rimosso `reparse_notional.py` (0 riferimenti). Restano 12 script.
+- `cron_snapshot_barriers.py` portato **dentro** lo scheduler: job `barrier_snapshot_daily`
+  (22:30 UTC) in `src/api/scheduler.py` → lo storico barriere ora matura in produzione.
+
+### Refactor DRY
+- `src/api/data_pipeline.get_flow_context()` ora è davvero il single source (import pigri per
+  testabilità): ritorna `{raw, agg, prices, merged_df}` e `price_fallback=True` per la dashboard.
+  Collegato in 8 siti: `forecast/context.py`, `gex_alert_monitor.py`, `data_loader.py`,
+  `signals.py` (x2), `forecast.py`, `flows.py`, `ifi_updater.py`.
+- Rimosso `_GRANGER_LEAD_LAG` vestigiale (il lag è cablato nella colonna `ibit_flow_5d_ago`).
+- `pyproject.toml`: rimossa entry point `gex-calc` (puntava a `gex_calculator:main` inesistente).
+
+### Docs
+- Aggiornati: README, docs/DASHBOARD.md, docs/ARCHITECTURE.md, docs/ANALYTICS.md, docs/EDGAR.md,
+  CLAUDE.md (7 pagine, 12 script), sezioni living di questa memoria.
+
+### Metriche
+- Test: 1032 → **990** (rimossi i test dello scaffolding), ruff clean.
+- Mypy: 73 errori/16 file → 71 errori/14 file (spariscono i moduli rimossi; nessun nuovo errore).
+
 ## Dashboard Redesign (session 2026-09-18)
 
 Rifacimento completo del frontend Streamlit — tema nativo + navigazione lazy.
@@ -278,14 +323,15 @@ Obiettivo: dimostrare statisticamente che i dati istituzionali anticipano la dir
 - `_get_gex_data` → `src.api.routers.gex._get_gex_data()` + re-exported in `barriers.py`
 
 ## Architecture
-- **Language**: Python 3.9+, Streamlit dashboard
-- **DB**: SQLite at `data/structured_notes.db` (notes + barrier_levels + prices tables),
-  **versioned in git** (source of truth — DO filesystem is ephemeral; weekly refresh via
-  `.github/workflows/edgar-refresh.yml` commits it to `main`). Runtime data lives in
-  `data/runtime.db` (gitignored, `DB_PATH` env).
-- **Packages**: `src/edgar`, `src/flows`, `src/gex`, `src/analytics`, `src/dashboard`
+- **Language**: Python 3.10+, Streamlit dashboard
+- **DB**: SQLite at `data/structured_notes.db` (notes + barrier_levels + prices + gex_snapshots
+  + barrier_snapshots + macro_snapshots + refresh_runs tables), **versioned in git** (source of
+  truth — DO filesystem is ephemeral; weekly refresh via `.github/workflows/edgar-refresh.yml`
+  commits it to `main`). Runtime data lives in `data/runtime.db` (gitignored, `DB_PATH` env).
+- **Packages**: `src/edgar`, `src/flows`, `src/gex`, `src/analytics`, `src/forecast`,
+  `src/alerts`, `src/report`, `src/api`, `src/dashboard`
 - **Config**: `config/settings.yaml` (loaded via `src/config.get_settings()`)
-- **Tests**: ~506 tests in `tests/`, run with `.venv/bin/pytest tests/ -v`
+- **Tests**: ~990 tests in `tests/`, run with `.venv/bin/pytest tests/ -v`
 - **Launch**: `streamlit run src/dashboard/app.py`
 
 ## Key File Paths
@@ -296,6 +342,9 @@ Obiettivo: dimostrare statisticamente che i dati istituzionali anticipano la dir
 - Flows scraper: `src/flows/scraper.py`
 - Price fetcher: `src/flows/price_fetcher.py`
 - EDGAR DB: `src/edgar/structured_notes_db.py`
+- Pipeline flussi condivisa: `src/api/data_pipeline.py` (`get_flow_context`)
+- Composite signal: `src/analytics/pillars.py`
+- Desk Note: `src/report/`
 
 ## Bugs Fixed (session 2026-03-08)
 1. **`gex_to_dict()` key mismatch**: Added `total_net_gex` (raw USD) and `n_instruments`
@@ -304,19 +353,20 @@ Obiettivo: dimostrare statisticamente che i dati istituzionali anticipano la dir
    Fixed to use `pf.fetch("BTC-USD")` + `pf.fetch("IBIT")` directly.
 3. **Deribit timeout**: Changed from 15s to 30s in `deribit_client.py`
 
-## Dashboard Tab Structure (current)
-1. 🎯 Barrier Map — visual chart of BTC barrier levels + contextual alerts
-2. 📊 GEX — gamma exposure profile, regime box, regime analysis
-3. 💰 ETF Flows — IBIT flows, KPI, alert boxes, Granger expander
-4. 🚦 Segnali — 4-pillar composite (GEX/Barrier/ETF Flows/Macro): top-level gauge +
-   4 sub-gauges + readable table + backtest results
-5. 🔍 EDGAR Monitor — structured notes KPI, filings table, event study
+## Dashboard Page Structure (current)
+1. Panoramica (default) — tape di stato, hero CompositeSignal + pillar bars, GEX walls, flussi/derivati, prossimo trigger
+2. Segnali — 4-pillar composite (GEX/Barrier/ETF Flows/Macro): top-level gauge + 4 sub-gauges + readable table + backtest results
+3. GEX — gamma exposure profile, regime box, regime analysis
+4. ETF Flows — IBIT flows, KPI, alert boxes, Granger expander
+5. Barrier Map — visual chart of BTC barrier levels + contextual alerts + confluenza GEX
+6. EDGAR — structured notes KPI, filings table, event study
+7. Validation — Information Coefficient, walk-forward, factor decomposition, sensitivity
 
 ## EDGAR Notes (2026-06)
 - EDGAR search terms include FBTC/BITB/ARKB besides IBIT; the parser extracts the real
   underlying ticker (`_detect_underlying` in `parser.py`, column `notes.underlying`).
-- IBIT-price semantics: `get_active_barriers()` (default `underlying="IBIT"`),
-  `compute_btc_prices()` and `update_barrier_statuses()` only touch IBIT notes.
+- IBIT-price semantics: `get_active_barriers()` (default `underlying="IBIT"`) and
+  `compute_btc_prices()` only touch IBIT notes.
 - Issuer comes from the EDGAR **filer** (`entity_name`) via `_known_issuer_or_none()`
   allowlist; filings whose filer is not a known note issuer are discarded in `parse_batch`
   (beware: new issuers are silently dropped until added to `_ISSUER_CANONICAL`).
@@ -348,6 +398,8 @@ Obiettivo: dimostrare statisticamente che i dati istituzionali anticipano la dir
 
 ## Important Patterns
 - `gex_to_dict()` returns both `total_net_gex` (raw USD) and `total_net_gex_m` (millions)
+- Pipeline flussi: usare `src/api/data_pipeline.get_flow_context()` (`raw`/`agg`/`prices`/`merged_df`)
+  invece di ricomporre a mano `FarsideScraper → aggregate → PriceFetcher → FlowCorrelation.merge`
 - `PriceFetcher` has no `fetch_and_store()` — use `fetch(ticker)` directly
 - All Streamlit cache functions use `ttl=_REFRESH` (900s default)
 - Composite signal logic is in `pillars.CompositeSignal`; the dashboard helper is

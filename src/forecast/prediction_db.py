@@ -2,12 +2,11 @@
 
 Tre tabelle:
 - `predictions`     — una riga per previsione (UNIQUE su created_at+source+target_type+horizon_days
-                      per idempotenza: rilanciare cron_predict nello stesso istante non duplica).
+                      per idempotenza: rilanciare il job predict nello stesso istante non duplica).
 - `outcomes`        — una riga per esito (UNIQUE su prediction_id).
 - `weight_versions` — versioni dei pesi del SignalModel (audit trail del self-learning).
 
-Stessa strategia di src/analytics/signal_db.py: WAL mode, path da settings.yaml,
-INSERT OR IGNORE per idempotenza.
+WAL mode, path da settings.yaml, INSERT OR IGNORE per idempotenza.
 """
 from __future__ import annotations
 
@@ -291,15 +290,6 @@ class PredictionDB:
             rows = conn.execute(
                 "SELECT id, created_at, weights, rationale FROM weight_versions "
                 "WHERE source = ? AND status = 'proposed' ORDER BY id DESC",
-                (source,),
-            ).fetchall()
-        return [{**dict(r), "weights": json.loads(r["weights"])} for r in rows]
-
-    def get_weight_history(self, source: str) -> list[dict]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT id, created_at, status, active, weights, rationale FROM weight_versions "
-                "WHERE source = ? ORDER BY id DESC",
                 (source,),
             ).fetchall()
         return [{**dict(r), "weights": json.loads(r["weights"])} for r in rows]

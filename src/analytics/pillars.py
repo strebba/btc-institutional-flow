@@ -74,7 +74,6 @@ MACRO_FACTOR_WEIGHTS: dict[str, float] = {
 # Parametri Barrier pillar
 _BARRIER_SIGMA = 0.10        # ampiezza kernel di prossimità (±10% → peso ~0.37)
 _DIR_ACCELERANT = 0.15       # knock_in/buffer sotto spot → dealer vende → bearish
-_DIR_RESISTANCE = 0.40       # barriera appena superata → dealer vende delta → bearish
 _DIR_NEUTRAL    = 0.50
 _DIR_SUPPORTIVE = 0.65       # autocall/knock_out sopra spot → dealer compra su dip
 
@@ -118,7 +117,7 @@ class CompositeResult:
 
     @property
     def components(self) -> dict[str, Optional[float]]:
-        """Alias dei 7 fattori storici (duck-typing con SignalResult per SignalDB)."""
+        """Alias dei 7 fattori storici (duck-typing con SignalResult)."""
         return self.legacy_components
 
 
@@ -295,7 +294,7 @@ def score_barrier_pillar(
     num = den = 0.0
     nearest = None
     nearest_absd = float("inf")
-    dir_counts = {"accelerante_ribasso": 0, "resistenza": 0, "neutro": 0}
+    dir_counts = {"accelerante_ribasso": 0, "neutro": 0}
     n_in_kernel = 0
     nw_dist_num = nw_dist_den = 0.0
 
@@ -314,8 +313,6 @@ def score_barrier_pillar(
             n_in_kernel += 1
             if dir_score == _DIR_ACCELERANT:
                 dir_counts["accelerante_ribasso"] += 1
-            elif dir_score == _DIR_RESISTANCE:
-                dir_counts["resistenza"] += 1
             else:
                 dir_counts["neutro"] += 1
         if abs(d) < nearest_absd:

@@ -161,7 +161,6 @@ class FarsideScraper:
     """
 
     FARSIDE_URL  = "https://farside.co.uk/bitcoin-etf-flow-all-data/"
-    SOSOVALUE_URL = "https://sosovalue.com/assets/etf/us-bitcoin-spot"
 
     def __init__(self, cfg: dict | None = None) -> None:
         self._cfg = cfg or get_settings()["flows"]
@@ -491,46 +490,6 @@ class FarsideScraper:
             _log.warning("Cache Farside troppo vecchia (%.0f ore) — skip", age_hours)
             return None
         return _CACHE_FILE.read_text(encoding="utf-8")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # CSV loader
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def from_csv(self, path: str) -> list[EtfFlowData]:
-        """Carica i flussi da un file CSV con formato Farside.
-
-        Formato atteso:
-          Date, IBIT, FBTC, BITB, ARKB, BTCO, EZBC, BRRR, HODL, BTCW, GBTC, BTC, Total
-          13 Jan 2025, 500.1, 200.5, (150.3), ...
-
-        Args:
-            path: percorso al file CSV.
-
-        Returns:
-            list[EtfFlowData].
-        """
-        import csv
-        results: list[EtfFlowData] = []
-        try:
-            with open(path, newline="") as fh:
-                reader = csv.DictReader(fh)
-                for row in reader:
-                    raw_date = row.get("Date", "")
-                    parsed   = _parse_farside_date(raw_date)
-                    if not parsed:
-                        continue
-                    for ticker in FARSIDE_TICKERS:
-                        raw = row.get(ticker, "")
-                        val = _parse_flow_value(raw)
-                        if val is not None:
-                            results.append(EtfFlowData(
-                                date=parsed, ticker=ticker,
-                                flow_usd=val, source="csv",
-                            ))
-            _log.info("CSV caricato: %d flussi da %s", len(results), path)
-        except Exception as e:
-            _log.error("Errore lettura CSV %s: %s", path, e)
-        return results
 
     # ──────────────────────────────────────────────────────────────────────────
     # Aggregazione

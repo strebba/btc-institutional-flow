@@ -95,10 +95,3 @@ class TestSummaryStats:
         outflow = stats["ibit"]["total_outflow_usd_b"]
         assert abs(net - (inflow + outflow)) < 0.01  # outflow è già negativo
 
-
-class TestToMergedRecords:
-    def test_conversion(self, merged_df):
-        engine  = FlowCorrelation()
-        records = engine.to_merged_records(merged_df)
-        assert len(records) == len(merged_df)
-        assert records[0].btc_close is not None

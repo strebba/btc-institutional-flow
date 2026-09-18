@@ -46,7 +46,6 @@ dev = [
 
 [project.scripts]
 edgar-search = "src.edgar.search:main"
-gex-calc    = "src.gex.gex_calculator:main"
 etf-flows   = "src.flows.scraper:main"
 dashboard   = "src.dashboard.app:main"
 

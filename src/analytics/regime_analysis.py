@@ -15,7 +15,6 @@ import pandas as pd
 from scipy import stats
 
 from src.config import get_settings, setup_logging
-from src.gex.models import GexSnapshot
 
 _log = setup_logging("analytics.regime")
 
@@ -86,27 +85,6 @@ class RegimeAnalysis:
     # ──────────────────────────────────────────────────────────────────────────
     # Data preparation
     # ──────────────────────────────────────────────────────────────────────────
-
-    def build_gex_series(
-        self,
-        snapshots: list[GexSnapshot],
-    ) -> pd.Series:
-        """Costruisce una serie temporale del GEX totale dagli snapshot.
-
-        Args:
-            snapshots: lista di GexSnapshot ordinati per timestamp.
-
-        Returns:
-            pd.Series: serie con DatetimeIndex e valori GEX totale.
-        """
-        if not snapshots:
-            return pd.Series(dtype=float)
-
-        data = {
-            pd.Timestamp(s.timestamp.date()): s.total_net_gex
-            for s in snapshots
-        }
-        return pd.Series(data).sort_index()
 
     def classify_regime(self, gex_value: float) -> str:
         """Classifica il regime in base al valore GEX.

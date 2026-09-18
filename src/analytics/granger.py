@@ -12,9 +12,9 @@ per direzione). Senza correzione, con 10 lag e alpha=0.05, la probabilità
 di almeno un falso positivo è ~40%.
 
 Mitigazione data snooping: find_optimal_lag() seleziona il lag sul training set
-(pre-2024) e lo valida su un holdout set separato. Il lag ottimale è esposto
-come GrangerAnalysis._GRANGER_LEAD_LAG e usato dal fattore granger_lead
-nel SignalModel.
+(pre-2024) e lo valida su un holdout set separato. Il fattore granger_lead del
+SignalModel consuma la colonna ``ibit_flow_5d_ago`` (lag 5): find_optimal_lag()
+serve a ricalibrare e validare quel lag quando arrivano nuovi dati.
 """
 
 from __future__ import annotations
@@ -287,8 +287,6 @@ class GrangerAnalysis:
     # Optimal lag selection (data snooping mitigation)
     # ──────────────────────────────────────────────────────────────────────────
 
-    _GRANGER_LEAD_LAG = 5  # Lag validato via find_optimal_lag() su pre-2024.
-
     @classmethod
     def find_optimal_lag(
         cls,
@@ -468,10 +466,8 @@ class GrangerAnalysis:
             "⚠️  DATA SNOOPING WARNING: Il lag del fattore granger_lead va determinato "
             "con find_optimal_lag() su un training set separato, non sullo stesso dataset "
             "del backtest. Usare find_optimal_lag(train_end='YYYY-MM-DD') per ricalibrare "
-            "il lag quando nuovi dati sono disponibili. Il lag attuale ({lag}) è definito "
-            "in factor_scorers._GRANGER_LEAD_LAG e validato via find_optimal_lag().".format(
-                lag=self._GRANGER_LEAD_LAG,
-            )
+            "il lag quando nuovi dati sono disponibili. Il lag attuale è cablato nella "
+            "colonna 'ibit_flow_5d_ago' consumata dal fattore."
         )
 
         return "\n".join(lines)

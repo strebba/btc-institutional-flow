@@ -176,9 +176,6 @@ def get_ifi() -> JSONResponse:
     try:
         from src.analytics.ifi import IFIModel, regime_label
         from src.analytics.ifi_db import IFIDb
-        from src.flows.scraper import FarsideScraper
-        from src.flows.price_fetcher import PriceFetcher
-        from src.flows.correlation import FlowCorrelation
 
         db = IFIDb()
         series_df = db.get_series(days=520)
@@ -186,13 +183,8 @@ def get_ifi() -> JSONResponse:
 
         if series_df.empty:
             _log.info("IFI DB vuoto — calcolo on-the-fly (solo flows+prezzo)")
-            scraper = FarsideScraper()
-            raw = scraper.fetch()
-            agg = scraper.aggregate(raw)
-            fetcher = PriceFetcher()
-            prices = fetcher.get_all_prices()
-            corr = FlowCorrelation()
-            merged = corr.merge(agg, prices)
+            from src.api.data_pipeline import get_flow_context
+            merged = get_flow_context()["merged_df"]
 
             if "total_flow" in merged.columns:
                 merged = merged.rename(columns={"total_flow": "total_flow_usd"})

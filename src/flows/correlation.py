@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import get_settings, setup_logging
-from src.flows.models import AggregateFlows, MergedRecord
+from src.flows.models import AggregateFlows
 
 _log = setup_logging("flows.correlation")
 
@@ -213,127 +213,6 @@ class FlowCorrelation:
                 stats["by_ticker"] = etf_stats
 
         return stats
-
-    def flow_concentration(self, merged: pd.DataFrame) -> pd.DataFrame:
-        """Calcola la concentrazione dei flussi per ogni ETF.
-
-        Per ogni giorno, calcola:
-          - % del totale per ogni ETF (valore assoluto)
-          - Herfindahl-Hirschman Index (HHI) per concentrazione
-          - Numero di ETF con inflow > 0
-
-        Args:
-            merged: DataFrame da merge().
-
-        Returns:
-            pd.DataFrame con colonne: ibit_pct, fbtc_pct, ..., hhi, n_inflow_etfs.
-        """
-        etf_flow_cols = [c for c in merged.columns if c.endswith("_flow") and c != "total_flow"]
-        if not etf_flow_cols:
-            return pd.DataFrame()
-
-        etf_flows = merged[etf_flow_cols].fillna(0)
-        abs_total = etf_flows.abs().sum(axis=1)
-        abs_total = abs_total.replace(0, np.nan)
-
-        result = pd.DataFrame(index=merged.index)
-        for col in etf_flow_cols:
-            ticker = col.replace("_flow", "")
-            result[f"{ticker}_pct"] = (etf_flows[col].abs() / abs_total * 100).round(2)
-
-        # HHI: somma dei quadrati delle quote (0-10000, dove 10000 = monopolio)
-        shares = etf_flows.abs().div(abs_total, axis=0)
-        result["hhi"] = (shares**2).sum(axis=1).round(4)
-
-        # Numero di ETF con inflow positivo
-        result["n_inflow_etfs"] = (etf_flows > 0).sum(axis=1)
-
-        return result.dropna(how="all")
-
-    def flow_divergence(self, merged: pd.DataFrame) -> pd.DataFrame:
-        """Rileva divergenze tra flussi degli ETF maggiori.
-
-        Una divergenza si verifica quando ETF principali hanno flussi
-        di segno opposto (es. IBIT inflow + GBTC outflow).
-
-        Args:
-            merged: DataFrame da merge().
-
-        Returns:
-            pd.DataFrame con colonne:
-              - divergence_flag: True se c'è divergenza significativa
-              - divergence_magnitude: valore assoluto della differenza netta
-              - inflow_etfs: lista ticker con inflow
-              - outflow_etfs: lista ticker con outflow
-        """
-        major_tickers = ["ibit_flow", "fbtc_flow", "gbtc_flow", "bitb_flow", "arkb_flow"]
-        available = [c for c in major_tickers if c in merged.columns]
-        if len(available) < 2:
-            return pd.DataFrame()
-
-        etf_flows = merged[available].fillna(0)
-        result = pd.DataFrame(index=merged.index)
-
-        # Divergenza: almeno un ETF con inflow e uno con outflow significativo
-        has_inflow = (etf_flows > 50e6).any(axis=1)  # > $50M inflow
-        has_outflow = (etf_flows < -50e6).any(axis=1)  # > $50M outflow
-        result["divergence_flag"] = has_inflow & has_outflow
-
-        # Magnitudine: differenza tra il max inflow e il max outflow
-        result["divergence_magnitude_usd_m"] = (
-            (etf_flows.max(axis=1) - etf_flows.min(axis=1)) / 1e6
-        ).round(2)
-
-        # Ticker con inflow/outflow
-        result["inflow_etfs"] = etf_flows.apply(
-            lambda row: [c.replace("_flow", "").upper() for c in available if row[c] > 50e6], axis=1
-        )
-        result["outflow_etfs"] = etf_flows.apply(
-            lambda row: [c.replace("_flow", "").upper() for c in available if row[c] < -50e6],
-            axis=1,
-        )
-
-        return result
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Conversione in MergedRecord list
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def to_merged_records(self, merged: pd.DataFrame) -> list[MergedRecord]:
-        """Converte il DataFrame in lista di MergedRecord dataclass.
-
-        Args:
-            merged: DataFrame da merge().
-
-        Returns:
-            list[MergedRecord].
-        """
-        result: list[MergedRecord] = []
-        for idx, row in merged.iterrows():
-            d = idx.date() if hasattr(idx, "date") else idx
-            result.append(
-                MergedRecord(
-                    date=d,
-                    ibit_flow=float(row["ibit_flow"]) if pd.notna(row.get("ibit_flow")) else None,
-                    total_flow=float(row["total_flow"])
-                    if pd.notna(row.get("total_flow"))
-                    else None,
-                    btc_close=float(row["btc_close"]) if pd.notna(row.get("btc_close")) else None,
-                    btc_return=float(row["btc_return"])
-                    if pd.notna(row.get("btc_return"))
-                    else None,
-                    ibit_close=float(row["ibit_close"])
-                    if pd.notna(row.get("ibit_close"))
-                    else None,
-                    ibit_btc_ratio=float(row["ibit_btc_ratio"])
-                    if pd.notna(row.get("ibit_btc_ratio"))
-                    else None,
-                    btc_realized_vol_7d=float(row["btc_vol_7d"])
-                    if pd.notna(row.get("btc_vol_7d"))
-                    else None,
-                )
-            )
-        return result
 
     # ──────────────────────────────────────────────────────────────────────────
     # Plotly visualization

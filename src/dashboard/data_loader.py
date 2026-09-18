@@ -34,24 +34,9 @@ def _get_backtest_context(days: int = 365):
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
 def load_prices_and_flows() -> pd.DataFrame:
     """Carica prezzi BTC/IBIT e flussi ETF aggregati."""
-    from src.flows.correlation import FlowCorrelation
-    from src.flows.price_fetcher import PriceFetcher
-    from src.flows.scraper import FarsideScraper
+    from src.api.data_pipeline import get_flow_context
 
-    pf = PriceFetcher()
-    prices = pf.get_all_prices()
-    if prices.empty:
-        # FIX: PriceFetcher non ha fetch_and_store — usa fetch() direttamente
-        pf.fetch("BTC-USD")
-        pf.fetch("IBIT")
-        prices = pf.get_all_prices()
-
-    scraper = FarsideScraper()
-    flows = scraper.fetch()
-    agg_flows = scraper.aggregate(flows)
-
-    corr = FlowCorrelation()
-    return corr.merge(agg_flows, prices)
+    return get_flow_context(price_fallback=True)["merged_df"]
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)

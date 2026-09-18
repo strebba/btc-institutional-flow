@@ -157,23 +157,3 @@ class TestEventStudyResult:
         for r in result:
             assert r.significant == (r.p_value < 0.05)
 
-
-class TestRunOnPriceLevels:
-    def test_returns_single_result(self, study, prices):
-        mean_price = float(prices["close"].mean())
-        result = study.run_on_price_levels([mean_price], "round_number", prices)
-        assert isinstance(result, EventStudyResult)
-
-    def test_empty_levels_returns_none(self, study, prices):
-        result = study.run_on_price_levels([], "test", prices)
-        assert result is None
-
-
-class TestPlot:
-    def test_returns_figure_or_none(self, study, prices):
-        mean_price = float(prices["close"].mean())
-        barriers = [_make_barrier("knock_in", mean_price)]
-        results = study.run(barriers, prices)
-        fig = study.plot(results)
-        # Plotly potrebbe non essere installato, ma non deve crashare
-        assert fig is None or hasattr(fig, "data")

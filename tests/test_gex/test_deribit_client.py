@@ -124,26 +124,6 @@ class TestGetSpotPrice:
             assert len(calls) == 1
 
 
-class TestClearCache:
-    def test_clear_cache_forces_refetch(self):
-        client = DeribitClient()
-        calls = []
-
-        def mock_get(*args, **kwargs):
-            calls.append(1)
-            resp = MagicMock()
-            resp.json.return_value = {"result": {"index_price": 90000.0}}
-            resp.raise_for_status.return_value = None
-            return resp
-
-        with patch.object(client._session, "get", side_effect=mock_get):
-            client.get_spot_price()
-            assert len(calls) == 1
-            client.clear_cache()
-            client.get_spot_price()
-            assert len(calls) == 2
-
-
 class TestFetchAllOptions:
     def test_empty_instruments_graceful(self):
         """fetch_all_options con zero strumenti non deve crashare."""

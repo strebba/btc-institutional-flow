@@ -116,9 +116,6 @@ barriers = db.get_active_barriers()
 
 # Aggiorna prezzi BTC usando ratio corrente
 db.compute_btc_prices(ibit_btc_ratio=0.000612)
-
-# Aggiorna status (triggered/active) in base al prezzo IBIT corrente
-db.update_barrier_statuses(current_ibit_price=51.20)
 ```
 
 ## Script CLI

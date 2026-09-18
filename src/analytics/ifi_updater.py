@@ -1,4 +1,4 @@
-"""Logica di aggiornamento IFI DB — condivisa tra cron_ifi.py e il startup di main.py.
+"""Logica di aggiornamento IFI DB — usata dal job scheduler in src/api/scheduler.py.
 
 Esportazioni pubbliche:
     run(backfill, days) → int   0=ok, 1=errore
@@ -19,9 +19,6 @@ from src.analytics.ifi import (
 )
 from src.analytics.ifi_db import IFIDb
 from src.config import setup_logging
-from src.flows.correlation import FlowCorrelation
-from src.flows.price_fetcher import PriceFetcher
-from src.flows.scraper import FarsideScraper
 
 _log = setup_logging("analytics.ifi_updater")
 
@@ -29,15 +26,9 @@ BACKFILL_DAYS = 520
 
 
 def _build_df(fetch_days: int) -> pd.DataFrame:
-    scraper = FarsideScraper()
-    raw = scraper.fetch()
-    agg = scraper.aggregate(raw)
+    from src.api.data_pipeline import get_flow_context
 
-    fetcher = PriceFetcher()
-    prices = fetcher.get_all_prices()
-
-    corr = FlowCorrelation()
-    merged = corr.merge(agg, prices)
+    merged = get_flow_context()["merged_df"]
 
     if merged.empty:
         raise ValueError("merged DataFrame vuoto — verifica scraper e price fetcher")

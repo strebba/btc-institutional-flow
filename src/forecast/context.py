@@ -46,9 +46,6 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
     """Recupera GEX/flussi/macro e calcola il segnale. Solleva DataUnavailable sui critici."""
     from src.gex.deribit_client import DeribitClient
     from src.gex.gex_calculator import GexCalculator
-    from src.flows.scraper import FarsideScraper
-    from src.flows.price_fetcher import PriceFetcher
-    from src.flows.correlation import FlowCorrelation
     from src.edgar.structured_notes_db import StructuredNotesDB
 
     # ── GEX ───────────────────────────────────────────────────────────────────
@@ -68,10 +65,8 @@ def gather_dealer_flow_context(weights: Optional[dict[str, float]] = None) -> De
     # ── Flussi ETF ────────────────────────────────────────────────────────────
     _log.info("Fetch flussi ETF da Farside...")
     try:
-        scraper = FarsideScraper()
-        agg_flows = scraper.aggregate(scraper.fetch())
-        prices = PriceFetcher().get_all_prices()
-        merged = FlowCorrelation().merge(agg_flows, prices)
+        from src.api.data_pipeline import get_flow_context
+        merged = get_flow_context()["merged_df"]
     except Exception as exc:
         raise DataUnavailable(f"Fetch flussi fallito: {exc}") from exc
 

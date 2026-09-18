@@ -246,25 +246,6 @@ class TestSummaryTable:
         assert table.loc["test", "Profit Factor"] == "∞"
 
 
-class TestPlot:
-    def test_returns_figure_or_none(self, bt, df):
-        results = bt.run(df)
-        fig = bt.plot(results)
-        assert fig is None or hasattr(fig, "data")
-
-    def test_plot_with_empty_equity_skipped(self, bt):
-        from src.analytics.backtest import BacktestMetrics
-        empty_m = BacktestMetrics(
-            strategy_name="empty", total_return=0.0, annualized_return=0.0,
-            sharpe_ratio=0.0, max_drawdown=0.0, win_rate=0.0, profit_factor=0.0,
-            n_trades=0, days_long=0, days_short=0, days_flat=0,
-        )
-        results = {"test": empty_m}
-        fig = bt.plot(results)
-        # Non deve crashare
-        assert fig is None or hasattr(fig, "data")
-
-
 class TestSharpeSanity:
     def test_high_sharpe_does_not_crash(self, bt):
         """Sharpe elevato deve essere calcolato correttamente senza crash."""
@@ -277,36 +258,6 @@ class TestSharpeSanity:
         rets = pd.Series(rng.normal(0.001, 0.02, 252))
         result = bt._compute_metrics(rets, "test")
         assert isinstance(result.sharpe_ratio, float)
-
-
-class TestRegimeCoverage:
-    def test_returns_dict(self, bt):
-        dates = pd.date_range("2023-01-01", periods=365, freq="D")
-        df = pd.DataFrame({"dummy": range(365)}, index=dates)
-        result = bt.regime_coverage(df)
-        assert "periods_covered" in result
-        assert "coverage_pct" in result
-        assert "is_adequate" in result
-
-    def test_single_regime_not_adequate(self, bt):
-        """Un solo periodo di 3 mesi non è adeguato."""
-        dates = pd.date_range("2024-01-15", periods=60, freq="D")
-        df = pd.DataFrame({"dummy": range(60)}, index=dates)
-        result = bt.regime_coverage(df)
-        assert not result["is_adequate"]
-
-    def test_multiple_regimes_adequate(self, bt):
-        """Dataset che copre 2022 bear + 2024 launch → adeguato."""
-        dates = pd.date_range("2022-01-01", periods=800, freq="D")
-        df = pd.DataFrame({"dummy": range(800)}, index=dates)
-        result = bt.regime_coverage(df)
-        assert result["is_adequate"]
-
-    def test_empty_dataframe(self, bt):
-        df = pd.DataFrame(index=pd.DatetimeIndex([]))
-        result = bt.regime_coverage(df)
-        assert not result["is_adequate"]
-        assert result["n_covered"] == 0
 
 
 class TestCompositeMode:

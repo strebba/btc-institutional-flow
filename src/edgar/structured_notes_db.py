@@ -122,7 +122,7 @@ class StructuredNotesDB:
     Args:
         db_path: percorso al file SQLite. Default: ``data/structured_notes.db``
             (``_VERSIONED_DB``, path hardcodato in questo modulo) — a differenza
-            di ``SignalDB``/``PredictionDB``/``AlertDB``, questa classe ignora
+            di ``PredictionDB``/``AlertDB``, questa classe ignora
             la variabile d'ambiente ``DB_PATH`` e ``settings.yaml``. Il DB è
             versionato nel repo (fonte di verità: filesystem DO effimero), non
             va spostato con override runtime.
@@ -222,15 +222,6 @@ class StructuredNotesDB:
                     int(n_contracts),
                 ),
             )
-
-    def get_last_macro_snapshot(self) -> dict | None:
-        """Ultima fotografia macro registrata, None se la tabella e' vuota."""
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT snapshot_date, captured_at, funding_ann_pct, oi_usd, n_contracts "
-                "FROM macro_snapshots ORDER BY snapshot_date DESC LIMIT 1"
-            ).fetchone()
-        return dict(row) if row else None
 
     def get_oi_change_pct(self, days: int = 7) -> float | None:
         """Variazione percentuale dell'open interest sulla finestra richiesta.
@@ -581,68 +572,6 @@ class StructuredNotesDB:
                     updated += 1
         _log.info("Aggiornati prezzi BTC per %d barriere (su %d totali)", updated, total)
         return updated
-
-    def update_barrier_statuses(self, current_ibit_price: float) -> dict[str, int]:
-        """Aggiorna lo status delle barriere in base al prezzo corrente.
-
-        Una barriera è 'triggered' se il prezzo IBIT corrente ha attraversato
-        il livello della barriera. La logica dipende dal tipo:
-          - knock_in: triggered se current ≤ level (prezzo sceso sotto)
-          - autocall:  triggered se current ≥ level (prezzo salito sopra)
-          - buffer:    triggered se current ≤ level
-          - knock_out: triggered se current ≥ level
-
-        Args:
-            current_ibit_price: prezzo corrente di IBIT.
-
-        Returns:
-            dict con conteggi: {"triggered": N, "reactivated": M}.
-        """
-        counts = {"triggered": 0, "reactivated": 0}
-        triggered_ids: list[int] = []
-        reactivated_ids: list[int] = []
-
-        with self._conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT b.id, b.barrier_type, b.level_price_ibit, b.status
-                FROM barrier_levels b
-                JOIN notes n ON b.note_id = n.id
-                WHERE b.level_price_ibit IS NOT NULL
-                  AND COALESCE(n.underlying, 'IBIT') = 'IBIT'
-                """
-            ).fetchall()
-
-            for row in rows:
-                btype = row["barrier_type"]
-                level = row["level_price_ibit"]
-                old_status = row["status"]
-
-                if btype in ("knock_in", "buffer"):
-                    new_triggered = current_ibit_price <= level
-                else:  # autocall, knock_out
-                    new_triggered = current_ibit_price >= level
-
-                if new_triggered and old_status == "active":
-                    triggered_ids.append(row["id"])
-                    counts["triggered"] += 1
-                elif not new_triggered and old_status == "triggered":
-                    reactivated_ids.append(row["id"])
-                    counts["reactivated"] += 1
-
-            if triggered_ids:
-                conn.executemany(
-                    "UPDATE barrier_levels SET status='triggered' WHERE id=?",
-                    [(bid,) for bid in triggered_ids],
-                )
-            if reactivated_ids:
-                conn.executemany(
-                    "UPDATE barrier_levels SET status='active' WHERE id=?",
-                    [(bid,) for bid in reactivated_ids],
-                )
-
-        _log.info("Barrier status aggiornati: %s (prezzo IBIT=%.2f)", counts, current_ibit_price)
-        return counts
 
     # ─── Helpers privati ─────────────────────────────────────────────────────
 

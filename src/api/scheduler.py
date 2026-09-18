@@ -1,4 +1,4 @@
-"""APScheduler in-process: alert Telegram, IFI update, forecast predict/verify/calibrate.
+"""APScheduler in-process: alert Telegram, IFI update, barrier snapshot, forecast predict/verify/calibrate.
 
 Espone variabili globali _alert_scheduler, _ifi_scheduler, _forecast_scheduler
 per health checking dall'esterno (es. /api/forecast/status).
@@ -145,6 +145,17 @@ async def _auto_ifi_update(*, backfill: bool = False, days: int = 1) -> None:
         _log.exception("[ifi] aggiornamento fallito")
 
 
+async def _job_snapshot_barriers() -> None:
+    """Salva l'istantanea giornaliera delle barriere attive per il backtest storico."""
+    try:
+        from src.edgar.structured_notes_db import StructuredNotesDB
+        loop = asyncio.get_running_loop()
+        n = await loop.run_in_executor(None, StructuredNotesDB().snapshot_active_barriers)
+        _log.info("[barriers] snapshot giornaliero: %d barriere salvate", n)
+    except Exception:
+        _log.exception("[barriers] snapshot fallito")
+
+
 async def start_ifi_scheduler():
     global _ifi_scheduler
     try:
@@ -169,9 +180,16 @@ async def start_ifi_scheduler():
             replace_existing=True,
             misfire_grace_time=int(timedelta(hours=3).total_seconds()),
         )
+        scheduler.add_job(
+            _job_snapshot_barriers,
+            CronTrigger(hour=22, minute=30, timezone="UTC"),
+            id="barrier_snapshot_daily",
+            replace_existing=True,
+            misfire_grace_time=int(timedelta(hours=3).total_seconds()),
+        )
         scheduler.start()
         _ifi_scheduler = scheduler
-        _log.info("[ifi] scheduler started — daily update at 22:00 UTC")
+        _log.info("[ifi] scheduler started — daily update 22:00 UTC, barrier snapshot 22:30 UTC")
     except Exception:
         _log.exception("[ifi] scheduler startup failed")
 

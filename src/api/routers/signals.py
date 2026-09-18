@@ -28,16 +28,11 @@ def get_pillars_series(pillar: str = "composite", days: int = 180) -> JSONRespon
         return cached
 
     try:
-        from src.flows.scraper import FarsideScraper
-        from src.flows.price_fetcher import PriceFetcher
-        from src.flows.correlation import FlowCorrelation
+        from src.api.data_pipeline import get_flow_context
         from src.edgar.structured_notes_db import StructuredNotesDB
         from src.analytics.pillars import CompositeSignal
 
-        scraper = FarsideScraper()
-        merged = FlowCorrelation().merge(
-            scraper.aggregate(scraper.fetch()), PriceFetcher().get_all_prices()
-        )
+        merged = get_flow_context()["merged_df"]
         if "total_flow" in merged.columns and "total_flow_usd" not in merged.columns:
             merged = merged.rename(columns={"total_flow": "total_flow_usd"})
 
@@ -91,9 +86,7 @@ def get_signals() -> JSONResponse:
         return cached
 
     try:
-        from src.flows.scraper import FarsideScraper
-        from src.flows.price_fetcher import PriceFetcher
-        from src.flows.correlation import FlowCorrelation
+        from src.api.data_pipeline import get_flow_context
         from src.edgar.structured_notes_db import StructuredNotesDB
         from src.analytics.backtest import Backtest
         from src.analytics.pillars import CompositeSignal, CompositeInputs
@@ -104,13 +97,9 @@ def get_signals() -> JSONResponse:
         _gex_db = gex_data["gex_db"]
         total_gex = snapshot.total_net_gex
 
-        scraper = FarsideScraper()
-        raw_flows = scraper.fetch()
-        agg_flows = scraper.aggregate(raw_flows)
-        fetcher = PriceFetcher()
-        prices = fetcher.get_all_prices()
-        corr_eng = FlowCorrelation()
-        merged = corr_eng.merge(agg_flows, prices)
+        flow_ctx = get_flow_context()
+        raw_flows = flow_ctx["raw"]
+        merged = flow_ctx["merged_df"]
 
         ibit_flow_3d = 0.0
         if not merged.empty and "ibit_flow_3d" in merged.columns:
@@ -168,24 +157,6 @@ def get_signals() -> JSONResponse:
         )
         composite = CompositeSignal()
         signal_result = composite.compute(composite_inputs)
-
-        try:
-            from src.analytics.signal_db import SignalDB
-            SignalDB().insert(
-                signal_result,
-                spot_price_usd=spot,
-                total_gex_usd=total_gex,
-                ibit_flow_3d_usd=ibit_flow_3d,
-                funding_rate_pct=funding_rate_ann,
-                oi_change_7d_pct=oi_change_7d_pct,
-                long_short_ratio=long_short_ratio,
-                put_call_ratio=snapshot.put_call_ratio,
-                liq_long_usd=liquidations_long,
-                liq_short_usd=liquidations_short,
-                near_active_barrier=near_barrier,
-            )
-        except Exception:
-            _log.warning("signal_db insert fallito", exc_info=True)
 
         backtest_metrics: dict = {}
         equity_curve: list[dict] = []

@@ -20,20 +20,16 @@ def get_flows() -> JSONResponse:
 
     try:
         from src.flows.scraper import FarsideScraper
-        from src.flows.price_fetcher import PriceFetcher
         from src.flows.correlation import FlowCorrelation
         from src.analytics.granger import GrangerAnalysis
+        from src.api.data_pipeline import get_flow_context
 
-        scraper = FarsideScraper()
-        raw_flows = scraper.fetch()
-        agg_flows = scraper.aggregate(raw_flows)
-        df_pivot = scraper.to_dataframe(raw_flows)
-
-        fetcher = PriceFetcher()
-        prices = fetcher.get_all_prices()
+        flow_ctx = get_flow_context()
+        raw_flows = flow_ctx["raw"]
+        merged = flow_ctx["merged_df"]
+        df_pivot = FarsideScraper().to_dataframe(raw_flows)
 
         corr_eng = FlowCorrelation()
-        merged = corr_eng.merge(agg_flows, prices)
 
         if merged.empty:
             raise ValueError("Merge flussi/prezzi vuoto")

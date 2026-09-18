@@ -55,14 +55,6 @@ REGIME_NEUTRAL      = "Neutral"
 REGIME_DISTRIBUTION = "Distribution"
 REGIME_OUTFLOW      = "Outflow"
 
-ALL_REGIMES = (
-    REGIME_ACCUMULATION,
-    REGIME_MOMENTUM,
-    REGIME_NEUTRAL,
-    REGIME_DISTRIBUTION,
-    REGIME_OUTFLOW,
-)
-
 # ─── Output ──────────────────────────────────────────────────────────────────
 
 @dataclass

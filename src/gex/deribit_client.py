@@ -174,11 +174,6 @@ class DeribitClient:
                 _log.warning("HTTP error fetching %s: %s (status=%d)", endpoint, e, status)
             raise
 
-    def clear_cache(self) -> None:
-        """Svuota la cache in memoria."""
-        self._cache.clear()
-        self._cache_ts.clear()
-
     # ──────────────────────────────────────────────────────────────────────────
     # Public API methods
     # ──────────────────────────────────────────────────────────────────────────
@@ -231,29 +226,6 @@ class DeribitClient:
             dict: dati ticker.
         """
         result = self._get("/ticker", {"instrument_name": instrument_name})
-        return result or {}
-
-    def get_order_book(
-        self,
-        instrument_name: str,
-        depth: int = 1,
-    ) -> dict:
-        """Restituisce il book ordini (con greche e OI).
-
-        Args:
-            instrument_name: nome strumento Deribit.
-            depth: profondità del book (default 1).
-
-        Returns:
-            dict: book con gamma, delta, open_interest, etc.
-        """
-        result = self._get(
-            "/get_order_book",
-            {
-                "instrument_name": instrument_name,
-                "depth": depth,
-            },
-        )
         return result or {}
 
     # ──────────────────────────────────────────────────────────────────────────
