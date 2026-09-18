@@ -36,6 +36,16 @@ Rifacimento completo del frontend Streamlit — tema nativo + navigazione lazy.
   `git checkout -- data/structured_notes.db` prima di committare se non è un refresh EDGAR.
 - Test: 1032 pass, ruff clean, mypy senza nuovi errori nel dashboard.
 
+### Esito (chiusura sessione)
+- Commit `73e6783` push su `main` (rebase sopra 2 snapshot macro automatici); CI verde
+  (lint + test + docker build).
+- Deploy DO automatico (`deploy_on_push: true`) verificato live in produzione:
+  `/app/static/IBMPlexSans-var-latin.woff2` → `content-type: font/woff2` (conferma
+  static serving + font self-hosted attivi), `/` e `/report` → 200, `/api/health` healthy.
+- Durante il rolling deploy il vecchio container risponde al fallback SPA (`text/html`)
+  su `/app/static/*`: non è un errore, si stabilizza a deploy completato.
+- Istanza locale riavviata (8501) con lo stesso codice/tema.
+
 ## Skill Ecosystem (session 2026-08-04)
 
 **15 skill totali** disponibili per il progetto (8 globali symlinkate + 7 project-installed).
