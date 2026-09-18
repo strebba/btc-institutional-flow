@@ -8,13 +8,15 @@ Visualizza in tempo reale:
   - EDGAR Monitor — monitor note strutturate SEC
   - Validation   — walk-forward, factor decomposition, parameter sensitivity
 
-Moduli:
-  - data_loader   — @st.cache_data functions (fetch + caching)
-  - header        — _render_header (KPI strip)
-  - sidebar       — _sidebar (data status + backtest thresholds)
-  - tabs/*        — _tab_barrier_map, _tab_gex, _tab_flows, _tab_signals, _tab_edgar_monitor
-  - charts        — Plotly chart functions
-  - config        — theme constants
+Architettura:
+  - app.py        — entrypoint: carica i dati condivisi una volta, renderizza
+                    header + sidebar, poi `st.navigation` (solo la pagina attiva
+                    viene eseguita → niente più backtest/sensitivity a ogni load)
+  - app_pages/*   — una pagina Streamlit per sezione (thin wrapper sulle funzioni
+                    `_tab_*` in tabs/)
+  - header/sidebar — KPI strip e stato dati
+  - tabs/*        — contenuto delle 6 sezioni
+  - charts        — funzioni Plotly condivise
 
 Avvio:
     streamlit run src/dashboard/app.py
@@ -33,183 +35,41 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 import pandas as pd
 import streamlit as st
 
-from src.config import get_settings
+from src.dashboard.data_loader import (
+    load_barriers,
+    load_db_summary,
+    load_gex,
+    load_macro,
+    load_prices_and_flows,
+    run_backtest,
+    run_event_study,
+    run_factor_decomp,
+    run_granger,
+    run_regime,
+    run_sensitivity,
+    run_signal_ic,
+    run_walk_forward,
+)
+from src.dashboard.components import inject_style
+from src.dashboard.header import _render_header
+from src.dashboard.sidebar import _sidebar
 
-_settings = get_settings()
-_theme = _settings["dashboard"]["theme"]
-
-_SURFACE = _theme.get("surface", "#161b22")
-_BORDER = _theme.get("border", "#30363d")
-_TEXT_MUTED = _theme.get("text_muted", "#8b949e")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Page config + CSS
-# ──────────────────────────────────────────────────────────────────────────────
+_PAGES_DIR = Path(__file__).resolve().parent / "app_pages"
 
 st.set_page_config(
     page_title="ibit-gamma-tracker",
-    page_icon="₿",
+    page_icon=":material/currency_bitcoin:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    f"""
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-  .stApp {{
-      background-color: {_theme["background"]};
-      font-family: 'Proxima Nova', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
-  }}
-  .main .block-container {{
-      padding-top: 1.5rem;
-      padding-bottom: 2rem;
-      max-width: 1400px;
-  }}
-  section[data-testid="stSidebar"] {{
-      background-color: {_SURFACE};
-      border-right: 1px solid {_BORDER};
-  }}
-  section[data-testid="stSidebar"] .stButton button {{
-      background: {_theme["background"]};
-      color: {_theme["text"]};
-      border: 1px solid {_theme["positive"]};
-      border-radius: 8px;
-      font-weight: 500;
-      transition: all 0.2s;
-  }}
-  section[data-testid="stSidebar"] .stButton button:hover {{
-      border-color: {_theme["positive"]};
-      color: {_theme["positive"]};
-      background: {_SURFACE};
-      box-shadow: 0 0 10px {_theme["positive"]}40;
-  }}
-  [data-testid="metric-container"] {{
-      background: {_SURFACE};
-      border: 1px solid {_BORDER};
-      border-radius: 10px;
-      padding: 10px 16px;
-      transition: border-color 0.15s;
-  }}
-  [data-testid="metric-container"]:hover {{ border-color: {_theme["positive"]}50; }}
-  [data-testid="stMetricValue"] {{
-      font-size: 22px !important;
-      font-weight: 600;
-      color: {_theme["text"]} !important;
-  }}
-  [data-testid="stMetricDelta"] svg {{ display: none; }}
-  [data-testid="stMetricDelta"] > div {{
-      font-family: 'JetBrains Mono', monospace !important;
-      font-size: 12px !important;
-  }}
-  .stTabs [data-baseweb="tab-list"] {{
-      background-color: {_SURFACE};
-      border-radius: 10px;
-      padding: 4px;
-      border: 1px solid {_BORDER};
-      gap: 2px;
-  }}
-  .stTabs [data-baseweb="tab"] {{
-      background: transparent;
-      border-radius: 7px;
-      border: none;
-      color: {_TEXT_MUTED};
-      font-weight: 500;
-      font-size: 14px;
-      padding: 8px 18px;
-      transition: all 0.15s;
-  }}
-  .stTabs [aria-selected="true"] {{
-      background: {_BORDER} !important;
-      color: {_theme["positive"]} !important;
-      text-shadow: 0 0 8px {_theme["positive"]}80;
-  }}
-  .stTabs [data-baseweb="tab"]:hover {{
-      color: {_theme["text"]} !important;
-      background: rgba(0,255,157,0.06) !important;
-  }}
-  .stTabs [data-baseweb="tab-highlight"] {{ display: none; }}
-  h1 {{
-      font-size: 1.75rem !important;
-      font-weight: 700 !important;
-      letter-spacing: -0.02em !important;
-      color: {_theme["text"]} !important;
-  }}
-  h2, h3 {{
-      font-size: 0.72rem !important;
-      font-weight: 700 !important;
-      text-transform: uppercase !important;
-      letter-spacing: 0.07em !important;
-      color: {_TEXT_MUTED} !important;
-  }}
-  hr {{ border-color: {_BORDER} !important; margin: 1.25rem 0 !important; }}
-  [data-testid="stDataFrame"] {{
-      border: 1px solid {_BORDER};
-      border-radius: 10px;
-      overflow: hidden;
-  }}
-  .stAlert {{ border-radius: 8px !important; }}
-  .regime-badge {{
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 14px;
-      border-radius: 20px;
-      font-weight: 700;
-      font-size: 11px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-  }}
-  .regime-dot {{
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      display: inline-block;
-      flex-shrink: 0;
-  }}
-  .stCaptionContainer p {{
-      color: {_TEXT_MUTED} !important;
-      font-size: 0.78rem !important;
-  }}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+def _load_shared() -> tuple[dict, list[dict], pd.DataFrame, list[dict]]:
+    """Carica in parallelo i tre dataset condivisi (GEX, flussi, barriere).
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Imports dai moduli estratti
-# ──────────────────────────────────────────────────────────────────────────────
-
-from src.dashboard.data_loader import (  # noqa: E402
-    load_prices_and_flows,
-    load_gex,
-    load_barriers,
-    load_db_summary,
-    load_macro,
-    run_granger,
-    run_regime,
-    run_backtest,
-    run_event_study,
-    run_walk_forward,
-    run_factor_decomp,
-    run_sensitivity,
-)
-from src.dashboard.header import _render_header  # noqa: E402
-from src.dashboard.sidebar import _sidebar  # noqa: E402
-from src.dashboard.tabs.barrier_map import _tab_barrier_map  # noqa: E402
-from src.dashboard.tabs.gex import _tab_gex  # noqa: E402
-from src.dashboard.tabs.flows import _tab_flows  # noqa: E402
-from src.dashboard.tabs.signals import _tab_signals  # noqa: E402
-from src.dashboard.tabs.validation import _tab_validation  # noqa: E402
-from src.dashboard.tabs.edgar import _tab_edgar_monitor  # noqa: E402
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-def main() -> None:
+    Sono usati dall'header KPI e da quasi tutte le pagine: li carichiamo qui una
+    volta sola (con cache 15 min) e li mettiamo in session_state.
+    """
     snap: dict = {"spot_price": 0, "total_net_gex": 0, "regime": "unknown", "alerts": []}
     gex_by_strike: list[dict] = []
     merged_df = pd.DataFrame()
@@ -244,40 +104,58 @@ def main() -> None:
                 else:
                     barriers = result
 
+    return snap, gex_by_strike, merged_df, barriers
+
+
+def main() -> None:
+    snap, gex_by_strike, merged_df, barriers = _load_shared()
+
+    # Dati condivisi tra le pagine (evitano di ricaricarli in ogni script)
+    st.session_state["snap"] = snap
+    st.session_state["gex_by_strike"] = gex_by_strike
+    st.session_state["merged_df"] = merged_df
+    st.session_state["barriers"] = barriers
+
     manual_refresh = _sidebar(snap, merged_df, barriers)
 
     if manual_refresh:
-        for fn in [load_prices_and_flows, load_gex, load_barriers,
-                   load_db_summary, load_macro, run_granger, run_regime,
-                   run_backtest, run_event_study,
-                   run_walk_forward, run_factor_decomp, run_sensitivity]:
+        for fn in [
+            load_prices_and_flows,
+            load_gex,
+            load_barriers,
+            load_db_summary,
+            load_macro,
+            run_granger,
+            run_regime,
+            run_backtest,
+            run_event_study,
+            run_walk_forward,
+            run_factor_decomp,
+            run_sensitivity,
+            run_signal_ic,
+        ]:
             fn.clear()
         st.rerun()
 
     _render_header(snap, merged_df)
-    st.divider()
+    inject_style()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "🎯 Barrier Map",
-        "📊 GEX",
-        "💰 ETF Flows",
-        "🚦 Segnali",
-        "🔍 EDGAR Monitor",
-        "🔬 Validation",
-    ])
-
-    with tab1:
-        _tab_barrier_map(barriers, snap)
-    with tab2:
-        _tab_gex(snap, gex_by_strike, merged_df)
-    with tab3:
-        _tab_flows(merged_df)
-    with tab4:
-        _tab_signals(snap, merged_df, barriers)
-    with tab5:
-        _tab_edgar_monitor(barriers, merged_df)
-    with tab6:
-        _tab_validation(merged_df, barriers)
+    pages = [
+        st.Page(
+            str(_PAGES_DIR / "panoramica.py"),
+            title="Panoramica",
+            icon=":material/dashboard:",
+            default=True,
+        ),
+        st.Page(str(_PAGES_DIR / "signals.py"), title="Segnali", icon=":material/traffic:"),
+        st.Page(str(_PAGES_DIR / "gex.py"), title="GEX", icon=":material/candlestick_chart:"),
+        st.Page(str(_PAGES_DIR / "flows.py"), title="ETF Flows", icon=":material/water:"),
+        st.Page(str(_PAGES_DIR / "barrier_map.py"), title="Barrier Map", icon=":material/sell:"),
+        st.Page(str(_PAGES_DIR / "edgar.py"), title="EDGAR", icon=":material/search:"),
+        st.Page(str(_PAGES_DIR / "validation.py"), title="Validation", icon=":material/science:"),
+    ]
+    pg = st.navigation(pages, position="top")
+    pg.run()
 
     st.caption(
         f"Ultimo aggiornamento: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')} · "

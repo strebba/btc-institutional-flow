@@ -15,7 +15,7 @@ make install        # pip install -e ".[dev]"
 make run-api        # FastAPI → http://localhost:8000  (= python run_api.py)
 make run-dashboard  # streamlit run src/dashboard/app.py
 make compose-up     # replica ambiente DO: nginx:8080 + API + dashboard (docker compose)
-make test           # pytest tests/ -v  (~1026 test)
+make test           # pytest tests/ -v  (~1028 test)
 make test-unit      # pytest tests/ --ignore=tests/integration/ -v -q
 make lint           # .venv/bin/ruff check src/ tests/
 make typecheck      # .venv/bin/mypy src/ --ignore-missing-imports
@@ -43,7 +43,7 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati), `coingecko_client.py` (ripiego funding/OI) |
 | `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
-| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore, `data_loader.py` (cached), `tabs/` (6 moduli con validation tab), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/style.css` |
+| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore + `st.navigation` lazy (solo la pagina attiva calcola), `app_pages/` (6 pagine, thin wrapper sulle funzioni `_tab_*`), `tabs/` (contenuto delle 6 sezioni), `data_loader.py` (cached), `charts.py` (Plotly), `header.py`, `sidebar.py`, `static/` (font IBM Plex self-hosted) |
 | `src/api/` | FastAPI — `main.py` orchestratore (~225 righe), `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `auth.py`, `scheduler.py`. Nessun `schemas.py`/Pydantic sulle risposte: gli endpoint restituiscono dict via il wrapper `_ok()` |
 | `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti, multi-source (EMA, portfolio, dealer-flow) |
@@ -54,6 +54,29 @@ DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignora
 ignorano `DB_PATH`). `SignalDB`, `PredictionDB`, `AlertDB` rispettano `DB_PATH` (default
 `structured_notes.db`, override `data/runtime.db` in dev). Config: `config/settings.yaml` +
 `config/weights.yaml` via `src.config.get_settings()`. Scheduler/cron in `scripts/` (16 script).
+
+## Dashboard: tema e navigazione (2026-09)
+
+Tema **nativo Streamlit** in `.streamlit/config.toml` (nero `#000` + neon `#00FF9D`,
+palette Wagmi Lab), niente CSS inline. Font **IBM Plex Sans/Mono self-hosted** da
+`src/dashboard/static/` (serviti via `server.enableStaticServing=true` +
+`[[theme.fontFaces]]` → `/app/static/*`; stessi woff2 del Desk Note), nessuna
+dipendenza da fonts.gstatic.com. I colori dei grafici Plotly restano in
+`config/settings.yaml → dashboard.theme` (allineati al tema).
+
+Navigazione: `st.navigation(position="top")` + `st.Page` in `src/dashboard/app_pages/`
+(**7 pagine**, thin wrapper sulle funzioni `_tab_*` di `tabs/`). **Panoramica è la
+default** (answer-first: segnale + livelli + flussi a colpo d'occhio), poi Segnali,
+GEX, ETF Flows, Barrier Map, EDGAR, Validation. **Solo la pagina attiva viene eseguita**
+— prima `st.tabs` era eager ed eseguiva backtest/walk-forward/sensitivity/IC/Granger/
+event-study a ogni load. `app.py` carica GEX/flussi/barriere una volta e li mette in
+`st.session_state`. Il refresh manuale invalida anche `run_signal_ic` (presente nella
+lista `fn.clear()`). `_PAGES_DIR` usa `Path(__file__).resolve().parent`.
+
+Design system: `src/dashboard/components.py` (`tape`, `eyebrow`, `hero`, `pillar_bars`)
+in `st.html` con CSS proprio (classi `wx-`, stile Desk Note: numero grande mono, label
+neon). **Non tocca i widget nativi Streamlit** — niente override di classi interne.
+`inject_style()` è chiamato una volta in `app.py`.
 
 ## Skills disponibili
 
@@ -66,7 +89,7 @@ prima di iniziare — fornisce pattern, best practice, e reference aggiornati.
 | Skill | Trigger | File/Task |
 |-------|---------|-----------|
 | `fastapi-python` | Qualsiasi modifica a `src/api/` | `main.py`, `routers/*`, `auth.py`, `cache.py`, `scheduler.py` |
-| `developing-with-streamlit` | Qualsiasi modifica a `src/dashboard/` | `app.py`, `tabs/*`, `charts.py`, `data_loader.py`, `header.py`, `sidebar.py` |
+| `developing-with-streamlit` | Qualsiasi modifica a `src/dashboard/` | `app.py`, `app_pages/*`, `tabs/*`, `charts.py`, `data_loader.py`, `header.py`, `sidebar.py` |
 | `tdd` | Scrivere/aggiornare test (`tests/`) | Red-green-refactor, test first |
 | `systematic-debugging` | Qualsiasi bug o test failure | Root cause tracing, defense-in-depth |
 | `codebase-design` | Refactoring, nuovo modulo/seam | Deep module design, interfacce |

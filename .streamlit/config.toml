@@ -1,6 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Streamlit config — btc-institutional-flow (Wagmi Lab theme)
-# Coerente con config/settings.yaml → dashboard.theme
+# Tema nativo (unica sorgente di verità per la UI). I colori dei grafici Plotly
+# restano in config/settings.yaml → dashboard.theme, allineati a questa palette.
+# Font self-hosted da src/dashboard/static/ (nessuna dipendenza da fonts.gstatic.com).
 # ─────────────────────────────────────────────────────────────────────────────
 
 [server]
@@ -10,13 +12,64 @@ port = 8501
 enableCORS = false
 enableXsrfProtection = true
 enableWebsocketCompression = false
+# Serve i woff2 in src/dashboard/static/ via /app/static/* (per [[theme.fontFaces]])
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false
 
 [theme]
 base = "dark"
-primaryColor = "#00FF9D"        # Wagmi Lab — neon green
-backgroundColor = "#000000"     # Wagmi Lab — pure black
+primaryColor = "#00FF9D"           # Wagmi Lab — neon green
+backgroundColor = "#000000"        # pure black
 secondaryBackgroundColor = "#0d0d0d"  # surface near-black
-textColor = "#FFFFFF"           # pure white
+textColor = "#FFFFFF"
+borderColor = "#23282D"            # allineato al Desk Note
+codeBackgroundColor = "#0d0d0d"
+
+# Font self-hosted (IBM Plex, gli stessi del Desk Note)
+font = "IBM Plex Sans"
+headingFont = "IBM Plex Sans"
+codeFont = "IBM Plex Mono"
+baseFontSize = 15
+baseFontWeight = 400
+codeFontSize = "0.85rem"
+
+# Status/semantic colors (usati da badge, delta, sparkline, testo colorato)
+greenColor = "#00FF9D"
+redColor = "#FF0033"
+orangeColor = "#FFB020"
+yellowColor = "#FFB020"
+grayColor = "#8B949E"
+
+# Categorie per i grafici (barre stacked, serie)
+chartCategoricalColors = ["#00FF9D", "#FF6600", "#8B949E", "#A371F7", "#FF0033", "#FFB020", "#3FB950"]
+
+# Geometria
+baseRadius = "8px"
+showWidgetBorder = true
+showSidebarBorder = true
+
+# Dataframe
+dataframeBorderColor = "#23282D"
+dataframeHeaderBackgroundColor = "#0d0d0d"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/IBMPlexSans-var-latin.woff2"
+weight = "100 700"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/IBMPlexMono-400-latin.woff2"
+weight = "400"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/IBMPlexMono-500-latin.woff2"
+weight = "500"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/IBMPlexMono-600-latin.woff2"
+weight = "600"

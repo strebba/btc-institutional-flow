@@ -61,3 +61,26 @@ class TestValidationTab:
     def test_tab_function_exists(self):
         from src.dashboard.tabs.validation import _tab_validation
         assert callable(_tab_validation)
+
+
+class TestPanoramicaTab:
+    def test_module_importable(self):
+        from src.dashboard.tabs import panoramica
+        assert panoramica is not None
+
+    def test_tab_function_exists(self):
+        from src.dashboard.tabs.panoramica import _tab_panoramica
+        assert callable(_tab_panoramica)
+
+
+class TestComponents:
+    def test_module_importable(self):
+        from src.dashboard import components
+        assert components is not None
+
+    def test_component_functions_exist(self):
+        from src.dashboard.components import inject_style, tape, hero, pillar_bars
+        assert callable(inject_style)
+        assert callable(tape)
+        assert callable(hero)
+        assert callable(pillar_bars)

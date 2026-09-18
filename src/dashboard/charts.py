@@ -29,18 +29,18 @@ _ACCENT = _theme.get("accent", "#a371f7")
 _LAYOUT_BASE = dict(
     paper_bgcolor=_BG,
     plot_bgcolor=_BG,
-    font=dict(color=_TEXT, size=13, family="'Proxima Nova', Roboto, sans-serif"),
+    font=dict(color=_TEXT, size=13, family="'IBM Plex Sans', sans-serif"),
     legend=dict(
         bgcolor=_SURFACE,
         bordercolor=_BORDER,
         borderwidth=1,
-        font=dict(size=12, family="Roboto, sans-serif"),
+        font=dict(size=12, family="'IBM Plex Sans', sans-serif"),
     ),
-    margin=dict(l=60, r=70, t=55, b=45),
+    margin=dict(l=55, r=60, t=50, b=40),
     hoverlabel=dict(
         bgcolor=_SURFACE,
         bordercolor=_BORDER,
-        font=dict(color=_TEXT, size=12, family="JetBrains Mono, monospace"),
+        font=dict(color=_TEXT, size=12, family="'IBM Plex Mono', monospace"),
     ),
     modebar=dict(bgcolor="rgba(0,0,0,0)", color=_MUTED, activecolor=_POS),
 )
@@ -53,8 +53,8 @@ def _axis_style(**kwargs) -> dict:
         zerolinecolor=_BORDER,
         zerolinewidth=1,
         linecolor=_BORDER,
-        tickfont=dict(color=_MUTED, size=11),
-        title_font=dict(color=_TEXT, size=12),
+        tickfont=dict(color=_MUTED, size=11, family="'IBM Plex Sans', sans-serif"),
+        title_font=dict(color=_TEXT, size=12, family="'IBM Plex Sans', sans-serif"),
         **kwargs,
     )
 
@@ -62,7 +62,7 @@ def _axis_style(**kwargs) -> dict:
 def _style_subplot_titles(fig: go.Figure) -> None:
     """Apply consistent small-caps styling to subplot annotation titles."""
     for ann in fig.layout.annotations:
-        ann.font = dict(color=_MUTED, size=11, family="'Proxima Nova', Roboto, sans-serif")
+        ann.font = dict(color=_MUTED, size=11, family="'IBM Plex Sans', sans-serif")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

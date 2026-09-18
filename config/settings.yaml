@@ -109,9 +109,9 @@ dashboard:
   theme:
     background: "#000000"    # Wagmi Lab — pure black
     surface:    "#0d0d0d"    # card/sidebar surface (near-black)
-    border:     "#1a1a1a"    # subtle dark borders
+    border:     "#23282d"    # subtle dark borders (allineato al Desk Note)
     text:       "#FFFFFF"    # Wagmi Lab — pure white
-    text_muted: "#888888"    # secondary labels / captions
+    text_muted: "#8b949e"    # secondary labels / captions
     grid:       "#111111"    # chart gridlines
     positive:   "#00FF9D"    # Wagmi Lab — neon green (main accent)
     negative:   "#FF0033"    # Wagmi Lab — red

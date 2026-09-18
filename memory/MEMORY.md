@@ -1,5 +1,41 @@
 # ibit-gamma-tracker — Project Memory
 
+## Dashboard Redesign (session 2026-09-18)
+
+Rifacimento completo del frontend Streamlit — tema nativo + navigazione lazy.
+
+### Cosa è cambiato
+- **Tema nativo** in `.streamlit/config.toml` (nero `#000` + neon `#00FF9D`, Wagmi Lab):
+  rimosso il blocco CSS inline da `app.py` (~120 righe di `!important` su classi
+  interne Streamlit, fragile su 1.64). `settings.yaml → dashboard.theme` resta la
+  single source per i colori Plotly (`border` → `#23282d`, `text_muted` → `#8b949e`).
+- **Font self-hosted IBM Plex Sans/Mono**: woff2 copiati da `src/report/fonts/` in
+  `src/dashboard/static/`, serviti via `server.enableStaticServing=true` +
+  `[[theme.fontFaces]]` (`/app/static/*`). Nessuna dipendenza da fonts.gstatic.com.
+- **Navigazione lazy** `st.navigation(position="top")` + `st.Page` in
+  `src/dashboard/app_pages/` (7 pagine, thin wrapper sulle funzioni `_tab_*` di
+  `tabs/`). Prima `st.tabs` era eager: ogni load eseguiva backtest + walk-forward +
+  factor decomposition + sensitivity + IC + Granger + event study tutti insieme.
+  Ora solo la pagina attiva calcola. `app.py` carica GEX/flussi/barriere una volta
+  e li mette in `st.session_state`.
+- **Panoramica** (`tabs/panoramica.py`) nuova pagina di default: tape di stato →
+  hero del CompositeSignal (numero grande colorato) + `pillar_bars` → posizionamento
+  (`gex_walls`) + flussi/derivati → callout "prossimo trigger". Answer-first.
+- **Design system** `src/dashboard/components.py`: `tape`, `eyebrow`, `hero`,
+  `pillar_bars` in `st.html` (classi `wx-`, stile Desk Note). Non tocca i widget
+  nativi; `inject_style()` una volta in `app.py`.
+- **Contenuto**: emoji → Material Symbols; callout muri-di-testo → una riga +
+  `st.expander`; tabelle → `st.dataframe` + `st.column_config` (NumberColumn $,
+  ProgressColumn, DateColumn); metriche `border=True` + sparkline BTC.
+- `run_signal_ic` aggiunto alla lista di clear del refresh manuale (prima mancava).
+
+### Note operative
+- `_PAGES_DIR` usa `Path(__file__).resolve().parent` (i path relativi di `st.Page`
+  si rompono se l'app parte con path relativo).
+- `data/structured_notes.db` può sporcarsi con snapshot locali (boot reali/test):
+  `git checkout -- data/structured_notes.db` prima di committare se non è un refresh EDGAR.
+- Test: 1032 pass, ruff clean, mypy senza nuovi errori nel dashboard.
+
 ## Skill Ecosystem (session 2026-08-04)
 
 **15 skill totali** disponibili per il progetto (8 globali symlinkate + 7 project-installed).

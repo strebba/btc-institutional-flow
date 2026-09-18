@@ -6,38 +6,34 @@ import streamlit as st
 
 from src.dashboard.charts import composite_gauge, pillar_gauges, backtest_equity
 
-from src.analytics.pillars import LONG_THRESHOLD, RISK_OFF_THRESHOLD
 from src.config import setup_logging
 from src.dashboard.data_loader import compute_composite, run_backtest
 from src.dashboard.data_loader import load_macro
 
 _log = setup_logging("dashboard.tabs.signals")
 
+_LABELS = {
+    "gex": "GEX (dealer gamma)",
+    "barrier": "Barrier (note EDGAR)",
+    "etf_flows": "ETF Flows",
+    "macro": "Macro (derivati)",
+}
+
+
 def _tab_signals(snap: dict, merged_df: pd.DataFrame, barriers: list[dict]) -> None:
+    st.header("Segnali Operativi", icon=":material/traffic:")
+    st.caption(
+        "Blend pesato di 4 pilastri — GEX, Barrier, ETF Flows, Macro. Strumento di "
+        "lettura della microstruttura, non raccomandazione di investimento."
+    )
 
-    st.header("🚦 Segnali Operativi")
-    st.markdown("""
-Il segnale combina i **4 pilastri** dell'analisi — **GEX**, **Barrier**, **ETF Flows**,
-**Macro** — ognuno con un sotto-score 0-100. Il punteggio finale è un blend pesato.
-**Non sono raccomandazioni di investimento** ma strumenti di lettura della microstruttura.
-""")
-    st.warning("""
-⚠️ **Disclaimer**: modello sperimentale con dati limitati. Non sostituisce l'analisi
-personale. Usa sempre gestione del rischio. Il backtest storico non garantisce
-performance futura.
-""")
-
-    # Calcola il segnale composito (stessa logica di /api/signals)
     macro = load_macro()
     try:
         result = compute_composite(snap, merged_df, barriers, macro)
     except Exception as e:
         _log.warning("compute_composite fallito: %s", e)
         st.warning(f"Segnale composito temporaneamente non disponibile: {e}")
-        st.info(
-            "Verifica che i dati GEX, flussi e barriere siano caricati. "
-            "Se il problema persiste, prova il refresh manuale dalla sidebar."
-        )
+        st.info("Verifica che GEX, flussi e barriere siano caricati; prova il refresh.")
         return
     signal = result.signal
     pillars = [
@@ -45,86 +41,50 @@ performance futura.
         for p in result.pillars
     ]
 
-    # ── Gauge top-level + banner ───────────────────────────────────────────────
-    g1, g2 = st.columns([1, 1])
+    g1, g2 = st.columns([1, 1], vertical_alignment="center")
     with g1:
         st.plotly_chart(composite_gauge(result.score, signal), width="stretch")
     with g2:
         if signal == "LONG":
             st.success(
-                "### 🟢 REGIME FAVOREVOLE\n\n"
-                "Le condizioni strutturali favoriscono stabilità o rialzo graduale: "
-                "il mercato tende al *mean-reverting*, i cali vengono assorbiti meccanicamente."
+                "**Regime favorevole** — condizioni strutturali verso stabilità o rialzo.",
+                icon=":material/trending_up:",
             )
         elif signal == "RISK_OFF":
             st.error(
-                "### 🔴 REGIME DI RISCHIO\n\n"
-                "Volatilità elevata e ribasso potenzialmente amplificato. "
-                "**Azione**: ridurre leva, allargare stop, valutare coperture."
+                "**Regime di rischio** — ridurre leva, allargare stop, valutare coperture.",
+                icon=":material/trending_down:",
             )
         else:
             st.warning(
-                "### 🟡 REGIME MISTO\n\n"
-                "Segnali contrastanti tra i pilastri. Riduci esposizione e monitora: "
-                "un cambiamento in un pilastro può spostare il segnale."
+                "**Regime misto** — segnali contrastanti tra i pilastri.",
+                icon=":material/swap_vert:",
             )
 
-    # ── Sotto-gauge dei 4 pilastri ─────────────────────────────────────────────
     st.plotly_chart(pillar_gauges(pillars), width="stretch")
 
-    # ── Tabella leggibile dei pilastri ─────────────────────────────────────────
-    def _emoji(score):
-        if score is None:
-            return "⚪️ n/d"
-        if score >= LONG_THRESHOLD:
-            return "🟢"
-        if score < RISK_OFF_THRESHOLD:
-            return "🔴"
-        return "🟡"
-
-    labels = {"gex": "GEX (dealer gamma)", "barrier": "Barrier (note EDGAR)",
-              "etf_flows": "ETF Flows (domanda spot)", "macro": "Macro (derivati)"}
-    rows = "\n".join(
-        f"| {labels.get(p['name'], p['name'])} | {_emoji(p['score'])} "
-        f"{('%.0f/100' % p['score']) if p['score'] is not None else ''} "
-        f"| {p['weight']*100:.0f}% | {p['reason'] or '—'} |"
-        for p in pillars
-    )
-    st.markdown(
-        "| Pilastro | Score | Peso | Lettura |\n|:---|:---:|:---:|:---|\n" + rows
-    )
+    _pillar_table(pillars)
     if not macro:
         st.caption(
-            "ℹ️ Pilastro **Macro** non disponibile (CoinGlass non configurato in locale): "
-            "i pesi sono riscalati sugli altri pilastri."
+            "Pilastro Macro non disponibile (CoinGlass non configurato): i pesi sono "
+            "riscalati sugli altri pilastri."
         )
 
-    with st.expander("⚙️ Come viene calcolato il segnale (4 pilastri)"):
-        st.markdown("""
-Ogni pilastro produce un sotto-score 0-100; il segnale finale è il **blend pesato**
-dei pilastri disponibili (i pesi si riscalano se un pilastro manca).
-
-**1. GEX** — *Deribit options* — regime dealer gamma + contesto gamma-flip.
-GEX positivo = dealer stabilizzano (cali comprati); negativo = amplificano.
-
-**2. Barrier** — *note strutturate IBIT da SEC EDGAR* — livelli di hedging meccanico,
-**direzionali e pesati per notional**: knock-in *sotto* lo spot = accelerante ribasso;
-autocall *sopra* = resistenza. La vicinanza (kernel ~10%) aumenta il peso.
-
-**3. ETF Flows** — *Farside/CoinGlass* — domanda spot istituzionale (momentum,
-accelerazione, prezzo aggiustato per volatilità + flusso 3gg).
-
-**4. Macro** — *CoinGlass derivati* — funding, OI, long/short, put/call, liquidazioni
-(letti in chiave contrarian).
-
-**Soglie**: score ≥ 65 → 🟢 LONG · 40-65 → 🟡 CAUTION · < 40 → 🔴 RISK_OFF.
-""")
+    with st.expander("Come viene calcolato il segnale", icon=":material/settings:"):
+        st.markdown(
+            "Ogni pilastro produce un sotto-score 0-100; il segnale è il blend pesato "
+            "(i pesi si riscalano se un pilastro manca).\n\n"
+            "**GEX** — regime dealer gamma + contesto gamma-flip.\n"
+            "**Barrier** — livelli di hedging meccanico dalle note EDGAR, direzionali e "
+            "pesati per nozionale.\n"
+            "**ETF Flows** — domanda spot istituzionale (momentum, accelerazione, 3gg).\n"
+            "**Macro** — funding, OI, long/short, put/call, liquidazioni (chiave contrarian).\n\n"
+            "**Soglie**: score ≥ 65 → LONG · 40-64 → CAUTION · < 40 → RISK_OFF."
+        )
 
     st.divider()
-
-    # Backtest results
-    st.subheader("📈 Backtest della Strategia")
-    st.caption("Periodo di test: dal lancio IBIT opzioni (Nov 2024) ad oggi.")
+    st.subheader("Backtest della strategia")
+    st.caption("Periodo di test: dal lancio delle opzioni IBIT (Nov 2024) ad oggi.")
 
     if merged_df.empty:
         st.warning("Dati insufficienti per il backtest.")
@@ -143,50 +103,55 @@ accelerazione, prezzo aggiustato per volatilità + flusso 3gg).
 
     strat = results["strategy"]
     bah = results["buy_and_hold"]
-
-    # KPI backtest
     delta_sharpe = strat.sharpe_ratio - bah.sharpe_ratio
-    bc1, bc2, bc3, bc4 = st.columns(4)
-    bc1.metric(
-        "Sharpe Ratio",
-        f"{strat.sharpe_ratio:.2f}",
-        help="Rendimento risk-adjusted. >1 è buono, >2 è eccellente.",
-    )
-    bc2.metric(
-        "Max Drawdown",
-        f"{strat.max_drawdown * 100:.1f}%",
-        help="Massima perdita dal picco. Più basso è, meglio è.",
-    )
-    bc3.metric(
-        "Win Rate",
-        f"{strat.win_rate * 100:.0f}%",
-        help="Percentuale di giorni in profitto.",
-    )
-    bc4.metric(
-        "vs Buy&Hold",
-        f"{delta_sharpe:+.2f}",
-        help="Delta Sharpe rispetto al buy-and-hold BTC.",
-    )
 
-    # Tabella comparativa
-    table = bt.summary_table(results)
-    st.dataframe(table, width="stretch")
+    with st.container(horizontal=True):
+        st.metric("Sharpe Ratio", f"{strat.sharpe_ratio:.2f}", border=True)
+        st.metric("Max Drawdown", f"{strat.max_drawdown * 100:.1f}%", border=True)
+        st.metric("Win Rate", f"{strat.win_rate * 100:.0f}%", border=True)
+        st.metric("vs Buy&Hold", f"{delta_sharpe:+.2f}", border=True)
 
-    # Equity curve
-    st.subheader("Equity Curve")
+    st.dataframe(bt.summary_table(results), width="stretch", hide_index=True)
+
+    st.subheader("Equity curve")
     st.plotly_chart(backtest_equity(results), width="stretch")
 
-    st.caption("""
-⚠️ Il backtest ha limitazioni significative: lo storico è breve (dal Nov 2024),
-non include slippage e commissioni, e potrebbe soffrire di overfitting.
-Usa i risultati come indicazione direzionale, non come garanzia di performance.
-""")
+    with st.expander("Limiti del backtest"):
+        st.markdown(
+            "Storico breve (da Nov 2024), nessuno slippage/commissioni, possibile "
+            "overfitting. Usa i risultati come indicazione direzionale."
+        )
 
     if strat.days_long == 0 and strat.days_short == 0:
         st.info(
-            "La strategia è flat su tutto il periodo: il GEX storico non è ancora "
-            "disponibile. Il backtest mostrerà segnali reali man mano che il sistema "
-            "accumula snapshot GEX giornalieri."
+            "Strategia flat su tutto il periodo: lo storico GEX non è ancora disponibile. "
+            "Il backtest mostrerà segnali reali man mano che si accumulano snapshot."
         )
 
 
+def _pillar_table(pillars: list[dict]) -> None:
+    """Tabella leggibile dei 4 pilastri con score come progress bar."""
+    rows = pd.DataFrame(
+        [
+            {
+                "Pilastro": _LABELS.get(p["name"], p["name"]),
+                "Score": p["score"] if p["score"] is not None else 0.0,
+                "Peso": f"{p['weight'] * 100:.0f}%",
+                "Lettura": p["reason"] or "—",
+            }
+            for p in pillars
+        ]
+    )
+    st.dataframe(
+        rows,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Pilastro": st.column_config.TextColumn("Pilastro"),
+            "Score": st.column_config.ProgressColumn(
+                "Score", min_value=0, max_value=100, format="%.0f"
+            ),
+            "Peso": st.column_config.TextColumn("Peso"),
+            "Lettura": st.column_config.TextColumn("Lettura"),
+        },
+    )

@@ -1,68 +1,89 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import pandas as pd
 import streamlit as st
 
-from src.config import get_settings
+_BadgeColor = Literal["red", "orange", "yellow", "blue", "green", "violet", "gray", "grey", "primary"]
 
-_settings = get_settings()
-_theme = _settings["dashboard"]["theme"]
-_TEXT_MUTED = _theme.get("text_muted", "#888888")
+_REGIME_LABEL = {
+    "positive_gamma": "Stabilizzante",
+    "negative_gamma": "Amplificante",
+    "neutral": "Neutrale",
+}
+_REGIME_COLOR: dict[str, _BadgeColor] = {
+    "positive_gamma": "green",
+    "negative_gamma": "red",
+    "neutral": "gray",
+}
+
 
 def _render_header(snap: dict, merged_df: pd.DataFrame) -> None:
     regime = snap.get("regime", "unknown")
-    color_map = {
-        "positive_gamma": _theme["positive"],
-        "negative_gamma": _theme["negative"],
-        "neutral": _theme["neutral"],
-    }
-    regime_color = color_map.get(regime, _theme["text"])
+    regime_label = _REGIME_LABEL.get(regime, regime.replace("_", " ").title())
+    regime_color = _REGIME_COLOR.get(regime, "gray")
 
-    st.markdown(
-        f"""
-<div style="display:flex;align-items:center;gap:14px;margin-bottom:0.2rem">
-  <span style="font-size:1.75rem;font-weight:700;letter-spacing:-0.02em;color:{_theme["text"]}">
-    ₿ ibit-gamma-tracker
-  </span>
-  <span class="regime-badge"
-        style="background:{regime_color}18;color:{regime_color};
-               border:1px solid {regime_color}60;box-shadow:0 0 10px {regime_color}40">
-    <span class="regime-dot" style="background:{regime_color};box-shadow:0 0 6px {regime_color}"></span>
-    {regime.upper().replace("_", " ")}
-  </span>
-</div>
-<p style="color:{_TEXT_MUTED};font-size:0.875rem;margin:0 0 1.25rem;line-height:1.4">
-  Analisi dealer hedging su note strutturate IBIT · BTC
-</p>
-""",
-        unsafe_allow_html=True,
-    )
+    title_col, badge_col = st.columns([4, 1], vertical_alignment="center")
+    with title_col:
+        st.title("ibit-gamma-tracker", icon=":material/currency_bitcoin:")
+        st.caption("Analisi dealer hedging su note strutturate IBIT · BTC")
+    with badge_col:
+        st.badge(regime_label, icon=":material/circle:", color=regime_color)
 
     spot = snap.get("spot_price") or 0
     gex_m = (snap.get("total_net_gex") or 0) / 1e6
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("BTC Spot", f"${spot:,.0f}")
-    col2.metric("GEX Totale", f"{gex_m:+.1f}M$")
-    col3.metric(
-        "Put Wall",
-        f"${snap.get('put_wall') or 0:,.0f}",
-        delta=f"{snap.get('distance_to_put_wall_pct') or 0:.1f}%",
-        delta_color="inverse",
-    )
-    col4.metric(
-        "Call Wall",
-        f"${snap.get('call_wall') or 0:,.0f}",
-        delta=f"{snap.get('distance_to_call_wall_pct') or 0:.1f}%",
-    )
-    if not merged_df.empty and "btc_return" in merged_df.columns:
-        last_ret = merged_df["btc_return"].dropna()
-        ret_val = float(last_ret.iloc[-1]) * 100 if not last_ret.empty else 0
-        col5.metric("BTC Return (ieri)", f"{ret_val:+.2f}%")
-    else:
-        col5.metric("Gamma Flip", f"${snap.get('gamma_flip_price') or 0:,.0f}")
+    with st.container(horizontal=True):
+        st.metric(
+            "BTC Spot",
+            f"${spot:,.0f}",
+            border=True,
+            chart_data=_btc_spark(merged_df),
+            chart_type="line",
+        )
+        st.metric(
+            "GEX Totale",
+            f"{gex_m:+,.1f}M$",
+            border=True,
+            help="Gamma exposure netta aggregata (Deribit).",
+        )
+        st.metric(
+            "Gamma Flip",
+            f"${snap.get('gamma_flip_price') or 0:,.0f}",
+            delta=f"{_dist_pct(snap.get('gamma_flip_price'), spot):+.1f}% da spot",
+            border=True,
+            help="Prezzo al quale il GEX cambia segno.",
+        )
+        st.metric(
+            "Put Wall",
+            f"${snap.get('put_wall') or 0:,.0f}",
+            delta=f"{_dist_pct(snap.get('put_wall'), spot):+.1f}% da spot",
+            delta_color="inverse",
+            border=True,
+            help="Supporto meccanico: qui i dealer comprano.",
+        )
+        st.metric(
+            "Call Wall",
+            f"${snap.get('call_wall') or 0:,.0f}",
+            delta=f"{_dist_pct(snap.get('call_wall'), spot):+.1f}% da spot",
+            border=True,
+            help="Resistenza meccanica: qui i dealer vendono.",
+        )
 
-    alerts = snap.get("alerts", [])
-    if alerts:
-        for alert in alerts:
-            st.warning(f"⚠️ {alert}")
+    for alert in snap.get("alerts", []):
+        st.warning(f"{alert}", icon=":material/warning:")
+
+
+def _dist_pct(level: float | None, spot: float) -> float:
+    """Distanza percentuale di `level` dallo spot (0 se non calcolabile)."""
+    if not level or not spot:
+        return 0.0
+    return (level - spot) / spot * 100
+
+
+def _btc_spark(merged_df: pd.DataFrame) -> list[float]:
+    """Ultimi 30 prezzi di chiusura BTC per la sparkline del KPI spot."""
+    if merged_df.empty or "btc_close" not in merged_df.columns:
+        return []
+    return merged_df["btc_close"].dropna().tail(30).tolist()
