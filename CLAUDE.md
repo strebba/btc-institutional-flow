@@ -45,8 +45,8 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati), `coingecko_client.py` (ripiego funding/OI) |
-| `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
-| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore + `st.navigation` lazy (solo la pagina attiva calcola), `app_pages/` (7 pagine, thin wrapper sulle funzioni `_tab_*`), `tabs/` (contenuto delle 7 sezioni), `data_loader.py` (cached), `charts.py` (Plotly), `components.py` (design system), `header.py`, `sidebar.py`, `static/` (font IBM Plex self-hosted) |
+| `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + event study |
+| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore + `st.navigation` lazy (solo la pagina attiva calcola), `app_pages/` (5 pagine, thin wrapper sulle funzioni `_tab_*`), `tabs/` (contenuto delle 5 sezioni), `data_loader.py` (cached), `charts.py` (Plotly), `components.py` (design system), `header.py`, `sidebar.py`, `static/` (font IBM Plex self-hosted) |
 | `src/api/` | FastAPI — `main.py` orchestratore, `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `data_pipeline.py` (`get_flow_context`, pipeline flussi condivisa), `scheduler.py`. Nessun `schemas.py`/Pydantic sulle risposte: gli endpoint restituiscono dict via il wrapper `_ok()` |
 | `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti |
@@ -75,13 +75,15 @@ Asset: selettore BTC/ETH in cima alla sidebar (`st.segmented_control`, `bind="qu
 (`visible_pages`): con ETH solo Panoramica, GEX, ETF Flows.
 
 Navigazione: `st.navigation(position="top")` + `st.Page` in `src/dashboard/app_pages/`
-(**7 pagine**, thin wrapper sulle funzioni `_tab_*` di `tabs/`). **Panoramica è la
-default** (answer-first: segnale + livelli + flussi a colpo d'occhio), poi Segnali,
-GEX, ETF Flows, Barrier Map, EDGAR, Validation. **Solo la pagina attiva viene eseguita**
-— prima `st.tabs` era eager ed eseguiva backtest/walk-forward/sensitivity/IC/Granger/
-event-study a ogni load. `app.py` carica GEX/flussi/barriere una volta e li mette in
+(**5 pagine**, thin wrapper sulle funzioni `_tab_*` di `tabs/`). **Panoramica è la
+default** (answer-first: segnale + livelli + flussi a colpo d'occhio), poi GEX, ETF
+Flows, Barrier Map, EDGAR. Le pagine Segnali e Validation sono state rimosse
+(2026-10-07) insieme a walk-forward, sensitivity, factor decomposition e IC: il
+segnale composito resta in Panoramica, `/api/signals`, Telegram e Desk Note.
+**Solo la pagina attiva viene eseguita** — prima `st.tabs` era eager ed eseguiva
+Granger/event-study a ogni load. `app.py` carica GEX/flussi/barriere una volta e li mette in
 `st.session_state`. Il refresh manuale invalida anche `run_signal_ic` (presente nella
-lista `fn.clear()`). `_PAGES_DIR` (in `navigation.py`) usa `Path(__file__).resolve().parent`.
+lista `fn.clear()` dei loader rimasti). `_PAGES_DIR` (in `navigation.py`) usa `Path(__file__).resolve().parent`.
 
 Design system: `src/dashboard/components.py` (`tape`, `eyebrow`, `hero`, `pillar_bars`)
 in `st.html` con CSS proprio (classi `wx-`, stile Desk Note: numero grande mono, label
@@ -111,9 +113,9 @@ prima di iniziare — fornisce pattern, best practice, e reference aggiornati.
 | Skill | Trigger | File/Task |
 |-------|---------|-----------|
 | `crypto-derivatives` | GEX, gamma flip, dealer positioning, options flow, funding rate, barriere, max pain | `src/gex/*`, `src/edgar/barrier_utils.py`, `src/analytics/pillars.py` (pilastro gex/barrier), `tabs/gex.py`, `tabs/barrier_map.py` |
-| `quantitative-research` | Backtesting, alpha generation, factor models, regime detection, walk-forward, statistical arbitrage | `src/analytics/backtest.py`, `src/analytics/factor_scorers.py`, `src/analytics/regime_analysis.py`, `src/analytics/walk_forward.py`, `src/analytics/pillars.py` |
-| `Time Series Analysis` | Trend, autocorrelation, Granger causality, forecasting, ARIMA, ACF/PACF | `src/analytics/granger.py`, `src/forecast/*`, `src/flows/correlation.py`, `src/analytics/signal_validation.py` |
-| `portfolio-risk` | VaR, max drawdown, Sharpe/Sortino, correlation matrix, rolling metrics | `src/analytics/backtest.py`, `src/analytics/regime_analysis.py`, `src/analytics/sensitivity.py` |
+| `quantitative-research` | Backtesting, alpha generation, factor models, regime detection, walk-forward, statistical arbitrage | `src/analytics/backtest.py`, `src/analytics/factor_scorers.py`, `src/analytics/regime_analysis.py`, `src/analytics/pillars.py` |
+| `Time Series Analysis` | Trend, autocorrelation, Granger causality, forecasting, ARIMA, ACF/PACF | `src/analytics/granger.py`, `src/forecast/*`, `src/flows/correlation.py` |
+| `portfolio-risk` | VaR, max drawdown, Sharpe/Sortino, correlation matrix, rolling metrics | `src/analytics/backtest.py`, `src/analytics/regime_analysis.py` |
 | `scipy-best-practices` | Ottimizzazione, stat avanzata, interpolazione, signal processing | `src/analytics/*`, `src/forecast/calibration.py`, qualsiasi uso di `scipy.*` |
 | `plotly` | Qualsiasi grafico Plotly | `src/dashboard/charts.py`, `tabs/gex.py`, `tabs/barrier_map.py`, `tabs/flows.py`, `tabs/signals.py` |
 

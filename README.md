@@ -49,11 +49,7 @@ btc-institutional-flow/
 │   ├── analytics/      # Statistical Analysis
 │   │   ├── pillars.py         # CompositeSignal a 4 pilastri (single source of truth)
 │   │   ├── factor_scorers.py  # Libreria scoring 8 fattori (ex signal_model)
-│   │   ├── signal_validation.py # Information Coefficient, alpha decay, null model IC
 │   │   ├── backtest.py        # Backtest + null models (random, always_long, momentum)
-│   │   ├── walk_forward.py    # Walk-forward validation rolling train→test
-│   │   ├── factor_decomposition.py # OLS alpha/beta decomposition
-│   │   ├── sensitivity.py     # Parameter sensitivity ±20%
 │   │   ├── granger.py         # Granger causality + find_optimal_lag()
 │   │   ├── event_study.py     # CAR intorno ai barrier levels
 │   │   ├── regime_analysis.py # Welch t-test positive vs negative gamma
@@ -70,7 +66,7 @@ btc-institutional-flow/
 │   ├── api/            # FastAPI — main.py + routers/ (7), cache, scheduler
 │   │
 │   ├── dashboard/      # Streamlit Dashboard
-│   │   ├── app.py             # Orchestratore + st.navigation (7 pagine, lazy)
+│   │   ├── app.py             # Orchestratore + st.navigation (5 pagine, lazy)
 │   │   ├── app_pages/         # Thin wrapper st.Page (Panoramica di default)
 │   │   ├── tabs/              # Contenuto delle pagine (_tab_*)
 │   │   ├── data_loader.py     # Funzioni @st.cache_data condivise
@@ -103,18 +99,17 @@ btc-institutional-flow/
 
 ## Dashboard
 
-Navigazione a **7 pagine** con `st.navigation(position="top")`: solo la pagina attiva
-viene eseguita (niente backtest/walk-forward/IC calcolati a ogni load). **Panoramica è
+Navigazione a **5 pagine** con `st.navigation(position="top")`: solo la pagina attiva
+viene eseguita. Selettore BTC/ETH in sidebar (`?asset=eth`): con ETH restano
+Panoramica, GEX ed ETF Flows. **Panoramica è
 la default**, answer-first: segnale + livelli + flussi a colpo d'occhio.
 
 **Pagine:**
 - **Panoramica** — tape di stato, hero del CompositeSignal, pillar bars, posizionamento GEX, flussi/derivati, prossimo trigger
-- **Segnali** — CompositeSignal a 4 pilastri (GEX/Barrier/Flows/Macro) con gauge e backtest vs null models
 - **GEX** — Profilo Gamma Exposure, regime, gamma flip, put/call wall
 - **ETF Flows** — Flussi IBIT e multi-ETF, correlazione rolling, Granger causality
 - **Barrier Map** — Mappa visiva dei livelli critici EDGAR con confluenza GEX
 - **EDGAR** — Note strutturate SEC, barriere attive, event study CAR
-- **Validation** — Information Coefficient (potere predittivo), Walk-Forward, Factor Decomposition, Parameter Sensitivity
 
 Tema nativo in `.streamlit/config.toml` (nero + neon `#00FF9D`), font IBM Plex
 self-hosted in `src/dashboard/static/`, design system in `src/dashboard/components.py`.
@@ -248,12 +243,9 @@ nginx `:8080` (reverse proxy pubblico) + uvicorn `:8000` (FastAPI) + streamlit `
 
 | Test | Risultato |
 |------|-----------|
-| **Information Coefficient** | IC del CompositeSignal vs forward BTC return — validazione rolling con null model |
 | **GEX live** | +$41.5M → regime **POSITIVE_GAMMA**, Put Wall $60k (-12%), Call Wall $75k (+9%) |
 | **EDGAR filing** | 547 filing 424B2/424B3 trovati, JPMorgan dominante emittente |
 | **Note strutturate** | 8 note parsed (autocallable, barrier note), 10 barriere attive |
-| **Walk-Forward** | Rolling train (2 anni) → test (3 mesi) per validazione OOS |
-| **Factor Decomposition** | OLS regression per separare alpha puro da beta mascherato |
 
 ---
 

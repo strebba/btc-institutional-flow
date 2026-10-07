@@ -61,13 +61,11 @@ tutto il codice, i commit, i test e le discussioni.
 
 ## Validazione Statistica
 
+> Information Coefficient, walk-forward, factor decomposition e sensitivity sono stati
+> rimossi il 2026-10-07 insieme alla pagina Validation.
+
 | Termine | Definizione |
 |---------|-------------|
-| **InformationCoefficient** | Spearman rank correlation tra CompositeSignal oggi e rendimento BTC domani — misura il potere predittivo del segnale. IC > 0 e \|t\| > 2 = segnale significativo |
-| **RollingIC** | IC calcolato su finestra rolling (60gg) per stimare stabilità temporale — metriche: ic_mean, ic_std, IR, t_stat, pct_positive |
-| **InformationRatio** | IC_mean / IC_std — misura la consistenza del segnale. IR > 0.5 indica segnale stabile |
-| **AlphaDecay** | IC per orizzonte 1..15 giorni — mostra per quanto tempo il segnale mantiene potere predittivo |
-| **NullModelIC** | IC di un segnale casuale con la stessa distribuzione ma struttura temporale distrutta (permutazione) — confronto con IC reale per validare che il segnale non sia rumore |
 | **NullModel** (backtest) | Strategia naive per confronto: random (±1 al 50%), always_long, momentum_20d — la strategia deve battere TUTTI i null model |
 | **AnnualizationFactor** | BTC trades 365 giorni/anno — tutti i moduli (backtest, regime_analysis, correlation, ifi) ora usano `sqrt(365)` per consistenza |
 

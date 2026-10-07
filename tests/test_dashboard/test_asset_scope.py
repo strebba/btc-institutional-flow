@@ -20,11 +20,11 @@ def _eth_merged(n: int = 40) -> pd.DataFrame:
 
 
 class TestPagineVisibili:
-    def test_btc_ha_tutte_e_sette_le_pagine(self):
+    def test_btc_ha_cinque_pagine_senza_segnali_ne_validation(self):
         from src.dashboard.navigation import visible_pages
 
         assert [p.title for p in visible_pages(get_asset("BTC"))] == [
-            "Panoramica", "Segnali", "GEX", "ETF Flows", "Barrier Map", "EDGAR", "Validation",
+            "Panoramica", "GEX", "ETF Flows", "Barrier Map", "EDGAR",
         ]
 
     def test_eth_vede_solo_le_pagine_con_dati(self):

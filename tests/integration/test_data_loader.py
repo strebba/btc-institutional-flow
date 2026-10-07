@@ -1,46 +1,13 @@
-"""Test per data_loader.py — helper condivisi e compute_composite."""
+"""Test per data_loader.py — compute_composite."""
 
 from __future__ import annotations
 
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
 pytestmark = pytest.mark.integration
-
-
-# ─── _get_backtest_context ────────────────────────────────────────────────────
-
-
-class TestGetBacktestContext:
-    def test_returns_gex_series_and_barrier_history(self):
-        """Con DB popolati, ritorna entrambi."""
-        from src.dashboard.data_loader import _get_backtest_context
-
-        gex_series, barrier_history = _get_backtest_context(days=30)
-        assert isinstance(gex_series, pd.Series)
-        assert barrier_history is None or isinstance(barrier_history, pd.DataFrame)
-
-    def test_empty_db_does_not_crash(self):
-        """DB vuoto → gex_series vuoto, barrier_history=None senza eccezioni."""
-        from src.dashboard.data_loader import _get_backtest_context
-
-        gex_series, barrier_history = _get_backtest_context(days=30)
-        assert isinstance(gex_series, pd.Series)
-        assert barrier_history is None
-
-    def test_barrier_history_exception_graceful(self):
-        """Eccezione su barrier_history → ritorna None senza propagare."""
-        from src.dashboard.data_loader import _get_backtest_context
-
-        with patch("src.gex.gex_db.GexDB") as mock_gex:
-            mock_gex.return_value.get_series.return_value = pd.Series(dtype=float)
-            with patch("src.edgar.structured_notes_db.StructuredNotesDB") as mock_sndb:
-                mock_sndb.return_value.get_barrier_history.side_effect = RuntimeError("DB locked")
-                gex_series, barrier_history = _get_backtest_context(days=30)
-                assert barrier_history is None
 
 
 # ─── compute_composite ─────────────────────────────────────────────────────────
