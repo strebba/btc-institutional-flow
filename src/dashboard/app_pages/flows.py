@@ -2,4 +2,4 @@ import streamlit as st
 
 from src.dashboard.tabs.flows import _tab_flows
 
-_tab_flows(st.session_state["merged_df"])
+_tab_flows(st.session_state["merged_df"], st.session_state["asset_spec"])

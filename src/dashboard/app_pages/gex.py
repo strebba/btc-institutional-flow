@@ -6,4 +6,5 @@ _tab_gex(
     st.session_state["snap"],
     st.session_state["gex_by_strike"],
     st.session_state["merged_df"],
+    st.session_state["asset_spec"],
 )

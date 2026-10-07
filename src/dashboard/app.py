@@ -15,8 +15,12 @@ Architettura:
   - app_pages/*   — una pagina Streamlit per sezione (thin wrapper sulle funzioni
                     `_tab_*` in tabs/)
   - header/sidebar — KPI strip e stato dati
-  - tabs/*        — contenuto delle 6 sezioni
+  - tabs/*        — contenuto delle 7 sezioni
   - charts        — funzioni Plotly condivise
+  - navigation    — pagine visibili per asset (BTC: 7, ETH: Panoramica/GEX/Flussi)
+
+Asset: il selettore BTC/ETH in sidebar (``?asset=eth`` nell'URL) decide cosa si
+carica. Lo spec scelto va in ``st.session_state["asset_spec"]`` per le pagine.
 
 Avvio:
     streamlit run src/dashboard/app.py
@@ -50,38 +54,40 @@ from src.dashboard.data_loader import (
     run_signal_ic,
     run_walk_forward,
 )
+from src.assets import AssetSpec
 from src.dashboard.components import inject_style
 from src.dashboard.header import _render_header
-from src.dashboard.sidebar import _sidebar
-
-_PAGES_DIR = Path(__file__).resolve().parent / "app_pages"
+from src.dashboard.navigation import visible_pages
+from src.dashboard.sidebar import _asset_selector, _sidebar
 
 st.set_page_config(
     page_title="ibit-gamma-tracker",
-    page_icon=":material/currency_bitcoin:",
+    page_icon=":material/monitoring:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 
-def _load_shared() -> tuple[dict, list[dict], pd.DataFrame, list[dict]]:
-    """Carica in parallelo i tre dataset condivisi (GEX, flussi, barriere).
+def _load_shared(spec: AssetSpec) -> tuple[dict, list[dict], pd.DataFrame, list[dict]]:
+    """Carica in parallelo i dataset condivisi dell'asset (GEX, flussi, barriere).
 
     Sono usati dall'header KPI e da quasi tutte le pagine: li carichiamo qui una
-    volta sola (con cache 15 min) e li mettiamo in session_state.
+    volta sola (con cache 15 min) e li mettiamo in session_state. Le barriere
+    EDGAR esistono solo per BTC: per gli altri asset non si caricano.
     """
     snap: dict = {"spot_price": 0, "total_net_gex": 0, "regime": "unknown", "alerts": []}
     gex_by_strike: list[dict] = []
     merged_df = pd.DataFrame()
     barriers: list[dict] = []
 
-    with st.spinner("Caricamento dati in parallelo (GEX · Flussi · Barriere)..."):
+    with st.spinner(f"Caricamento dati {spec.key} in parallelo..."):
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {
-                pool.submit(load_gex): "gex",
-                pool.submit(load_prices_and_flows): "flows",
-                pool.submit(load_barriers): "barriers",
+                pool.submit(load_gex, spec.key): "gex",
+                pool.submit(load_prices_and_flows, spec.key): "flows",
             }
+            if spec.has("barriers"):
+                futures[pool.submit(load_barriers)] = "barriers"
             for future in as_completed(futures):
                 key = futures[future]
                 try:
@@ -108,15 +114,17 @@ def _load_shared() -> tuple[dict, list[dict], pd.DataFrame, list[dict]]:
 
 
 def main() -> None:
-    snap, gex_by_strike, merged_df, barriers = _load_shared()
+    spec = _asset_selector()
+    snap, gex_by_strike, merged_df, barriers = _load_shared(spec)
 
     # Dati condivisi tra le pagine (evitano di ricaricarli in ogni script)
+    st.session_state["asset_spec"] = spec
     st.session_state["snap"] = snap
     st.session_state["gex_by_strike"] = gex_by_strike
     st.session_state["merged_df"] = merged_df
     st.session_state["barriers"] = barriers
 
-    manual_refresh = _sidebar(snap, merged_df, barriers)
+    manual_refresh = _sidebar(snap, merged_df, barriers, spec)
 
     if manual_refresh:
         for fn in [
@@ -137,30 +145,26 @@ def main() -> None:
             fn.clear()
         st.rerun()
 
-    _render_header(snap, merged_df)
+    _render_header(snap, merged_df, spec)
     inject_style()
 
+    # Solo le pagine con dati per l'asset: con ETH spariscono Segnali, Barrier
+    # Map, EDGAR e Validation (se eri su una di quelle, si torna alla default).
     pages = [
-        st.Page(
-            str(_PAGES_DIR / "panoramica.py"),
-            title="Panoramica",
-            icon=":material/dashboard:",
-            default=True,
-        ),
-        st.Page(str(_PAGES_DIR / "signals.py"), title="Segnali", icon=":material/traffic:"),
-        st.Page(str(_PAGES_DIR / "gex.py"), title="GEX", icon=":material/candlestick_chart:"),
-        st.Page(str(_PAGES_DIR / "flows.py"), title="ETF Flows", icon=":material/water:"),
-        st.Page(str(_PAGES_DIR / "barrier_map.py"), title="Barrier Map", icon=":material/sell:"),
-        st.Page(str(_PAGES_DIR / "edgar.py"), title="EDGAR", icon=":material/search:"),
-        st.Page(str(_PAGES_DIR / "validation.py"), title="Validation", icon=":material/science:"),
+        st.Page(p.path, title=p.title, icon=p.icon, default=p.default)
+        for p in visible_pages(spec)
     ]
     pg = st.navigation(pages, position="top")
     pg.run()
 
+    fonti = (
+        "GEX: Deribit (pubblica) · Flussi: Farside/yfinance · Note strutturate: SEC EDGAR"
+        if spec.has("edgar")
+        else "GEX: Deribit (pubblica) · Flussi: CoinGlass/Farside · Derivati: CoinGlass/CoinGecko"
+    )
     st.caption(
         f"Ultimo aggiornamento: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')} · "
-        f"GEX: Deribit (pubblica) · Flussi: Farside/yfinance · "
-        f"Note strutturate: SEC EDGAR · Sviluppato da WAGMI-LAB"
+        f"{fonti} · Sviluppato da WAGMI-LAB"
     )
 
 

@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 
+from src.assets import AssetSpec, get_asset
 from src.config import setup_logging
 from src.dashboard.charts import gex_profile, gex_walls, regime_bars
 from src.dashboard.data_loader import run_regime
@@ -12,7 +13,10 @@ from src.gex.pine_export import build_pine_indicator
 _log = setup_logging("dashboard.tabs.gex")
 
 
-def _tab_gex(snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame) -> None:
+def _tab_gex(
+    snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame, spec: AssetSpec | None = None
+) -> None:
+    spec = spec or get_asset("BTC")
     spot = snap.get("spot_price") or 0
     gex_m = (snap.get("total_net_gex") or 0) / 1e6
     regime = snap.get("regime", "unknown")
@@ -20,7 +24,7 @@ def _tab_gex(snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame) -> 
 
     st.header("Gamma Exposure (GEX)", icon=":material/candlestick_chart:")
     st.caption(
-        "Dove e quanto i market maker sono obbligati a comprare o vendere BTC per "
+        f"Dove e quanto i market maker sono obbligati a comprare o vendere {spec.key} per "
         "restare coperti: la pressione meccanica nascosta nel mercato delle opzioni."
     )
 
@@ -28,7 +32,7 @@ def _tab_gex(snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame) -> 
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.plotly_chart(gex_profile(gex_by_strike, spot), width="stretch")
+        st.plotly_chart(gex_profile(gex_by_strike, spot, asset=spec.key), width="stretch")
         with st.expander("Come leggere l'istogramma"):
             st.markdown(
                 "Ogni barra è il GEX netto a uno strike price. **Verde** = zona "
@@ -37,10 +41,10 @@ def _tab_gex(snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame) -> 
                 "verticale è lo spot."
             )
     with col2:
-        st.plotly_chart(gex_walls(snap), width="stretch")
+        st.plotly_chart(gex_walls(snap, asset=spec.key), width="stretch")
         mc1, mc2 = st.columns(2)
         mc1.metric("Max Pain", f"${snap.get('max_pain') or 0:,.0f}")
-        mc2.metric("Strumenti BTC", f"{snap.get('n_instruments') or 0}")
+        mc2.metric(f"Strumenti {spec.key}", f"{snap.get('n_instruments') or 0}")
 
     with st.expander("Indicatore TradingView (Pine Script)", icon=":material/code:"):
         st.caption(
@@ -48,7 +52,7 @@ def _tab_gex(snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame) -> 
             "nel Pine Editor. Per aggiornare i livelli va rigenerato."
         )
         if st.button("Genera indicatore", key="gen_pine_indicator"):
-            pine_code = build_pine_indicator(snap)
+            pine_code = build_pine_indicator(snap, asset=spec.key)
             st.code(pine_code, language="text")
             st.download_button(
                 "Scarica gex_levels.pine",
@@ -60,16 +64,18 @@ def _tab_gex(snap: dict, gex_by_strike: list[dict], merged_df: pd.DataFrame) -> 
 
     with st.expander("Come calcoliamo il GEX", icon=":material/settings:"):
         st.markdown(
-            "**Fonte**: API pubblica Deribit (opzioni BTC).\n\n"
+            f"**Fonte**: API pubblica Deribit (opzioni {spec.key}).\n\n"
             "**Formula**: `GEX = Gamma × Open Interest × Spot² × 0.01`\n\n"
             "- **Call** → GEX positivo (il dealer è tipicamente short, assorbe)\n"
             "- **Put** → GEX negativo (il dealer amplifica i movimenti al ribasso)\n\n"
             "**Limiti**: assumiamo che il dealer sia sempre la controparte; le opzioni "
-            "IBIT su CBOE non sono incluse. Affidabilità stimata ~80% del segnale "
+            f"{spec.lead_etf} quotate negli USA non sono incluse. Affidabilità stimata ~80% del segnale "
             "rispetto ai modelli professionali."
         )
 
-    if not merged_df.empty:
+    # La regime analysis incrocia lo storico GEX con i rendimenti BTC: per gli
+    # altri asset lo storico è appena iniziato e il confronto non direbbe nulla.
+    if not merged_df.empty and spec.has("signal"):
         gex_today = snap.get("total_net_gex") or 0.0
         with st.spinner("Calcolo regime analysis..."):
             try:

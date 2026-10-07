@@ -392,7 +392,12 @@ class GrangerAnalysis:
     # Interpretazione
     # ──────────────────────────────────────────────────────────────────────────
 
-    def interpret(self, results: dict[str, list[GrangerResult]]) -> str:
+    def interpret(
+        self,
+        results: dict[str, list[GrangerResult]],
+        flow_label: str = "IBIT",
+        return_label: str = "BTC",
+    ) -> str:
         """Genera un'interpretazione testuale dei risultati.
 
         Mostra sia la significatività naive (p < alpha) che quella corretta
@@ -400,6 +405,8 @@ class GrangerAnalysis:
 
         Args:
             results: dict dal metodo run().
+            flow_label: nome del lead ETF nel testo (IBIT, ETHA).
+            return_label: nome dell'asset nel testo (BTC, ETH).
 
         Returns:
             str: interpretazione leggibile.
@@ -422,9 +429,9 @@ class GrangerAnalysis:
                     f"(p={min_p:.4f} al lag {min_lag})"
                 )
                 label = (
-                    "I flussi IBIT predicono i rendimenti BTC"
+                    f"I flussi {flow_label} predicono i rendimenti {return_label}"
                     if direction == "flows→returns"
-                    else "I rendimenti BTC predicono i flussi IBIT"
+                    else f"I rendimenti {return_label} predicono i flussi {flow_label}"
                 )
                 lines.append(f"  → {label} con lag {min_lag}d")
             elif sig:

@@ -4,15 +4,18 @@ import pandas as pd
 import streamlit as st
 
 
+from src.assets import AssetSpec, get_asset
 from src.dashboard.charts import flows_chart, flows_stacked_chart, granger_heatmap
 
 from src.dashboard.data_loader import run_granger
 
 
-def _tab_flows(merged_df: pd.DataFrame) -> None:
-    st.header("Flussi ETF Bitcoin", icon=":material/water:")
+def _tab_flows(merged_df: pd.DataFrame, spec: AssetSpec | None = None) -> None:
+    spec = spec or get_asset("BTC")
+    lead, lead_col, ret_col = spec.lead_etf, spec.lead_flow_col, spec.return_col
+    st.header(f"Flussi ETF {spec.label}", icon=":material/water:")
     st.caption(
-        "Denaro istituzionale in entrata/uscita dagli ETF spot BTC ogni giorno "
+        f"Denaro istituzionale in entrata/uscita dagli ETF spot {spec.key} ogni giorno "
         "(10+ ETF quotati)."
     )
 
@@ -29,14 +32,14 @@ def _tab_flows(merged_df: pd.DataFrame) -> None:
     )
 
     today_flow = week_flow = total_today = corr_30d = 0.0
-    if "ibit_flow" in merged_df.columns:
-        ibit_col = merged_df["ibit_flow"].dropna()
-        if not ibit_col.empty:
-            today_flow = float(ibit_col.iloc[-1]) / 1e6
+    if lead_col in merged_df.columns:
+        lead_series = merged_df[lead_col].dropna()
+        if not lead_series.empty:
+            today_flow = float(lead_series.iloc[-1]) / 1e6
             week_flow = (
                 float(
-                    ibit_col[
-                        ibit_col.index >= ibit_col.index.max() - pd.Timedelta(days=7)
+                    lead_series[
+                        lead_series.index >= lead_series.index.max() - pd.Timedelta(days=7)
                     ].sum()
                 )
                 / 1e6
@@ -44,13 +47,13 @@ def _tab_flows(merged_df: pd.DataFrame) -> None:
     if "total_flow" in merged_df.columns:
         total_col = merged_df["total_flow"].dropna()
         total_today = float(total_col.iloc[-1]) / 1e6 if not total_col.empty else 0.0
-    if "ibit_flow" in merged_df.columns and "btc_return" in merged_df.columns:
-        valid = merged_df[["ibit_flow", "btc_return"]].dropna()
+    if lead_col in merged_df.columns and ret_col in merged_df.columns:
+        valid = merged_df[[lead_col, ret_col]].dropna()
         if len(valid) >= 30:
             corr_30d = float(
-                valid["ibit_flow"]
+                valid[lead_col]
                 .rolling(30, min_periods=15)
-                .corr(valid["btc_return"])
+                .corr(valid[ret_col])
                 .dropna()
                 .iloc[-1]
             )
@@ -67,12 +70,12 @@ def _tab_flows(merged_df: pd.DataFrame) -> None:
                     n_outflow += 1
 
     with st.container(horizontal=True):
-        st.metric("IBIT oggi", f"${today_flow:+,.0f}M", border=True)
-        st.metric("IBIT 7gg", f"${week_flow:+,.0f}M", border=True)
+        st.metric(f"{lead} oggi", f"${today_flow:+,.0f}M", border=True)
+        st.metric(f"{lead} 7gg", f"${week_flow:+,.0f}M", border=True)
         st.metric("Tutti gli ETF oggi", f"${total_today:+,.0f}M", border=True)
         st.metric("Corr. 30gg", f"{corr_30d:.2f}", border=True)
 
-    _flow_alerts(merged_df, etf_tickers)
+    _flow_alerts(merged_df, etf_tickers, spec)
 
     if etf_tickers:
         with st.container(horizontal=True):
@@ -83,23 +86,23 @@ def _tab_flows(merged_df: pd.DataFrame) -> None:
                     if not last.empty:
                         st.metric(tk, f"${float(last.iloc[-1]) / 1e6:+,.0f}M")
 
-    st.plotly_chart(flows_chart(merged_df), width="stretch")
+    st.plotly_chart(flows_chart(merged_df, spec), width="stretch")
 
     if etf_tickers:
         st.subheader("Flussi per ETF (stacked)")
-        st.plotly_chart(flows_stacked_chart(merged_df, etf_tickers), width="stretch")
+        st.plotly_chart(flows_stacked_chart(merged_df, etf_tickers, spec), width="stretch")
 
     with st.expander("Riepilogo 30 giorni", icon=":material/calendar_today:"):
         r30 = merged_df[merged_df.index >= merged_df.index.max() - pd.Timedelta(days=30)]
         with st.container(horizontal=True):
-            if "ibit_flow" in r30.columns:
-                st.metric("Flusso IBIT (30d)", f"{r30['ibit_flow'].sum() / 1e6:+,.0f}M$", border=True)
-                st.metric("Giorni inflow", f"{int((r30['ibit_flow'] > 0).sum())}/30", border=True)
+            if lead_col in r30.columns:
+                st.metric(f"Flusso {lead} (30d)", f"{r30[lead_col].sum() / 1e6:+,.0f}M$", border=True)
+                st.metric("Giorni inflow", f"{int((r30[lead_col] > 0).sum())}/30", border=True)
             if "total_flow" in r30.columns:
                 st.metric("Flusso totale ETF (30d)", f"{r30['total_flow'].sum() / 1e6:+,.0f}M$", border=True)
-            if "btc_return" in r30.columns:
-                btc_cum = float((1 + r30["btc_return"].dropna()).prod() - 1)
-                st.metric("BTC Return (30d)", f"{btc_cum * 100:+.1f}%", border=True)
+            if ret_col in r30.columns:
+                cum_ret = float((1 + r30[ret_col].dropna()).prod() - 1)
+                st.metric(f"{spec.key} Return (30d)", f"{cum_ret * 100:+.1f}%", border=True)
 
         if etf_tickers:
             ticker_rows = []
@@ -144,7 +147,7 @@ def _tab_flows(merged_df: pd.DataFrame) -> None:
     with st.expander("I flussi ETF predicono il prezzo?", icon=":material/query_stats:"):
         with st.spinner("Calcolo Granger causality..."):
             try:
-                _, granger_df, granger_text = run_granger(merged_df)
+                _, granger_df, granger_text = run_granger(merged_df, spec.key)
                 st.plotly_chart(granger_heatmap(granger_df), width="stretch")
                 if not granger_df.empty:
                     st.caption(
@@ -157,11 +160,16 @@ def _tab_flows(merged_df: pd.DataFrame) -> None:
                 st.info(f"Granger causality non disponibile: {e}")
 
 
-def _flow_alerts(merged_df: pd.DataFrame, etf_tickers: list[str]) -> None:
-    """Alert concisi (una riga), dettaglio in expander."""
+def _flow_alerts(merged_df: pd.DataFrame, etf_tickers: list[str], spec: AssetSpec) -> None:
+    """Alert concisi (una riga), dettaglio in expander.
+
+    Le soglie sui 3 giorni (-500/-200/+300M) e la loro lettura storica sono
+    tarate su IBIT: per gli altri asset resta solo l'alert di divergenza, che è
+    un fatto e non un'inferenza.
+    """
     alerts: list[tuple[str, str, str]] = []  # (icon, message, detail)
 
-    if "ibit_flow_3d" in merged_df.columns:
+    if spec.has("signal") and "ibit_flow_3d" in merged_df.columns:
         ibit_3d_col = merged_df["ibit_flow_3d"].dropna()
         if not ibit_3d_col.empty:
             ibit_3d = float(ibit_3d_col.iloc[-1]) / 1e6

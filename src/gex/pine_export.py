@@ -13,7 +13,7 @@ from __future__ import annotations
 
 _TEMPLATE = """\
 //@version=6
-indicator("WAGMI Lab — BTC GEX Levels", shorttitle="GEX Levels", overlay=true, max_lines_count=20, max_labels_count=20)
+indicator("WAGMI Lab — {asset} GEX Levels", shorttitle="GEX Levels", overlay=true, max_lines_count=20, max_labels_count=20)
 
 // Generato {timestamp} — livelli statici, non si aggiornano da soli.
 // Regime al calcolo: {regime_label} | Net GEX: {net_gex_m}M USD | Spot: {spot_price}
@@ -45,7 +45,7 @@ _LEVELS = [
 ]
 
 
-def build_pine_indicator(snapshot: dict) -> str:
+def build_pine_indicator(snapshot: dict, asset: str = "BTC") -> str:
     """Costruisce il sorgente Pine da uno snapshot GEX.
 
     Args:
@@ -53,6 +53,7 @@ def build_pine_indicator(snapshot: dict) -> str:
             (``gamma_flip_price``, ``put_wall``, ``call_wall``, ``max_pain``,
             ``total_net_gex_m``, ``spot_price``, ``timestamp``) più una
             chiave ``regime`` stringa (es. ``"positive_gamma"``).
+        asset: "BTC" o "ETH", nel titolo dell'indicatore.
 
     Returns:
         Sorgente Pine Script v6 pronto da incollare nel Pine Editor.
@@ -84,6 +85,7 @@ def build_pine_indicator(snapshot: dict) -> str:
         )
 
     return _TEMPLATE.format(
+        asset=asset,
         timestamp=snapshot.get("timestamp", "?"),
         regime_label=regime,
         net_gex_m=snapshot.get("total_net_gex_m", "?"),

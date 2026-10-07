@@ -6,4 +6,5 @@ _tab_panoramica(
     st.session_state["snap"],
     st.session_state["merged_df"],
     st.session_state["barriers"],
+    st.session_state["asset_spec"],
 )
