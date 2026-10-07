@@ -6,15 +6,19 @@ import traceback
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from src.api.cache import cache_get, cache_set
-from src.api.helpers import ok, http_error
+from src.api.cache import asset_key, cache_get, cache_set
+from src.api.helpers import AssetParam, ok, http_error
 
 router = APIRouter(prefix="/api/flows", tags=["flows"])
 
 
 @router.get("")
-def get_flows() -> JSONResponse:
-    cached = cache_get("flows")
+def get_flows(asset: AssetParam = "btc") -> JSONResponse:
+    from src.assets import get_asset
+
+    spec = get_asset(asset)
+    cache_key = asset_key("flows", spec.key)
+    cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
@@ -24,21 +28,23 @@ def get_flows() -> JSONResponse:
         from src.analytics.granger import GrangerAnalysis
         from src.api.data_pipeline import get_flow_context
 
-        flow_ctx = get_flow_context()
+        flow_ctx = get_flow_context(asset=spec.key)
         raw_flows = flow_ctx["raw"]
         merged = flow_ctx["merged_df"]
-        df_pivot = FarsideScraper().to_dataframe(raw_flows)
+        df_pivot = FarsideScraper(asset=spec.key).to_dataframe(raw_flows)
 
         corr_eng = FlowCorrelation()
 
         if merged.empty:
             raise ValueError("Merge flussi/prezzi vuoto")
 
-        stats = corr_eng.summary_stats(merged)
-        roll_corrs = corr_eng.rolling_correlations(merged, windows=[30, 60, 90])
+        stats = corr_eng.summary_stats(merged, asset=spec.key)
+        roll_corrs = corr_eng.rolling_correlations(merged, windows=[30, 60, 90], asset=spec.key)
 
         granger_eng = GrangerAnalysis()
-        granger_raw = granger_eng.run(merged)
+        granger_raw = granger_eng.run(
+            merged, flow_col=spec.lead_flow_col, return_col=spec.return_col
+        )
         granger_out: dict[str, list] = {}
         for direction, results in granger_raw.items():
             granger_out[direction] = [
@@ -47,14 +53,17 @@ def get_flows() -> JSONResponse:
                 for r in results
             ]
 
-        btc_prices: dict[str, float] = {}
-        btc_vols: dict[str, float] = {}
-        ibit_btc_vals: dict[str, float] = {}
+        # Nomi di colonna dallo spec: per BTC restano btc_close, btc_vol_7d,
+        # ibit_btc_ratio (contratto PTF-Dashboard); per ETH eth_close, ...
+        ratio_col = f"{spec.lead_prefix}_{spec.prefix}_ratio"
+        price_by_date: dict[str, float] = {}
+        vol_by_date: dict[str, float] = {}
+        ratio_by_date: dict[str, float] = {}
         total_flow_vals: dict[str, float] = {}
         if not merged.empty:
             for col, target in [
-                ("btc_close", btc_prices), ("btc_vol_7d", btc_vols),
-                ("ibit_btc_ratio", ibit_btc_vals), ("total_flow", total_flow_vals),
+                (spec.price_col, price_by_date), (spec.vol_col, vol_by_date),
+                (ratio_col, ratio_by_date), ("total_flow", total_flow_vals),
             ]:
                 if col in merged.columns:
                     for idx, val in merged[col].dropna().items():
@@ -65,7 +74,7 @@ def get_flows() -> JSONResponse:
         for tk in all_etf_tickers:
             ticker_series[tk] = {str(d.date()): float(v) for d, v in df_pivot[tk].dropna().tail(365).items()}
 
-        primary_series = ticker_series.get("IBIT", {})
+        primary_series = ticker_series.get(spec.lead_etf, {})
         if not primary_series:
             for tk in all_etf_tickers:
                 if ticker_series.get(tk):
@@ -74,15 +83,18 @@ def get_flows() -> JSONResponse:
 
         all_dates = sorted(set(primary_series) | set(total_flow_vals), reverse=False)[-365:]
         history: list[dict] = []
-        primary_ticker = "IBIT" if "IBIT" in ticker_series else (all_etf_tickers[0] if all_etf_tickers else None)
+        primary_ticker = (
+            spec.lead_etf if spec.lead_etf in ticker_series
+            else (all_etf_tickers[0] if all_etf_tickers else None)
+        )
         for d in all_dates:
             row: dict = {"date": d}
             if primary_ticker:
                 row[f"{primary_ticker.lower()}_flow_usd"] = ticker_series.get(primary_ticker, {}).get(d)
             row["total_flow_usd"] = total_flow_vals.get(d)
-            row["btc_close"] = btc_prices.get(d)
-            row["btc_vol_7d"] = btc_vols.get(d)
-            row["ibit_btc_ratio"] = ibit_btc_vals.get(d)
+            row[spec.price_col] = price_by_date.get(d)
+            row[spec.vol_col] = vol_by_date.get(d)
+            row[ratio_col] = ratio_by_date.get(d)
             for tk in all_etf_tickers:
                 if tk != primary_ticker:
                     row[f"{tk.lower()}_flow_usd"] = ticker_series.get(tk, {}).get(d)
@@ -108,13 +120,14 @@ def get_flows() -> JSONResponse:
         }
 
         response = ok({
+            "asset": spec.key,
             "summary": stats,
             "history": history,
             "rolling_correlations_latest": corr_latest,
             "granger": granger_out,
             "data_quality": flow_quality,
         })
-        cache_set("flows", response)
+        cache_set(cache_key, response)
         return response
 
     except Exception as exc:

@@ -6,16 +6,16 @@ import traceback
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from src.api.cache import cache_get, cache_set, _gex_fetch_lock
-from src.api.helpers import ok, http_error
+from src.api.cache import asset_key, cache_get, cache_set, gex_fetch_lock
+from src.api.helpers import AssetParam, ok, http_error
 
 router = APIRouter(prefix="/api/gex", tags=["gex"])
 
 # ─── CoinGlass GEX enrichment — cache 1 ora ────────────────────────────────────
 
 
-def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
-    cached = cache_get("gex_enrichment")
+def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float, asset: str = "BTC") -> dict:
+    cached = cache_get(asset_key("gex_enrichment", asset))
     if cached is not None:
         our_total = our_call_oi + our_put_oi
         deribit_oi_contracts = cached.get("_deribit_oi_contracts", 0)
@@ -58,7 +58,7 @@ def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
 
     try:
         cg = CoinGlassClient()
-        options_info = cg.fetch_options_info("BTC")
+        options_info = cg.fetch_options_info(asset)
         deribit_info = next(
             (x for x in options_info
              if isinstance(x, dict) and "deribit" in str(x.get("exchange_name", "")).lower()),
@@ -126,7 +126,7 @@ def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
         exchanges_with_data: list[str] = []
 
         for exch in _EXCHANGES:
-            mp_data = cg.fetch_options_max_pain("BTC", exch)
+            mp_data = cg.fetch_options_max_pain(asset, exch)
             if not mp_data:
                 continue
             exchanges_with_data.append(exch)
@@ -153,14 +153,14 @@ def _enrich_gex_with_coinglass(our_call_oi: float, our_put_oi: float) -> dict:
         import logging
         logging.getLogger("api.gex").warning("CoinGlass GEX enrichment failed: %s", _e)
 
-    cache_set("gex_enrichment", result)
+    cache_set(asset_key("gex_enrichment", asset), result)
     return result
 
 
 # ─── GEX shared fetch (dedup lock) ────────────────────────────────────────────
 
 
-def _get_gex_data() -> dict:
+def _get_gex_data(asset: str = "BTC") -> dict:
     from src.gex.deribit_client import DeribitClient
     from src.gex.gex_calculator import GexCalculator
     from src.gex.gex_db import GexDB
@@ -169,27 +169,30 @@ def _get_gex_data() -> dict:
     import logging
     _log = logging.getLogger("api.gex")
 
-    cached = cache_get("_gex_data")
+    from src.assets import get_asset
+
+    key = asset_key("_gex_data", asset)
+    cached = cache_get(key)
     if cached is not None:
         return cached
 
-    with _gex_fetch_lock:
-        cached = cache_get("_gex_data")
+    with gex_fetch_lock(asset):
+        cached = cache_get(key)
         if cached is not None:
             return cached
 
         client = DeribitClient()
-        spot = client.get_spot_price()
-        options = client.fetch_all_options("BTC")
+        spot = client.get_spot_price(asset)
+        options = client.fetch_all_options(get_asset(asset).deribit_currency)
         calculator = GexCalculator()
         snapshot = calculator.calculate_gex(options, spot)
 
         gex_db = GexDB()
-        detector = RegimeDetector()
-        detector.load_history_from_db(gex_db.get_latest_n(90))
+        detector = RegimeDetector(asset=asset)
+        detector.load_history_from_db(gex_db.get_latest_n(90, asset=asset))
         state = detector.detect(snapshot)
         try:
-            gex_db.insert_snapshot(snapshot, state.regime)
+            gex_db.insert_snapshot(snapshot, state.regime, asset=asset)
         except Exception as _e:
             _log.warning("GEX DB persist failed: %s", _e)
 
@@ -218,7 +221,7 @@ def _get_gex_data() -> dict:
             "gex_db": gex_db,
             "chain_greeks": chain_greeks,
         }
-        cache_set("_gex_data", data)
+        cache_set(key, data)
         return data
 
 
@@ -226,18 +229,19 @@ def _get_gex_data() -> dict:
 
 
 @router.get("")
-def get_gex() -> JSONResponse:
+def get_gex(asset: AssetParam = "btc") -> JSONResponse:
     import logging
     _log = logging.getLogger("api.gex")
 
-    cached = cache_get("gex")
+    asset_u = asset.upper()
+    cached = cache_get(asset_key("gex", asset_u))
     if cached is not None:
         return cached
 
     try:
         from src.gex.gex_calculator import GexCalculator
 
-        gex_data = _get_gex_data()
+        gex_data = _get_gex_data(asset_u)
         snapshot = gex_data["snapshot"]
         spot = gex_data["spot"]
         state = gex_data["state"]
@@ -258,7 +262,9 @@ def get_gex() -> JSONResponse:
             if spot > 0 and abs(gs.strike - spot) / spot < 0.40
         ]
 
-        enrichment = _enrich_gex_with_coinglass(snapshot.total_call_oi, snapshot.total_put_oi)
+        enrichment = _enrich_gex_with_coinglass(
+            snapshot.total_call_oi, snapshot.total_put_oi, asset_u
+        )
 
         # Charm e vanna. Il blocco resta None quando la chain non e' calcolabile:
         # e' un dato mancante, non uno zero.
@@ -287,6 +293,7 @@ def get_gex() -> JSONResponse:
             }
 
         response = ok({
+            "asset": asset_u,
             "charm": charm_block,
             "snapshot": gex_dict,
             "regime": {
@@ -306,7 +313,7 @@ def get_gex() -> JSONResponse:
             "data_quality": enrichment.get("data_quality", {}),
             "market_context": enrichment.get("market_context", {}),
         })
-        cache_set("gex", response)
+        cache_set(asset_key("gex", asset_u), response)
         return response
 
     except Exception as exc:

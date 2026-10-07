@@ -6,8 +6,8 @@ import traceback
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from src.api.cache import cache_get, cache_set
-from src.api.helpers import ok, http_error
+from src.api.cache import asset_key, cache_get, cache_set
+from src.api.helpers import AssetParam, ok, http_error
 from src.api.routers.gex import _get_gex_data
 
 router = APIRouter(tags=["signals"])
@@ -237,11 +237,12 @@ def get_signals() -> JSONResponse:
 
 
 @router.get("/api/macro", tags=["macro"])
-def get_macro() -> JSONResponse:
+def get_macro(asset: AssetParam = "btc") -> JSONResponse:
     import logging
     _log = logging.getLogger("api.signals")
 
-    cached = cache_get("macro")
+    asset_u = asset.upper()
+    cached = cache_get(asset_key("macro", asset_u))
     if cached is not None:
         return cached
 
@@ -255,7 +256,7 @@ def get_macro() -> JSONResponse:
         funding_rate_8h_pct: float | None = None
         funding_history: list[dict] = []
         try:
-            fr_series = cg.fetch_funding_rate_history(days=90)
+            fr_series = cg.fetch_funding_rate_history(days=90, asset=asset_u)
             if not fr_series.empty:
                 # CoinGlass restituisce gia' punti percentuali per 8 ore:
                 # nessun x100, cfr. src/flows/funding.py
@@ -273,7 +274,7 @@ def get_macro() -> JSONResponse:
         oi_change_7d_pct: float | None = None
         oi_history: list[dict] = []
         try:
-            oi_series = cg.fetch_aggregated_oi_history(days=90)
+            oi_series = cg.fetch_aggregated_oi_history(days=90, asset=asset_u)
             if not oi_series.empty:
                 oi_latest_usd = round(float(oi_series.iloc[-1]), 0)
                 if len(oi_series) >= 8:
@@ -292,7 +293,7 @@ def get_macro() -> JSONResponse:
         long_short_ratio_latest: float | None = None
         ls_history: list[dict] = []
         try:
-            ls_series = cg.fetch_long_short_ratio(days=90)
+            ls_series = cg.fetch_long_short_ratio(days=90, asset=asset_u)
             if not ls_series.empty:
                 long_short_ratio_latest = round(float(ls_series.iloc[-1]), 4)
                 ls_history = [
@@ -308,7 +309,7 @@ def get_macro() -> JSONResponse:
         liquidations_total_24h_usd: float | None = None
         liq_history: list[dict] = []
         try:
-            liq_df = cg.fetch_liquidations(days=90)
+            liq_df = cg.fetch_liquidations(days=90, asset=asset_u)
             if not liq_df.empty:
                 liquidations_long_24h_usd = round(float(liq_df["long_usd"].iloc[-1]), 0)
                 liquidations_short_24h_usd = round(float(liq_df["short_usd"].iloc[-1]), 0)
@@ -326,7 +327,7 @@ def get_macro() -> JSONResponse:
         taker_buy_ratio_latest: float | None = None
         taker_history: list[dict] = []
         try:
-            tk_series = cg.fetch_taker_volume(days=90)
+            tk_series = cg.fetch_taker_volume(days=90, asset=asset_u)
             if not tk_series.empty:
                 taker_buy_ratio_latest = round(float(tk_series.iloc[-1]), 4)
                 taker_history = [
@@ -367,7 +368,7 @@ def get_macro() -> JSONResponse:
                 from src.flows.funding import funding_pct_8h_from_annual
                 from src.flows.macro_fetcher import _oi_change_dallo_storico
 
-                _f, _oi, _n = CoinGeckoClient().fetch_funding_and_oi()
+                _f, _oi, _n = CoinGeckoClient().fetch_funding_and_oi(asset_u)
                 if _f is not None:
                     funding_rate_ann_pct = round(_f, 2)
                     funding_rate_8h_pct = round(funding_pct_8h_from_annual(_f), 4)
@@ -376,7 +377,7 @@ def get_macro() -> JSONResponse:
                     if _oi is not None and oi_latest_usd is None:
                         oi_latest_usd = round(_oi, 0)
                     if oi_change_7d_pct is None:
-                        oi_change_7d_pct = _oi_change_dallo_storico(None)
+                        oi_change_7d_pct = _oi_change_dallo_storico(None, asset=asset_u)
             except Exception as _e:
                 _log.warning("Ripiego CoinGecko fallito in /macro: %s", _e)
 
@@ -390,6 +391,7 @@ def get_macro() -> JSONResponse:
             source_status = STATUS_UNAVAILABLE
 
         macro_data = {
+            "asset": asset_u,
             "source_status": source_status,
             "funding_source": funding_source,
             "funding_rate_8h_pct": funding_rate_8h_pct,
@@ -409,9 +411,9 @@ def get_macro() -> JSONResponse:
                 "taker": taker_history,
             },
         }
-        cache_set("macro_data", macro_data)
+        cache_set(asset_key("macro_data", asset_u), macro_data)
         response = ok(macro_data)
-        cache_set("macro", response)
+        cache_set(asset_key("macro", asset_u), response)
         return response
 
     except Exception as exc:
