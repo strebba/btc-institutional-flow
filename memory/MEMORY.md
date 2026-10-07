@@ -1,5 +1,36 @@
 # ibit-gamma-tracker — Project Memory
 
+## Estensione ETH — fase 1 "solo dati" (session 2026-10-07)
+
+Dashboard, API e pipeline estese a **ETH** con un registro asset unico. Decisioni prese
+con Stefano: **solo dati** (GEX Deribit, flussi ETF con ETHA come lead, macro), nessun
+segnale composito/barriere/EDGAR per ETH; **selettore globale** BTC/ETH (`?asset=eth`).
+
+- `src/assets.py` — `AssetSpec` (simboli, URL Farside, lead ETF, nomi colonna, `features`).
+  BTC conserva i nomi legacy (`btc_close`, `ibit_flow`): output BTC invariato.
+- DB: `gex_snapshots` e `macro_snapshots` con colonna `asset` (unicità data+asset).
+  Migrazione atomica (un solo script BEGIN/COMMIT: `executescript` committa tra gli
+  statement) e idempotente; provata sul DB di `origin/main` prima del merge.
+- Waterfall flussi ETH: CoinGlass → Farside → cache e basta (SoSoValue, N-PORT e stima
+  yfinance sono costruiti su IBIT: darebbero numeri BTC).
+- CoinGecko `/derivatives` (8 MB) scaricato una volta per istanza e filtrato per asset.
+- GEX ETH: lordo ~1/13 di BTC (call +27M / put −27M), **netto vicino a zero** → regime
+  instabile e gamma flip spesso assente (header mostra "n/d", non "$0"). Soglia
+  `gex_threshold_usd_by_asset.ETH = 100k`, da ritarare con storico.
+- Dashboard: `navigation.py` (`visible_pages`), con ETH solo Panoramica/GEX/ETF Flows;
+  alert flussi 3gg e regime analysis restano solo BTC (tarati su IBIT).
+
+### Esito (chiusura sessione)
+- PR #9 (dati), #10 (API), #11 (dashboard) mergiate in sequenza, CI verde a ogni step.
+  Le PR impilate non lanciano la CI dopo `gh pr edit --base main`: serve close/reopen.
+- Deploy DO verificato: `/api/{gex,flows,macro}?asset=eth` 200 con dati ETH, endpoint BTC
+  con le chiavi storiche, `?asset=sol` → 422. Il deploy ha impiegato ~5 min dopo il merge.
+- Test: 1021 pass, ruff clean, mypy 71 (nessun nuovo errore).
+- Non verificato in browser reale: ripristino di `?asset=eth` al reload (`bind="query-params"`).
+- Fase 2 in issue: #12 segnale ETH (+ validazione), #13 note ETHA, #14 Desk Note/alert ETH,
+  #15 selettore su PTF-Dashboard.
+- La suite di test migra/sporca `data/structured_notes.db` locale: messo in stash, non committato.
+
 ## Dead Code Cleanup & DRY Refactor (session 2026-09-18)
 
 Review completa + rimozione codice morto + wiring della pipeline condivisa.
