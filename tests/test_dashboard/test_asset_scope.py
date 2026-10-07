@@ -20,11 +20,11 @@ def _eth_merged(n: int = 40) -> pd.DataFrame:
 
 
 class TestPagineVisibili:
-    def test_btc_ha_tutte_e_sette_le_pagine(self):
+    def test_btc_ha_cinque_pagine_senza_segnali_ne_validation(self):
         from src.dashboard.navigation import visible_pages
 
         assert [p.title for p in visible_pages(get_asset("BTC"))] == [
-            "Panoramica", "Segnali", "GEX", "ETF Flows", "Barrier Map", "EDGAR", "Validation",
+            "Panoramica", "GEX", "ETF Flows", "Barrier Map", "EDGAR",
         ]
 
     def test_eth_vede_solo_le_pagine_con_dati(self):
@@ -57,44 +57,57 @@ class TestGrafici:
         assert walls.layout.yaxis.title.text == "Prezzo ETH ($)"
 
 
-def _panoramica_eth_app():
-    """Script AppTest: Panoramica ETH con dati sintetici, segnale vietato."""
+def _panoramica_app(asset: str):
+    """Script AppTest: Panoramica con dati sintetici; nessun punteggio può comparire."""
     import numpy as np
     import pandas as pd
 
     import src.dashboard.tabs.panoramica as pan
     from src.assets import get_asset
 
-    def _vietato(*a, **k):
-        raise AssertionError("segnale composito calcolato su ETH")
-
+    spec = get_asset(asset)
     pan.load_macro = lambda asset="BTC": {"funding_rate_annualized_pct": -6.5, "oi_change_7d_pct": 2.0}
-    pan.compute_composite = _vietato
     idx = pd.date_range("2026-01-01", periods=40, freq="D")
     merged = pd.DataFrame({
-        "etha_flow": np.linspace(-1e8, 1e8, 40), "total_flow": np.linspace(-2e8, 2e8, 40),
-        "eth_close": np.linspace(2400, 2600, 40), "eth_return": np.full(40, 0.01),
+        spec.lead_flow_col: np.linspace(-1e8, 1e8, 40), "total_flow": np.linspace(-2e8, 2e8, 40),
+        spec.price_col: np.linspace(2400, 2600, 40), spec.return_col: np.full(40, 0.01),
     }, index=idx)
-    merged["etha_flow_3d"] = merged["etha_flow"].rolling(3, min_periods=1).sum()
+    merged[f"{spec.lead_flow_col}_3d"] = merged[spec.lead_flow_col].rolling(3, min_periods=1).sum()
     snap = {"spot_price": 2500.0, "gamma_flip_price": 2550.0, "put_wall": 2400.0,
             "call_wall": 2700.0, "regime": "positive_gamma", "total_net_gex": 3e5}
-    pan._tab_panoramica(snap, merged, [], get_asset("ETH"))
+    barriers = [{"level_price_btc": 2450.0, "barrier_type": "knock_in", "issuer": "JPMorgan"}]
+    pan._tab_panoramica(snap, merged, barriers if spec.has("barriers") else [], spec)
 
 
-class TestPanoramicaEth:
-    def test_niente_segnale_ne_riferimenti_btc(self):
+def _testi(at) -> str:
+    return " ".join(
+        [m.value for m in at.markdown] + [c.value for c in at.caption]
+        + [i.value for i in at.info] + [w.value for w in at.warning]
+        + [e.value for e in at.error] + [m.label for m in at.metric]
+    )
+
+
+class TestPanoramicaSenzaPunteggio:
+    def test_btc_mostra_livelli_flussi_e_barriera_senza_segnale(self):
         from streamlit.testing.v1 import AppTest
 
-        at = AppTest.from_function(_panoramica_eth_app, default_timeout=30).run()
+        at = AppTest.from_function(_panoramica_app, args=("BTC",), default_timeout=30).run()
 
         assert not at.exception, at.exception
-        testi = " ".join(
-            [m.value for m in at.markdown] + [c.value for c in at.caption]
-            + [i.value for i in at.info] + [m.label for m in at.metric]
-        )
-        assert "solo per BTC" in testi
+        testi = _testi(at)
+        assert "IBIT" in testi and "Barriera più vicina" in testi
+        assert "/100" not in testi and "segnale" not in testi.lower()
+
+    def test_eth_senza_barriere_ne_riferimenti_btc(self):
+        from streamlit.testing.v1 import AppTest
+
+        at = AppTest.from_function(_panoramica_app, args=("ETH",), default_timeout=30).run()
+
+        assert not at.exception, at.exception
+        testi = _testi(at)
         assert "ETHA" in testi
-        assert "IBIT" not in testi and "barriere" not in testi.lower()
+        assert "IBIT" not in testi and "barrier" not in testi.lower()
+        assert "segnale" not in testi.lower()
 
 
 class TestPineAsset:

@@ -1,23 +1,22 @@
 """Dashboard Streamlit per ibit-gamma-tracker — orchestratore.
 
 Visualizza in tempo reale:
+  - Panoramica   — segnale composito, livelli GEX e flussi a colpo d'occhio
   - Barrier Map  — mappa livelli critici note strutturate IBIT
   - GEX          — Gamma Exposure BTC (Deribit), regime, profilo per strike
   - ETF Flows    — flussi istituzionali IBIT, correlazione rolling
-  - Segnali      — segnale composito operativo + backtest
   - EDGAR Monitor — monitor note strutturate SEC
-  - Validation   — walk-forward, factor decomposition, parameter sensitivity
 
 Architettura:
   - app.py        — entrypoint: carica i dati condivisi una volta, renderizza
                     header + sidebar, poi `st.navigation` (solo la pagina attiva
-                    viene eseguita → niente più backtest/sensitivity a ogni load)
+                    viene eseguita)
   - app_pages/*   — una pagina Streamlit per sezione (thin wrapper sulle funzioni
                     `_tab_*` in tabs/)
   - header/sidebar — KPI strip e stato dati
-  - tabs/*        — contenuto delle 7 sezioni
+  - tabs/*        — contenuto delle 5 sezioni
   - charts        — funzioni Plotly condivise
-  - navigation    — pagine visibili per asset (BTC: 7, ETH: Panoramica/GEX/Flussi)
+  - navigation    — pagine visibili per asset (BTC: 5, ETH: Panoramica/GEX/Flussi)
 
 Asset: il selettore BTC/ETH in sidebar (``?asset=eth`` nell'URL) decide cosa si
 carica. Lo spec scelto va in ``st.session_state["asset_spec"]`` per le pagine.
@@ -45,14 +44,9 @@ from src.dashboard.data_loader import (
     load_gex,
     load_macro,
     load_prices_and_flows,
-    run_backtest,
     run_event_study,
-    run_factor_decomp,
     run_granger,
     run_regime,
-    run_sensitivity,
-    run_signal_ic,
-    run_walk_forward,
 )
 from src.assets import AssetSpec
 from src.dashboard.components import inject_style
@@ -135,12 +129,7 @@ def main() -> None:
             load_macro,
             run_granger,
             run_regime,
-            run_backtest,
             run_event_study,
-            run_walk_forward,
-            run_factor_decomp,
-            run_sensitivity,
-            run_signal_ic,
         ]:
             fn.clear()
         st.rerun()
@@ -148,8 +137,8 @@ def main() -> None:
     _render_header(snap, merged_df, spec)
     inject_style()
 
-    # Solo le pagine con dati per l'asset: con ETH spariscono Segnali, Barrier
-    # Map, EDGAR e Validation (se eri su una di quelle, si torna alla default).
+    # Solo le pagine con dati per l'asset: con ETH spariscono Barrier Map ed
+    # EDGAR (se eri su una di quelle, si torna alla default).
     pages = [
         st.Page(p.path, title=p.title, icon=p.icon, default=p.default)
         for p in visible_pages(spec)

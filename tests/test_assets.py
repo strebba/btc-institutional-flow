@@ -32,7 +32,7 @@ def test_eth_usa_colonne_con_prefisso_e_etha_come_lead_etf():
 
 def test_eth_espone_solo_le_feature_dati():
     assert get_asset("ETH").features == frozenset({"gex", "flows", "macro"})
-    assert {"signal", "barriers", "edgar"} <= get_asset("BTC").features
+    assert {"analytics", "barriers", "edgar"} <= get_asset("BTC").features
 
 
 def test_get_asset_normalizza_le_maiuscole():

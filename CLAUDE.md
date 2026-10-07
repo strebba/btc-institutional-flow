@@ -2,8 +2,11 @@
 
 Toolkit Python per l'impatto del **dealer hedging** su note strutturate IBIT sul prezzo BTC
 (tesi Arthur Hayes). Espone un **backend FastAPI** + una dashboard Streamlit.
-Traccia anche **ETH** (dal 2026-10, fase 1 "solo dati": GEX, flussi ETF, macro — niente
-segnale composito, barriere né EDGAR).
+Traccia anche **ETH** (dal 2026-10: GEX, flussi ETF, macro — niente barriere né EDGAR).
+
+**Solo dati osservati, nessun punteggio** (2026-10-07): rimossi segnale composito a 4
+pilastri, IFI, backtest, pagine Segnali/Validation, Desk Note e comando Telegram `/signal`.
+Non reintrodurre score/verdetti LONG/CAUTION senza una decisione esplicita di Stefano.
 
 > Esiste una `memory/MEMORY.md` nel repo con dettagli di architettura e bug-fix storici della
 > dashboard Streamlit — leggerla per il dettaglio, **non duplicarla** qui.
@@ -45,12 +48,11 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati), `coingecko_client.py` (ripiego funding/OI) |
-| `src/analytics/` | Segnale composito a 4 pilastri (`pillars.py` single source of truth) + `factor_scorers.py` (ex signal_model) + backtest (+ transaction costs 80bps, null models) + IFI + Granger (+ `find_optimal_lag` anti data-snooping) + regime analysis + `signal_validation.py` (Information Coefficient, alpha decay) |
-| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore + `st.navigation` lazy (solo la pagina attiva calcola), `app_pages/` (7 pagine, thin wrapper sulle funzioni `_tab_*`), `tabs/` (contenuto delle 7 sezioni), `data_loader.py` (cached), `charts.py` (Plotly), `components.py` (design system), `header.py`, `sidebar.py`, `static/` (font IBM Plex self-hosted) |
-| `src/api/` | FastAPI — `main.py` orchestratore, `routers/` (7 file: health, gex, flows, barriers, signals, forecast, report), `cache.py`, `helpers.py`, `data_pipeline.py` (`get_flow_context`, pipeline flussi condivisa), `scheduler.py`. Nessun `schemas.py`/Pydantic sulle risposte: gli endpoint restituiscono dict via il wrapper `_ok()` |
-| `src/alerts/` | Alert Telegram (ETF flow check, daily recap, error notification, comandi /recap /status /help) via `apscheduler` + GEX alert monitor |
+| `src/analytics/` | Granger (+ `find_optimal_lag` anti data-snooping), regime analysis (pagina GEX), event study (pagina EDGAR); `factor_scorers.py` resta solo come dipendenza del forecast spine |
+| `src/dashboard/` | Dashboard Streamlit — `app.py` orchestratore + `st.navigation` lazy (solo la pagina attiva calcola), `app_pages/` (5 pagine, thin wrapper sulle funzioni `_tab_*`), `tabs/` (contenuto delle 5 sezioni), `data_loader.py` (cached), `charts.py` (Plotly), `components.py` (design system), `header.py`, `sidebar.py`, `static/` (font IBM Plex self-hosted) |
+| `src/api/` | FastAPI — `main.py` orchestratore, `routers/` (6 file: health, gex, flows, barriers, macro, forecast), `cache.py`, `helpers.py`, `data_pipeline.py` (`get_flow_context`, pipeline flussi condivisa), `scheduler.py`. Nessun `schemas.py`/Pydantic sulle risposte: gli endpoint restituiscono dict via il wrapper `_ok()` |
+| `src/alerts/` | Alert Telegram — **solo livelli GEX e flussi ETF**: daily recap (regime, spot, net GEX, flip, muri + flussi), alert eventi flussi ETF, error notification, comandi /recap /status /help, via `apscheduler` |
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti |
-| `src/report/` | **Desk Note** — report a card pubblicabili. `facts.py` (estrattori + salienza), `narrative.py` (selezione e composizione), `events.py` (trigger di pubblicazione + `ReportStateDB`), `renderer.py` (HTML per web e PNG), `formatting.py` (numeri all'italiana), `fonts/` (IBM Plex incorporato) |
 
 DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignorato).
 `gex_snapshots` e `macro_snapshots` hanno la colonna `asset` (unicità data+asset); la
@@ -65,7 +67,7 @@ ignorano `DB_PATH`). `PredictionDB`, `AlertDB` rispettano `DB_PATH` (default
 Tema **nativo Streamlit** in `.streamlit/config.toml` (nero `#000` + neon `#00FF9D`,
 palette Wagmi Lab), niente CSS inline. Font **IBM Plex Sans/Mono self-hosted** da
 `src/dashboard/static/` (serviti via `server.enableStaticServing=true` +
-`[[theme.fontFaces]]` → `/app/static/*`; stessi woff2 del Desk Note), nessuna
+`[[theme.fontFaces]]` → `/app/static/*`), nessuna
 dipendenza da fonts.gstatic.com. I colori dei grafici Plotly restano in
 `config/settings.yaml → dashboard.theme` (allineati al tema).
 
@@ -75,16 +77,16 @@ Asset: selettore BTC/ETH in cima alla sidebar (`st.segmented_control`, `bind="qu
 (`visible_pages`): con ETH solo Panoramica, GEX, ETF Flows.
 
 Navigazione: `st.navigation(position="top")` + `st.Page` in `src/dashboard/app_pages/`
-(**7 pagine**, thin wrapper sulle funzioni `_tab_*` di `tabs/`). **Panoramica è la
-default** (answer-first: segnale + livelli + flussi a colpo d'occhio), poi Segnali,
-GEX, ETF Flows, Barrier Map, EDGAR, Validation. **Solo la pagina attiva viene eseguita**
-— prima `st.tabs` era eager ed eseguiva backtest/walk-forward/sensitivity/IC/Granger/
-event-study a ogni load. `app.py` carica GEX/flussi/barriere una volta e li mette in
+(**5 pagine**, thin wrapper sulle funzioni `_tab_*` di `tabs/`). **Panoramica è la
+default** (answer-first: livelli GEX + flussi + derivati + barriera più vicina), poi
+GEX, ETF Flows, Barrier Map, EDGAR.
+**Solo la pagina attiva viene eseguita** — prima `st.tabs` era eager ed eseguiva
+Granger/event-study a ogni load. `app.py` carica GEX/flussi/barriere una volta e li mette in
 `st.session_state`. Il refresh manuale invalida anche `run_signal_ic` (presente nella
-lista `fn.clear()`). `_PAGES_DIR` (in `navigation.py`) usa `Path(__file__).resolve().parent`.
+lista `fn.clear()` dei loader rimasti). `_PAGES_DIR` (in `navigation.py`) usa `Path(__file__).resolve().parent`.
 
 Design system: `src/dashboard/components.py` (`tape`, `eyebrow`, `hero`, `pillar_bars`)
-in `st.html` con CSS proprio (classi `wx-`, stile Desk Note: numero grande mono, label
+in `st.html` con CSS proprio (classi `wx-`: tape e eyebrow mono, label
 neon). **Non tocca i widget nativi Streamlit** — niente override di classi interne.
 `inject_style()` è chiamato una volta in `app.py`.
 
@@ -110,12 +112,12 @@ prima di iniziare — fornisce pattern, best practice, e reference aggiornati.
 
 | Skill | Trigger | File/Task |
 |-------|---------|-----------|
-| `crypto-derivatives` | GEX, gamma flip, dealer positioning, options flow, funding rate, barriere, max pain | `src/gex/*`, `src/edgar/barrier_utils.py`, `src/analytics/pillars.py` (pilastro gex/barrier), `tabs/gex.py`, `tabs/barrier_map.py` |
-| `quantitative-research` | Backtesting, alpha generation, factor models, regime detection, walk-forward, statistical arbitrage | `src/analytics/backtest.py`, `src/analytics/factor_scorers.py`, `src/analytics/regime_analysis.py`, `src/analytics/walk_forward.py`, `src/analytics/pillars.py` |
-| `Time Series Analysis` | Trend, autocorrelation, Granger causality, forecasting, ARIMA, ACF/PACF | `src/analytics/granger.py`, `src/forecast/*`, `src/flows/correlation.py`, `src/analytics/signal_validation.py` |
-| `portfolio-risk` | VaR, max drawdown, Sharpe/Sortino, correlation matrix, rolling metrics | `src/analytics/backtest.py`, `src/analytics/regime_analysis.py`, `src/analytics/sensitivity.py` |
+| `crypto-derivatives` | GEX, gamma flip, dealer positioning, options flow, funding rate, barriere, max pain | `src/gex/*`, `src/edgar/barrier_utils.py`, `tabs/gex.py`, `tabs/barrier_map.py` |
+| `quantitative-research` | Backtesting, alpha generation, factor models, regime detection, walk-forward, statistical arbitrage | `src/analytics/regime_analysis.py`, `src/analytics/factor_scorers.py`, `src/forecast/*` |
+| `Time Series Analysis` | Trend, autocorrelation, Granger causality, forecasting, ARIMA, ACF/PACF | `src/analytics/granger.py`, `src/forecast/*`, `src/flows/correlation.py` |
+| `portfolio-risk` | VaR, max drawdown, Sharpe/Sortino, correlation matrix, rolling metrics | `src/analytics/regime_analysis.py` |
 | `scipy-best-practices` | Ottimizzazione, stat avanzata, interpolazione, signal processing | `src/analytics/*`, `src/forecast/calibration.py`, qualsiasi uso di `scipy.*` |
-| `plotly` | Qualsiasi grafico Plotly | `src/dashboard/charts.py`, `tabs/gex.py`, `tabs/barrier_map.py`, `tabs/flows.py`, `tabs/signals.py` |
+| `plotly` | Qualsiasi grafico Plotly | `src/dashboard/charts.py`, `tabs/gex.py`, `tabs/barrier_map.py`, `tabs/flows.py` |
 
 ### Globale — Infrastruttura & operatività
 
@@ -136,7 +138,7 @@ container unico con **supervisord** che gestisce 3 processi:
 - `uvicorn` :8000 → FastAPI backend (solo loopback, `/api/*`)
 - `streamlit` :8501 → dashboard (solo loopback, tema Wagmi Lab da `.streamlit/config.toml`)
 
-nginx: `/api/*` e `/report` → FastAPI, `/*` → Streamlit (con WebSocket `/_stcore/*`); rimuove
+nginx: `/api/*` → FastAPI, `/*` → Streamlit (con WebSocket `/_stcore/*`); rimuove
 `X-Frame-Options` e imposta `Content-Security-Policy: frame-ancestors` per **wagmi-lab.com**
 (embed iframe). App Platform non supporta volumi → i dati sono condivisi via **DB versionato
 nel repo** (refresh EDGAR → commit → redeploy). Config nginx: `nginx.conf`; processi:
@@ -167,7 +169,7 @@ Per ETH valgono le stesse fonti con i simboli dello spec (`fetch_macro_data(asse
 `cron_macro.py` scrive uno snapshot per asset con un solo download CoinGecko.
 
 `source_status` ha quattro stati: `ok`, `partial_coingecko` (ripiego attivo),
-`no_api_key`, `unavailable`. Il Desk Note li distingue nei warning.
+`no_api_key`, `unavailable`.
 
 CoinGecko non ha storico, quindi la **variazione a 7 giorni dell'OI** arriva
 dalla tabella `macro_snapshots` nel DB versionato, alimentata da
@@ -181,7 +183,7 @@ condividono il gruppo di concorrenza `db-write`.
 `/api/gex`, `/api/flows`, `/api/macro` accettano `?asset=btc|eth` (default `btc`, 422 sugli
 altri). Senza parametro la risposta è quella storica consumata da PTF-Dashboard (più il
 campo additivo `asset`). Cache: BTC usa le chiavi storiche, ETH `<chiave>:eth`; lock di
-dedup Deribit per asset. `/api/signals`, `/api/barriers`, `/report` restano solo BTC.
+dedup Deribit per asset. `/api/barriers` resta solo BTC.
 Soglia di neutralità GEX per asset in `deribit.gex_threshold_usd_by_asset` (ETH 100k,
 da ritarare quando ci sarà storico ETH). `cron_gex.py --asset {BTC,ETH,all}`.
 
@@ -208,32 +210,3 @@ I search terms includono anche FBTC/BITB/ARKB: il parser estrae il ticker reale 
 `compute_btc_prices()` operano **solo sulle note IBIT** (default) —
 i prezzi/ratio IBIT non si applicano agli altri ETF. `data/runtime.db` (predizioni/cache runtime,
 usato da `make run-api` via `DB_PATH`) è invece **ignorato** da git, separato dal seed versionato.
-
-## Desk Note (report a card)
-
-Report pubblicabile a sei card generato dagli endpoint esistenti — nato per
-rispondere ai post a carosello dei competitor, che le persone leggono mentre la
-dashboard richiede di saperla leggere.
-
-```bash
-python3 scripts/export_desk_note.py                 # -> out/desk-note/*.png (1080x1350)
-python3 scripts/export_desk_note.py --only-on-event # esporta solo se e' notizia
-```
-
-- `GET /report` — la pagina (via nginx, fuori da `/api/`). `?export=true` toglie
-  la riduzione responsive e l'intestazione: e' cio' che fotografa Playwright.
-- `GET /api/report/cards` — le card in JSON, sorgente di tutti i renderer.
-- `GET /api/report/events` — cosa e' cambiato (sola lettura, non consuma gli eventi).
-- `POST /api/report/events/commit` — fissa la linea di base dopo la pubblicazione.
-
-**Pubblicazione su evento, non a calendario**: l'edizione esce quando il regime
-gamma si ribalta, lo spot attraversa il gamma flip o una barriera SEC, un muro
-viene superato, o il segnale cambia lato delle soglie 40/65. Soglia in
-`events.PUBLISH_THRESHOLD`.
-
-**Il motore non inventa mai.** Un estrattore senza dati restituisce `None` e
-costa una card, non l'edizione; sotto le soglie di materialita'
-(`facts._MIN_FLOW_USD_M`, `_MIN_GEX_USD_M`) un numero non diventa un fatto —
-quando Farside e' giu' i flussi arrivano a `0.0`, che e' "non lo sappiamo", non
-"zero". I pilastri scoperti finiscono in `DeskNote.warnings`, che e' cio' che
-tiene ferma la card del punteggio finche' CoinGlass non torna.

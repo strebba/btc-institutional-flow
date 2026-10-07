@@ -1,6 +1,6 @@
 """Fetch unificato dei dati macro (funding/OI/L-S/liquidazioni).
 
-Singola fonte di verità usata da /api/signals, /api/macro e dashboard data_loader.
+Singola fonte di verità usata da /api/macro e dal data_loader della dashboard.
 Sostituisce i 3 blocchi duplicati di fetch macro che avevano caching inconsistente.
 
 Due fonti, in ordine di preferenza:
@@ -229,7 +229,7 @@ def fetch_macro_data(
         da_coinglass = _fetch_coinglass(cg, out, asset)
     else:
         # Senza chiave ogni chiamata fallirebbe: cinque richieste e cinque warning
-        # per niente, a ogni giro di /api/signals. Meglio saltarle e ripiegare.
+        # per niente, a ogni richiesta. Meglio saltarle e ripiegare.
         _log.info(
             "COINGLASS_API_KEY non configurata: uso CoinGecko per funding e open "
             "interest. Long/short ratio e liquidazioni restano scoperti."

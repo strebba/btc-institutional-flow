@@ -76,16 +76,6 @@ analytics:
   barrier_proximity_pct: 2.0 # "near barrier" se spot entro 2%
   ibit_btc_ratio: 0.0006     # approx BTC per share IBIT (aggiornare se cambia)
 
-# ─── BACKTEST ───────────────────────────────────────────────────────────────────
-backtest:
-  long_gex_threshold: 0
-  long_flow_threshold_usd_m: 100
-  short_gex_threshold: 0
-  short_flow_threshold_usd_m: -200
-  barrier_exclusion_pct: 5.0
-  transaction_cost_bps: 80      # 80 bps per trade crypto (spread + commission + slippage)
-  trading_days_per_year: 365     # BTC trades 365 giorni/anno
-
 # ─── COINGLASS ──────────────────────────────────────────────────────────────────
 coinglass:
   api_key: ""            # override con env var COINGLASS_API_KEY (non committare la chiave)

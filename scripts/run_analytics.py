@@ -1,10 +1,10 @@
 """CLI per il modulo 4: Statistical Analysis.
 
-Esegue Granger causality, event study, regime analysis e backtest
+Esegue Granger causality, event study e regime analysis
 usando i dati reali presenti nel database SQLite.
 
 Uso:
-    python scripts/run_analytics.py [--backtest] [--granger] [--regime] [--events]
+    python scripts/run_analytics.py [--granger] [--regime] [--events]
     python scripts/run_analytics.py  # esegue tutto
 """
 from __future__ import annotations
@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 
-from src.analytics.backtest import Backtest
 from src.analytics.event_study import EventStudy
 from src.analytics.granger import GrangerAnalysis
 from src.analytics.regime_analysis import RegimeAnalysis
@@ -155,46 +154,14 @@ def run_events(barriers: list[dict], merged_df: pd.DataFrame) -> None:
         _log.error("Event study fallito: %s", e)
 
 
-def run_backtest(
-    merged_df: pd.DataFrame,
-    gex_series: pd.Series | None,
-    barriers: list[dict],
-) -> None:
-    """Backtest della strategia GEX + flussi ETF."""
-    print("\n" + "=" * 60)
-    print("BACKTEST: GEX + ETF FLOWS STRATEGY vs BUY & HOLD BTC")
-    print("=" * 60)
-    bt = Backtest()
-    try:
-        results = bt.run(merged_df, gex_series, barriers or None)
-        if not results:
-            print("Backtest non eseguito: dati insufficienti.")
-            return
-        table = bt.summary_table(results)
-        print(f"\n{table.to_string()}")
-
-        strat = results["strategy"]
-        bah   = results["buy_and_hold"]
-        delta_sharpe = strat.sharpe_ratio - bah.sharpe_ratio
-        print(f"\nDelta Sharpe (strategia - B&H): {delta_sharpe:+.2f}")
-        print(
-            f"Posizioni: long={strat.days_long}d, "
-            f"short={strat.days_short}d, flat={strat.days_flat}d | "
-            f"trades={strat.n_trades}"
-        )
-    except Exception as e:
-        _log.error("Backtest fallito: %s", e)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Esegue gli analytics GEX + ETF flows.")
     parser.add_argument("--granger", action="store_true", help="Solo Granger causality")
     parser.add_argument("--regime",  action="store_true", help="Solo regime analysis")
     parser.add_argument("--events",  action="store_true", help="Solo event study")
-    parser.add_argument("--backtest",action="store_true", help="Solo backtest")
     args = parser.parse_args()
 
-    run_all = not any([args.granger, args.regime, args.events, args.backtest])
+    run_all = not any([args.granger, args.regime, args.events])
 
     settings = get_settings()
 
@@ -219,9 +186,6 @@ def main() -> None:
 
     if run_all or args.events:
         run_events(barriers, merged_df)
-
-    if run_all or args.backtest:
-        run_backtest(merged_df, gex_series, barriers)
 
     print("\nAnalytics completati.")
 

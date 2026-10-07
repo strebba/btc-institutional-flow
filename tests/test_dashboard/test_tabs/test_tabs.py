@@ -33,16 +33,6 @@ class TestFlowsTab:
         assert callable(_tab_flows)
 
 
-class TestSignalsTab:
-    def test_module_importable(self):
-        from src.dashboard.tabs import signals
-        assert signals is not None
-
-    def test_tab_function_exists(self):
-        from src.dashboard.tabs.signals import _tab_signals
-        assert callable(_tab_signals)
-
-
 class TestEdgarTab:
     def test_module_importable(self):
         from src.dashboard.tabs import edgar
@@ -51,16 +41,6 @@ class TestEdgarTab:
     def test_tab_function_exists(self):
         from src.dashboard.tabs.edgar import _tab_edgar_monitor
         assert callable(_tab_edgar_monitor)
-
-
-class TestValidationTab:
-    def test_module_importable(self):
-        from src.dashboard.tabs import validation
-        assert validation is not None
-
-    def test_tab_function_exists(self):
-        from src.dashboard.tabs.validation import _tab_validation
-        assert callable(_tab_validation)
 
 
 class TestPanoramicaTab:
@@ -79,8 +59,7 @@ class TestComponents:
         assert components is not None
 
     def test_component_functions_exist(self):
-        from src.dashboard.components import inject_style, tape, hero, pillar_bars
+        from src.dashboard.components import eyebrow, inject_style, tape
         assert callable(inject_style)
         assert callable(tape)
-        assert callable(hero)
-        assert callable(pillar_bars)
+        assert callable(eyebrow)

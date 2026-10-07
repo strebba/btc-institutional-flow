@@ -1,10 +1,9 @@
 """Panoramica: la risposta a colpo d'occhio.
 
-Ordine di lettura: stato sintetico (tape) → segnale composito (hero) →
-posizionamento e flussi/derivati → prossimo trigger meccanico.
+Ordine di lettura: stato sintetico (tape) → posizionamento GEX e flussi/derivati
+→ prossimo trigger meccanico (barriera EDGAR, solo per gli asset che le hanno).
 
-Per un asset senza segnale composito (ETH in fase 1) restano tape,
-posizionamento e flussi/derivati: niente hero, pilastri né barriere.
+Solo livelli e flussi osservati: nessun punteggio composito.
 """
 
 from __future__ import annotations
@@ -13,12 +12,9 @@ import pandas as pd
 import streamlit as st
 
 from src.assets import AssetSpec, get_asset
-from src.dashboard.charts import gex_walls, flows_chart
-from src.dashboard.components import eyebrow, hero, pillar_bars, tape
-from src.dashboard.data_loader import compute_composite, load_macro
-from src.config import setup_logging
-
-_log = setup_logging("dashboard.tabs.panoramica")
+from src.dashboard.charts import gex_walls
+from src.dashboard.components import eyebrow, tape
+from src.dashboard.data_loader import load_macro
 
 _REGIME_LABEL = {
     "positive_gamma": "Gamma positiva",
@@ -32,31 +28,10 @@ def _tab_panoramica(
 ) -> None:
     spec = spec or get_asset("BTC")
     macro = load_macro(spec.key)
-    if not spec.has("signal"):
-        _panoramica_dati(snap, merged_df, macro, spec)
-        return
-    try:
-        result = compute_composite(snap, merged_df, barriers, macro)
-    except Exception as e:
-        _log.warning("compute_composite fallito: %s", e)
-        st.warning(f"Segnale composito non disponibile: {e}")
-        _fallback(snap, merged_df, spec)
-        return
+    has_barriers = spec.has("barriers")
 
-    pillars = [
-        {"name": p.name, "score": p.score, "weight": p.weight, "reason": p.reason}
-        for p in result.pillars
-    ]
-
-    tape(_status_tape(snap, merged_df, barriers, macro, spec))
-
-    col_hero, col_pillars = st.columns([1, 1.6], vertical_alignment="center")
-    with col_hero:
-        hero(result.score, result.signal, _hero_caption(snap, merged_df, spec))
-    with col_pillars:
-        pillar_bars(pillars)
-
-    st.space("small")
+    tape(_status_tape(snap, merged_df, barriers if has_barriers else None, macro, spec))
+    st.caption(_spot_caption(snap, merged_df, spec))
 
     left, right = st.columns([3, 2], vertical_alignment="top")
     with left:
@@ -66,26 +41,8 @@ def _tab_panoramica(
         eyebrow("Flussi e derivati")
         _flows_block(merged_df, macro, spec)
 
-    _next_trigger(snap, barriers)
-
-
-def _panoramica_dati(snap: dict, merged_df: pd.DataFrame, macro: dict, spec: AssetSpec) -> None:
-    """Panoramica senza segnale composito: stato, posizionamento, flussi e derivati."""
-    tape(_status_tape(snap, merged_df, None, macro, spec))
-    st.info(
-        f"Segnale composito disponibile solo per BTC. Per {spec.key} la dashboard "
-        f"mostra posizionamento dei dealer, flussi ETF e derivati, senza punteggio.",
-        icon=":material/info:",
-    )
-    st.caption(_hero_caption(snap, merged_df, spec))
-
-    left, right = st.columns([3, 2], vertical_alignment="top")
-    with left:
-        eyebrow("Posizionamento · spot vs livelli meccanici")
-        st.plotly_chart(gex_walls(snap, asset=spec.key), width="stretch")
-    with right:
-        eyebrow("Flussi e derivati")
-        _flows_block(merged_df, macro, spec)
+    if has_barriers:
+        _next_trigger(snap, barriers)
 
 
 def _status_tape(
@@ -109,7 +66,7 @@ def _status_tape(
     return "  ·  ".join(parts)
 
 
-def _hero_caption(snap: dict, merged_df: pd.DataFrame, spec: AssetSpec) -> str:
+def _spot_caption(snap: dict, merged_df: pd.DataFrame, spec: AssetSpec) -> str:
     spot = snap.get("spot_price") or 0
     ret = _last_return_pct(merged_df, spec)
     bits = [f"{spec.key} ${spot:,.0f}"]
@@ -138,10 +95,7 @@ def _flows_block(merged_df: pd.DataFrame, macro: dict, spec: AssetSpec) -> None:
             st.metric("OI 7gg", f"{oi_change:+.1f}%", border=True)
 
     if funding is None and oi_change is None:
-        if spec.has("signal"):
-            st.caption("Macro non disponibile (CoinGlass non configurato): i pesi del pilastro sono riscalati.")
-        else:
-            st.caption("Macro non disponibile (CoinGlass non configurato).")
+        st.caption("Macro non disponibile (CoinGlass non configurato).")
 
     if not merged_df.empty and spec.lead_flow_col in merged_df.columns:
         series = merged_df[spec.lead_flow_col].dropna().tail(30) / 1e6
@@ -177,16 +131,6 @@ def _next_trigger(snap: dict, barriers: list[dict]) -> None:
         st.warning(msg, icon=":material/warning:")
     else:
         st.info(msg, icon=":material/info:")
-
-
-def _fallback(snap: dict, merged_df: pd.DataFrame, spec: AssetSpec) -> None:
-    """Se il composite fallisce, mostra almeno posizionamento e flussi."""
-    left, right = st.columns([3, 2])
-    with left:
-        st.plotly_chart(gex_walls(snap, asset=spec.key), width="stretch")
-    with right:
-        if not merged_df.empty:
-            st.plotly_chart(flows_chart(merged_df, spec), width="stretch")
 
 
 def _last_flow_m(merged_df: pd.DataFrame, column: str) -> float | None:

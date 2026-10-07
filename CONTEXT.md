@@ -9,7 +9,7 @@ tutto il codice, i commit, i test e le discussioni.
 |---------|-------------|
 | **Asset** | Sottostante tracciato: `BTC` o `ETH`. Descritto da un `AssetSpec` in `src/assets.py`, l'unico punto in cui stanno simboli, URL e nomi di colonna per-asset. Default `BTC` ovunque |
 | **LeadEtf** | ETF spot di riferimento dell'asset: `IBIT` per BTC, `ETHA` per ETH. Il suo flusso è la colonna `<lead>_flow` del `merged_df` (`ibit_flow`, `etha_flow`) |
-| **AssetFeatures** | Cosa è disponibile per l'asset. BTC: gex, flows, macro, signal, barriers, edgar. ETH (fase 1): solo gex, flows, macro, senza segnale composito |
+| **AssetFeatures** | Cosa è disponibile per l'asset. BTC: gex, flows, macro, analytics, barriers, edgar. ETH: solo gex, flows, macro |
 
 ## Note Strutturate
 
@@ -45,31 +45,17 @@ tutto il codice, i commit, i test e le discussioni.
 | **FlowDataSource** | Sorgente dati flussi nella waterfall: CoinGlass, Farside, SoSoValue, EDGAR N-PORT, yfinance |
 | **IbitBtcRatio** | Rapporto `IBIT / BTC-USD` usato per convertire prezzi barriera da IBIT a BTC |
 
-## Segnale Composito
+## Analisi statistiche
+
+> Segnale composito a 4 pilastri, IFI, backtest, Information Coefficient, walk-forward,
+> factor decomposition e sensitivity sono stati **rimossi il 2026-10-07**: il prodotto
+> mostra solo dati osservati (livelli GEX, flussi ETF, barriere, derivati), senza punteggi.
 
 | Termine | Definizione |
 |---------|-------------|
-| **CompositeSignal** | Output 0-100 del modello a 4 pilastri (`src/analytics/pillars.py`), single source of truth |
-| **Pillar** | Uno dei 4 componenti: `gex` (25%), `barrier` (25%), `etf_flows` (30%), `macro` (20%) |
-| **PillarScore** | Sotto-score 0-100 di un singolo pilastro con componenti, peso, e motivazione |
-| **PillarWeights** | Pesi nominali dei pilastri — riscalati se uno o più pilastri non hanno dati |
-| **SignalThreshold** | Score ≥ 65 = LONG, 40-64 = CAUTION, < 40 = RISK_OFF |
-| **TransactionCost** | 80 bps dedotti su ogni cambio posizione nel backtest. Configurato in `settings.yaml:backtest.transaction_cost_bps` |
-| **FactorScorers** | Libreria di scoring a 8 fattori (`src/analytics/factor_scorers.py`, ex `signal_model`) — riusata dai pilastri |
-| **IFIModel** | Institutional Flow Index 0-100 a 6 fattori — deprecato, sostituito dai pilastri |
-| **GrangerLead** | Fattore ETF flow lag ottimale determinato da `find_optimal_lag()` su training set pre-2024 e validato su holdout — mitigazione data snooping |
-
-## Validazione Statistica
-
-| Termine | Definizione |
-|---------|-------------|
-| **InformationCoefficient** | Spearman rank correlation tra CompositeSignal oggi e rendimento BTC domani — misura il potere predittivo del segnale. IC > 0 e \|t\| > 2 = segnale significativo |
-| **RollingIC** | IC calcolato su finestra rolling (60gg) per stimare stabilità temporale — metriche: ic_mean, ic_std, IR, t_stat, pct_positive |
-| **InformationRatio** | IC_mean / IC_std — misura la consistenza del segnale. IR > 0.5 indica segnale stabile |
-| **AlphaDecay** | IC per orizzonte 1..15 giorni — mostra per quanto tempo il segnale mantiene potere predittivo |
-| **NullModelIC** | IC di un segnale casuale con la stessa distribuzione ma struttura temporale distrutta (permutazione) — confronto con IC reale per validare che il segnale non sia rumore |
-| **NullModel** (backtest) | Strategia naive per confronto: random (±1 al 50%), always_long, momentum_20d — la strategia deve battere TUTTI i null model |
-| **AnnualizationFactor** | BTC trades 365 giorni/anno — tutti i moduli (backtest, regime_analysis, correlation, ifi) ora usano `sqrt(365)` per consistenza |
+| **GrangerLead** | Lag ottimale flussi→rendimenti da `find_optimal_lag()` su training set e validato su holdout — mitigazione data snooping |
+| **FactorScorers** | Libreria di scoring a 8 fattori (`src/analytics/factor_scorers.py`), usata solo dal Forecast Spine |
+| **AnnualizationFactor** | Le crypto tradano 365 giorni/anno — `sqrt(365)` in regime_analysis e correlation |
 
 ## Forecast Spine
 
@@ -80,7 +66,7 @@ tutto il codice, i commit, i test e le discussioni.
 | **TargetType** | `direction` (up/down/flat), `level` (reach/break/respect), `prob` (evento probabilistico) |
 | **WeightsVersion** | Snapshot immutabile dei pesi attivi usati per generare predizioni — human-gated activation |
 | **Calibration** | Processo che propone nuovi pesi dai risultati storici — mai auto-attiva, richiede `/api/weights/{id}/activate`. Usa `scipy.stats.binom.sf` per p-value senza overflow |
-| **MacroData** | Dataclass unificato da `src/flows/macro_fetcher.py` con funding rate, OI, long/short, liquidazioni. Singola fonte di verità per `/api/signals`, `/api/macro` e dashboard |
+| **MacroData** | Dataclass unificato da `src/flows/macro_fetcher.py` con funding rate, OI, long/short, liquidazioni. Singola fonte di verità per `/api/macro` e dashboard |
 
 ## Infrastruttura
 
@@ -90,4 +76,4 @@ tutto il codice, i commit, i test e le discussioni.
 | **RuntimeDB** | SQLite gitignorato (`data/runtime.db`) — segnali, predizioni, alert. Usato in dev via `DB_PATH` env var |
 | **GexDB** | SQLite per snapshot GEX — path hardcodato a `data/structured_notes.db`, ignora `DB_PATH` |
 | **CacheStore** | TTL cache in-memory con lock per ridurre chiamate upstream (Deribit, Farside) |
-| **SchedulerManager** | Orchestrator dei 3 APScheduler in-process (alert Telegram, IFI, forecast) |
+| **SchedulerManager** | Orchestrator dei 3 APScheduler in-process (alert Telegram, manutenzione/snapshot barriere, forecast) |

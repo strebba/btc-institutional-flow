@@ -7,17 +7,14 @@ Endpoint:
   GET /api/flows         - ETF flows IBIT: serie storica, correlazione, Granger
   GET /api/barriers      - Barriere attive da SEC EDGAR
   GET /api/notes[/by-url] - Drill-down note strutturate
-  GET /api/signals       - Segnale composito LONG/CAUTION/RISK_OFF + backtest
-  GET /api/pillars/series - Serie storica pilastro
   GET /api/macro         - Indicatori macro: funding rate, OI, long/short, liquidazioni
-  GET /api/ifi           - [DEPRECATO] IFI series
   POST /api/telegram/webhook - Webhook Telegram
   /api/predictions/*     - Forecast spine
   /api/calibration       - Calibration report
   /api/forecast/status   - Forecast operational status
   /api/weights/{id}/activate - Human-gated weight activation
 
-Schedulers APScheduler in-process: alert Telegram, IFI daily, forecast predict/verify/calibrate.
+Schedulers APScheduler in-process: alert Telegram, snapshot barriere, forecast predict/verify/calibrate.
 """
 from __future__ import annotations
 
@@ -32,11 +29,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from src.api.routers import health, gex, flows, barriers, signals, forecast, report
+from src.api.routers import health, gex, flows, barriers, macro, forecast
 from src.api.scheduler import (
     _alert_monitor,
     start_alert_scheduler,
-    start_ifi_scheduler,
+    start_maintenance_scheduler,
     start_forecast_scheduler,
     stop_all_schedulers,
 )
@@ -50,7 +47,7 @@ _log = logging.getLogger("api.main")
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     asyncio.create_task(start_alert_scheduler())
-    asyncio.create_task(start_ifi_scheduler())
+    asyncio.create_task(start_maintenance_scheduler())
     asyncio.create_task(start_forecast_scheduler())
     yield
     stop_all_schedulers()
@@ -60,7 +57,7 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="BTC Institutional Flow API",
-    description="GEX, ETF flows, SEC barriers, composite signals for BTC institutional analysis.",
+    description="GEX, ETF flows, SEC barriers and derivatives macro for BTC/ETH institutional analysis.",
     version="1.0.0",
     # Docs/OpenAPI sotto /api: la root del dominio è la dashboard Streamlit
     docs_url="/api/docs",
@@ -101,9 +98,8 @@ app.include_router(health.router)
 app.include_router(gex.router)
 app.include_router(flows.router)
 app.include_router(barriers.router)
-app.include_router(signals.router)
+app.include_router(macro.router)
 app.include_router(forecast.router)
-app.include_router(report.router)
 
 # ─── Root redirect ───────────────────────────────────────────────────────────
 
@@ -148,8 +144,7 @@ async def telegram_webhook(request: Request) -> JSONResponse:
     def _help_message() -> str:
         return (
             "<b>BTC Institutional Flow — Comandi disponibili</b>\n\n"
-            "/recap — Invia il recap GEX + IFI + ETF flows aggiornato\n"
-            "/signal — Segnale direzionale a 4 pilastri (bias long/short)\n"
+            "/recap — Invia il recap aggiornato: livelli GEX + flussi ETF\n"
             "/status — Stato del bot (ultimo recap, freschezza dati)\n"
             "/help — Mostra questo messaggio"
         )
@@ -197,22 +192,6 @@ async def telegram_webhook(request: Request) -> JSONResponse:
             await monitor._telegram.send_to(chat_id, await _status_message(monitor))
         return JSONResponse({"ok": True})
 
-    if cmd == "/signal":
-        try:
-            message = await monitor.build_signal_message()
-            if message:
-                if monitor._telegram is not None:
-                    await monitor._telegram.send_to(chat_id, message)
-                    _log.info("[webhook] /signal inviato a chat %s", chat_id)
-                else:
-                    _log.warning("[webhook] /signal impossibile: telegram non configurato")
-            else:
-                if monitor._telegram is not None:
-                    await monitor._telegram.send_to(chat_id, "<i>Nessun dato GEX disponibile per il segnale.</i>")
-        except Exception:
-            _log.exception("[webhook] errore gestione /signal")
-        return JSONResponse({"ok": True})
-
     if cmd != "/recap":
         return JSONResponse({"ok": True})
 
@@ -239,10 +218,11 @@ async def telegram_webhook(request: Request) -> JSONResponse:
 @app.get("/api/health/scheduler", tags=["meta"])
 def health_scheduler() -> JSONResponse:
     from src.api.helpers import ok
-    from src.api.scheduler import _alert_scheduler, _ifi_scheduler, _forecast_scheduler
+    from src.api.scheduler import _alert_scheduler, _maintenance_scheduler, _forecast_scheduler
     return ok({
         "alert": _alert_scheduler is not None and getattr(_alert_scheduler, "running", False),
-        "ifi": _ifi_scheduler is not None and getattr(_ifi_scheduler, "running", False),
+        "maintenance": _maintenance_scheduler is not None
+        and getattr(_maintenance_scheduler, "running", False),
         "forecast": _forecast_scheduler is not None and getattr(_forecast_scheduler, "running", False),
     })
 

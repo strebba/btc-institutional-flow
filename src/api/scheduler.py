@@ -1,6 +1,6 @@
-"""APScheduler in-process: alert Telegram, IFI update, barrier snapshot, forecast predict/verify/calibrate.
+"""APScheduler in-process: alert Telegram, barrier snapshot, forecast predict/verify/calibrate.
 
-Espone variabili globali _alert_scheduler, _ifi_scheduler, _forecast_scheduler
+Espone variabili globali _alert_scheduler, _maintenance_scheduler, _forecast_scheduler
 per health checking dall'esterno (es. /api/forecast/status).
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ _log = setup_logging("api.scheduler")
 
 _alert_scheduler = None  # type: ignore[var-annotated]
 _alert_monitor = None   # type: ignore[var-annotated]
-_ifi_scheduler = None  # type: ignore[var-annotated]
+_maintenance_scheduler = None  # type: ignore[var-annotated]
 _forecast_scheduler = None  # type: ignore[var-annotated]
 
 
@@ -54,8 +54,7 @@ async def _register_telegram_webhook(telegram: Any) -> None:
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
     await telegram.set_webhook(f"{webhook_url}/api/telegram/webhook", secret_token=secret)
     await telegram.set_commands([
-        {"command": "recap", "description": "Invia il recap GEX + IFI aggiornato"},
-        {"command": "signal", "description": "Segnale direzionale a 4 pilastri (bias long/short)"},
+        {"command": "recap", "description": "Invia il recap livelli GEX + flussi ETF"},
         {"command": "status", "description": "Stato del bot e freschezza dati"},
         {"command": "help", "description": "Mostra tutti i comandi disponibili"},
     ])
@@ -132,21 +131,11 @@ async def start_alert_scheduler():
         _log.exception("[alerts] scheduler startup failed")
 
 
-# ─── IFI scheduler ───────────────────────────────────────────────────────────
-
-
-async def _auto_ifi_update(*, backfill: bool = False, days: int = 1) -> None:
-    try:
-        from src.analytics.ifi_updater import run as _ifi_run
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, lambda: _ifi_run(backfill=backfill, days=days))
-        _log.info("[ifi] aggiornamento completato (backfill=%s, days=%d, result=%d)", backfill, days, result)
-    except Exception:
-        _log.exception("[ifi] aggiornamento fallito")
+# ─── Maintenance scheduler (snapshot barriere) ───────────────────────────────
 
 
 async def _job_snapshot_barriers() -> None:
-    """Salva l'istantanea giornaliera delle barriere attive per il backtest storico."""
+    """Salva l'istantanea giornaliera delle barriere attive (storico EDGAR)."""
     try:
         from src.edgar.structured_notes_db import StructuredNotesDB
         loop = asyncio.get_running_loop()
@@ -156,30 +145,13 @@ async def _job_snapshot_barriers() -> None:
         _log.exception("[barriers] snapshot fallito")
 
 
-async def start_ifi_scheduler():
-    global _ifi_scheduler
+async def start_maintenance_scheduler():
+    global _maintenance_scheduler
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.cron import CronTrigger
-        from src.analytics.ifi_db import IFIDb
-
-        db_count = IFIDb().count()
-        if db_count < 30:
-            _log.info("[ifi] DB ha %d righe — lancio backfill in background", db_count)
-            asyncio.create_task(_auto_ifi_update(backfill=True))
-        else:
-            _log.info("[ifi] DB ha %d righe — aggiornamento giornaliero in background", db_count)
-            asyncio.create_task(_auto_ifi_update(days=1))
 
         scheduler = AsyncIOScheduler(timezone="UTC")
-        scheduler.add_job(
-            _auto_ifi_update,
-            CronTrigger(hour=22, minute=0, timezone="UTC"),
-            id="ifi_daily_update",
-            kwargs={"days": 1},
-            replace_existing=True,
-            misfire_grace_time=int(timedelta(hours=3).total_seconds()),
-        )
         scheduler.add_job(
             _job_snapshot_barriers,
             CronTrigger(hour=22, minute=30, timezone="UTC"),
@@ -188,10 +160,10 @@ async def start_ifi_scheduler():
             misfire_grace_time=int(timedelta(hours=3).total_seconds()),
         )
         scheduler.start()
-        _ifi_scheduler = scheduler
-        _log.info("[ifi] scheduler started — daily update 22:00 UTC, barrier snapshot 22:30 UTC")
+        _maintenance_scheduler = scheduler
+        _log.info("[maintenance] scheduler started — barrier snapshot 22:30 UTC")
     except Exception:
-        _log.exception("[ifi] scheduler startup failed")
+        _log.exception("[maintenance] scheduler startup failed")
 
 
 # ─── Forecast scheduler ──────────────────────────────────────────────────────
@@ -262,11 +234,11 @@ async def start_forecast_scheduler():
 
 
 def stop_all_schedulers():
-    global _alert_scheduler, _ifi_scheduler, _forecast_scheduler
-    for name, scheduler in [("alerts", _alert_scheduler), ("ifi", _ifi_scheduler), ("forecast", _forecast_scheduler)]:
+    global _alert_scheduler, _maintenance_scheduler, _forecast_scheduler
+    for name, scheduler in [("alerts", _alert_scheduler), ("maintenance", _maintenance_scheduler), ("forecast", _forecast_scheduler)]:
         if scheduler is not None:
             scheduler.shutdown(wait=False)
             _log.info("[%s] scheduler stopped", name)
     _alert_scheduler = None
-    _ifi_scheduler = None
+    _maintenance_scheduler = None
     _forecast_scheduler = None

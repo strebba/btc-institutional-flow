@@ -75,7 +75,7 @@ def _tab_gex(
 
     # La regime analysis incrocia lo storico GEX con i rendimenti BTC: per gli
     # altri asset lo storico è appena iniziato e il confronto non direbbe nulla.
-    if not merged_df.empty and spec.has("signal"):
+    if not merged_df.empty and spec.has("analytics"):
         gex_today = snap.get("total_net_gex") or 0.0
         with st.spinner("Calcolo regime analysis..."):
             try:

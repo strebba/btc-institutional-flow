@@ -8,9 +8,8 @@ di essere pesato; il punteggio finale è convertito in etichetta:
   score 40-64 → CAUTION
   score < 40  → RISK_OFF
 
-Progettato per essere usato sia dal segnale live (/api/signals) sia
-dal backtest storico: accetta sia valori singoli (live) sia pd.Series
-(backtest vectorizzato).
+Oggi lo usa solo il forecast spine (``src/forecast``): accetta sia valori
+singoli (live) sia pd.Series (serie storica vettorializzata).
 
 Override meccanici (non componenti con peso):
   - near_active_barrier: clampa score sotto LONG_THRESHOLD se vicini
@@ -346,10 +345,6 @@ class SignalModel:
 
         Returns:
             pd.Series di score float (0-100) con stesso DatetimeIndex di df.
-
-        Note:
-            Per backtest ad alte performance, preferire ``CompositeSignal.compute_series()``
-            che è completamente vettorializzato (operazioni NumPy native).
         """
         def _col(name: str, *aliases: str) -> Optional[pd.Series]:
             for n in (name, *aliases):

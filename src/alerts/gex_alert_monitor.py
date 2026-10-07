@@ -16,10 +16,8 @@ from src.alerts.telegram_client import TelegramClient
 from src.alerts.templates import (
     EtfFlowEvent,
     FlowsSummary,
-    IFISummary,
     format_daily_recap,
     format_etf_flow_alert,
-    format_signal_message,
 )
 from src.config import get_settings, setup_logging
 from src.flows.models import AggregateFlows
@@ -130,16 +128,6 @@ def evaluate_etf_flow_triggers(
     return events
 
 
-def directional_bias(score: float) -> float:
-    """Converte lo score composito 0-100 in bias direzionale -100/+100.
-
-    score = 0   → bias = -100 (max short)
-    score = 50  → bias =    0 (neutro)
-    score = 100 → bias = +100 (max long)
-    """
-    return round(score * 2.0 - 100.0, 1)
-
-
 # ─── Monitor ─────────────────────────────────────────────────────────────────
 
 
@@ -235,7 +223,7 @@ class GexAlertMonitor:
         return sent
 
     async def build_recap_message(self) -> Optional[str]:
-        """Raccoglie GEX + flows + IFI e genera il messaggio HTML.
+        """Raccoglie livelli GEX + flussi ETF e genera il messaggio HTML.
 
         Non applica cooldown né registra l'invio: usato sia da send_daily_recap
         (scheduling) sia dal webhook Telegram (comando on-demand).
@@ -264,24 +252,7 @@ class GexAlertMonitor:
         except Exception as exc:
             _log.warning("flows fetch failed: %s", exc)
 
-        ifi_summary: Optional[IFISummary] = None
-        try:
-            from src.analytics.ifi_db import IFIDb
-
-            row = await asyncio.to_thread(lambda: IFIDb().get_latest())
-            if row:
-                ifi_summary = IFISummary(
-                    score=float(row["score"]),
-                    regime=str(row["regime"]),
-                    date=str(row["date"]),
-                    flow_score=row.get("flow_score"),
-                    trend_score=row.get("trend_score"),
-                    price_score=row.get("price_score"),
-                )
-        except Exception as exc:
-            _log.warning("IFI fetch failed: %s", exc)
-
-        return format_daily_recap(snap, prev, regime, flows_summary, ifi=ifi_summary)
+        return format_daily_recap(snap, prev, regime, flows_summary)
 
     async def send_daily_recap(self) -> bool:
         """Invia il recap mattutino. Ritorna True se inviato con successo."""
@@ -307,107 +278,6 @@ class GexAlertMonitor:
             await asyncio.to_thread(self._alert_db.record_sent, ALERT_DAILY_RECAP, message)
             _log.info("daily_recap inviato")
         return sent
-
-    # ─── Directional signal (comando /signal) ────────────────────────────────
-
-    async def build_signal_message(self) -> Optional[str]:
-        """Raccoglie GEX + flows + barriers + macro e genera il segnale direzionale.
-
-        Non applica cooldown: comando on-demand via webhook Telegram.
-
-        Returns:
-            Stringa HTML pronta per Telegram, o None se mancano i dati GEX.
-        """
-        latest = await asyncio.to_thread(self._gex_db.get_latest_n, 1)
-        if not latest:
-            _log.warning("build_signal_message: nessun GEX snapshot nel DB")
-            return None
-
-        snap = latest[-1]
-
-        detector = RegimeDetector()
-        history = await asyncio.to_thread(self._gex_db.get_latest_n, 90)
-        prepop = history[:-1] if history and history[-1].timestamp == snap.timestamp else history
-        detector.load_history_from_db(prepop)
-        regime = detector.detect(snap)
-
-        ibit_flow_3d = 0.0
-        flow_history_df = None
-        flow_is_estimate = False
-        try:
-            from src.api.data_pipeline import get_flow_context
-
-            flow_ctx = await asyncio.to_thread(get_flow_context)
-            raw_flows = flow_ctx["raw"]
-            merged = flow_ctx["merged_df"]
-
-            if not merged.empty and "ibit_flow_3d" in merged.columns:
-                last_val = merged["ibit_flow_3d"].dropna()
-                if not last_val.empty:
-                    ibit_flow_3d = float(last_val.iloc[-1])
-            flow_history_df = merged if not merged.empty else None
-
-            flow_is_estimate = bool(raw_flows) and all(
-                f.source.startswith("yfinance") for f in raw_flows
-            )
-        except Exception as exc:
-            _log.warning("signal flows fetch failed: %s", exc)
-
-        barriers: list[dict] = []
-        try:
-            from src.edgar.structured_notes_db import StructuredNotesDB
-            barriers = await asyncio.to_thread(StructuredNotesDB().get_active_barriers)
-        except Exception as exc:
-            _log.warning("signal barriers fetch failed: %s", exc)
-
-        macro = None
-        try:
-            from src.flows.macro_fetcher import fetch_macro_data
-            macro = await asyncio.to_thread(fetch_macro_data)
-        except Exception as exc:
-            _log.warning("signal macro fetch failed: %s", exc)
-
-        from src.analytics.pillars import CompositeSignal, CompositeInputs
-
-        inputs = CompositeInputs(
-            gex_usd=snap.total_net_gex,
-            gamma_flip_price=snap.gamma_flip_price,
-            put_wall=snap.put_wall,
-            call_wall=snap.call_wall,
-            active_barriers=barriers if barriers else None,
-            etf_flow_3d_usd=ibit_flow_3d,
-            flow_history_df=flow_history_df,
-            flow_is_estimate=flow_is_estimate,
-            funding_rate_annualized_pct=macro.funding_rate_annualized_pct if macro else None,
-            oi_change_7d_pct=macro.oi_change_7d_pct if macro else None,
-            long_short_ratio=macro.long_short_ratio if macro else None,
-            put_call_ratio=snap.put_call_ratio,
-            liquidations_long_24h_usd=macro.liquidations_long_24h_usd if macro else None,
-            liquidations_short_24h_usd=macro.liquidations_short_24h_usd if macro else None,
-            spot_price=snap.spot_price,
-        )
-        result = CompositeSignal().compute(inputs)
-
-        bias = directional_bias(result.score)
-
-        nearest_barrier = None
-        for p in result.pillars:
-            if p.name == "barrier" and p.components:
-                nearest_barrier = p.components.get("nearest_barrier")
-                break
-
-        return format_signal_message(
-            score=result.score,
-            bias=bias,
-            pillars=result.pillars,
-            spot_price=snap.spot_price,
-            flip_price=snap.gamma_flip_price,
-            call_wall=snap.call_wall,
-            put_wall=snap.put_wall,
-            regime_label=regime.regime,
-            barriers_count=len(barriers),
-            nearest_barrier=nearest_barrier,
-        )
 
     # ─── ETF flow events ────────────────────────────────────────────────────
 
