@@ -54,31 +54,43 @@ def _render_header(snap: dict, merged_df: pd.DataFrame, spec: AssetSpec | None =
             border=True,
             help="Gamma exposure netta aggregata (Deribit).",
         )
-        st.metric(
-            "Gamma Flip",
-            f"${snap.get('gamma_flip_price') or 0:,.0f}",
-            delta=f"{_dist_pct(snap.get('gamma_flip_price'), spot):+.1f}% da spot",
-            border=True,
+        _level_metric(
+            "Gamma Flip", snap.get("gamma_flip_price"), spot,
             help="Prezzo al quale il GEX cambia segno.",
         )
-        st.metric(
-            "Put Wall",
-            f"${snap.get('put_wall') or 0:,.0f}",
-            delta=f"{_dist_pct(snap.get('put_wall'), spot):+.1f}% da spot",
-            delta_color="inverse",
-            border=True,
+        _level_metric(
+            "Put Wall", snap.get("put_wall"), spot, delta_color="inverse",
             help="Supporto meccanico: qui i dealer comprano.",
         )
-        st.metric(
-            "Call Wall",
-            f"${snap.get('call_wall') or 0:,.0f}",
-            delta=f"{_dist_pct(snap.get('call_wall'), spot):+.1f}% da spot",
-            border=True,
+        _level_metric(
+            "Call Wall", snap.get("call_wall"), spot,
             help="Resistenza meccanica: qui i dealer vendono.",
         )
 
     for alert in snap.get("alerts", []):
         st.warning(f"{alert}", icon=":material/warning:")
+
+
+def _level_metric(
+    label: str,
+    level: float | None,
+    spot: float,
+    *,
+    help: str,
+    delta_color: Literal["normal", "inverse"] = "normal",
+) -> None:
+    """KPI di un livello GEX. Se il livello non esiste mostra "n/d", non "$0 a -100%"."""
+    if not level:
+        st.metric(label, "n/d", border=True, help=help)
+        return
+    st.metric(
+        label,
+        f"${level:,.0f}",
+        delta=f"{_dist_pct(level, spot):+.1f}% da spot",
+        delta_color=delta_color,
+        border=True,
+        help=help,
+    )
 
 
 def _dist_pct(level: float | None, spot: float) -> float:

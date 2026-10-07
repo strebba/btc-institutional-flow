@@ -104,3 +104,26 @@ class TestPineAsset:
         snap = {"gamma_flip_price": 2550.0, "spot_price": 2500.0, "regime": "positive_gamma"}
         assert 'indicator("WAGMI Lab — ETH GEX Levels"' in build_pine_indicator(snap, asset="ETH")
         assert 'indicator("WAGMI Lab — BTC GEX Levels"' in build_pine_indicator(snap)
+
+
+def _header_senza_flip_app():
+    import pandas as pd
+
+    from src.assets import get_asset
+    from src.dashboard.header import _render_header
+
+    snap = {"spot_price": 2500.0, "gamma_flip_price": None, "put_wall": 2400.0,
+            "call_wall": None, "regime": "neutral", "total_net_gex": -7e5}
+    _render_header(snap, pd.DataFrame(), get_asset("ETH"))
+
+
+class TestHeaderLivelliMancanti:
+    def test_un_livello_assente_e_n_d_non_zero_dollari(self):
+        """Con GEX vicino a zero il flip spesso non esiste: "$0 a -100%" sarebbe un dato inventato."""
+        from streamlit.testing.v1 import AppTest
+
+        at = AppTest.from_function(_header_senza_flip_app, default_timeout=30).run()
+        valori = {m.label: m.value for m in at.metric}
+        assert valori["Gamma Flip"] == "n/d"
+        assert valori["Call Wall"] == "n/d"
+        assert valori["Put Wall"] == "$2,400"

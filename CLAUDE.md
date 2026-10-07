@@ -2,6 +2,8 @@
 
 Toolkit Python per l'impatto del **dealer hedging** su note strutturate IBIT sul prezzo BTC
 (tesi Arthur Hayes). Espone un **backend FastAPI** + una dashboard Streamlit.
+Traccia anche **ETH** (dal 2026-10, fase 1 "solo dati": GEX, flussi ETF, macro — niente
+segnale composito, barriere né EDGAR).
 
 > Esiste una `memory/MEMORY.md` nel repo con dettagli di architettura e bug-fix storici della
 > dashboard Streamlit — leggerla per il dettaglio, **non duplicarla** qui.
@@ -39,6 +41,7 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 
 | Modulo | Ruolo |
 |--------|-------|
+| `src/assets.py` | Registro `AssetSpec` (BTC, ETH): unico punto per simboli Deribit/CoinGlass/CoinGecko, URL Farside, lead ETF (IBIT/ETHA), nomi di colonna del `merged_df` e `features` disponibili. Ovunque `asset="BTC"` di default; BTC conserva i nomi legacy (`btc_close`, `ibit_flow`) |
 | `src/edgar/` | SEC EDGAR scraper/parser note strutturate (424B2/424B3) → SQLite |
 | `src/gex/` | Gamma Exposure da Deribit (`gex_calculator.py`, `deribit_client.py`): GEX, gamma flip, put/call wall, max pain |
 | `src/flows/` | ETF flow tracker (Farside + yfinance, Coinglass, SoSoValue), price fetcher BTC/IBIT, correlazioni, EDGAR N-PORT, `macro_fetcher.py` (dati macro unificati), `coingecko_client.py` (ripiego funding/OI) |
@@ -50,6 +53,8 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/report/` | **Desk Note** — report a card pubblicabili. `facts.py` (estrattori + salienza), `narrative.py` (selezione e composizione), `events.py` (trigger di pubblicazione + `ReportStateDB`), `renderer.py` (HTML per web e PNG), `formatting.py` (numeri all'italiana), `fonts/` (IBM Plex incorporato) |
 
 DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignorato).
+`gex_snapshots` e `macro_snapshots` hanno la colonna `asset` (unicità data+asset); la
+migrazione dallo schema pre-ETH gira da sola all'avvio, è atomica e idempotente.
 `StructuredNotesDB` e `GexDB` puntano **sempre** a `structured_notes.db` (path hardcodato,
 ignorano `DB_PATH`). `PredictionDB`, `AlertDB` rispettano `DB_PATH` (default
 `structured_notes.db`, override `data/runtime.db` in dev). Config: `config/settings.yaml` +
@@ -64,6 +69,11 @@ palette Wagmi Lab), niente CSS inline. Font **IBM Plex Sans/Mono self-hosted** d
 dipendenza da fonts.gstatic.com. I colori dei grafici Plotly restano in
 `config/settings.yaml → dashboard.theme` (allineati al tema).
 
+Asset: selettore BTC/ETH in cima alla sidebar (`st.segmented_control`, `bind="query-params"`
+→ `?asset=eth`), letto da `app.py` prima di caricare i dati; lo spec va in
+`st.session_state["asset_spec"]`. Pagine visibili per asset in `navigation.py`
+(`visible_pages`): con ETH solo Panoramica, GEX, ETF Flows.
+
 Navigazione: `st.navigation(position="top")` + `st.Page` in `src/dashboard/app_pages/`
 (**7 pagine**, thin wrapper sulle funzioni `_tab_*` di `tabs/`). **Panoramica è la
 default** (answer-first: segnale + livelli + flussi a colpo d'occhio), poi Segnali,
@@ -71,7 +81,7 @@ GEX, ETF Flows, Barrier Map, EDGAR, Validation. **Solo la pagina attiva viene es
 — prima `st.tabs` era eager ed eseguiva backtest/walk-forward/sensitivity/IC/Granger/
 event-study a ogni load. `app.py` carica GEX/flussi/barriere una volta e li mette in
 `st.session_state`. Il refresh manuale invalida anche `run_signal_ic` (presente nella
-lista `fn.clear()`). `_PAGES_DIR` usa `Path(__file__).resolve().parent`.
+lista `fn.clear()`). `_PAGES_DIR` (in `navigation.py`) usa `Path(__file__).resolve().parent`.
 
 Design system: `src/dashboard/components.py` (`tape`, `eyebrow`, `hero`, `pillar_bars`)
 in `st.html` con CSS proprio (classi `wx-`, stile Desk Note: numero grande mono, label
@@ -153,6 +163,9 @@ punti e in quattro applicava un `×100` di troppo, che dava 599% invece di 6% e
 faceva leggere allo scorer "flush imminente" dove il mercato era tiepido. Non
 reintrodurla nei chiamanti.
 
+Per ETH valgono le stesse fonti con i simboli dello spec (`fetch_macro_data(asset="ETH")`);
+`cron_macro.py` scrive uno snapshot per asset con un solo download CoinGecko.
+
 `source_status` ha quattro stati: `ok`, `partial_coingecko` (ripiego attivo),
 `no_api_key`, `unavailable`. Il Desk Note li distingue nei warning.
 
@@ -162,6 +175,15 @@ dalla tabella `macro_snapshots` nel DB versionato, alimentata da
 committa il DB). Lo storico non può stare in `runtime.db`: il filesystem DO è
 effimero e la finestra non maturerebbe mai. I due workflow che scrivono il DB
 condividono il gruppo di concorrenza `db-write`.
+
+## API multi-asset
+
+`/api/gex`, `/api/flows`, `/api/macro` accettano `?asset=btc|eth` (default `btc`, 422 sugli
+altri). Senza parametro la risposta è quella storica consumata da PTF-Dashboard (più il
+campo additivo `asset`). Cache: BTC usa le chiavi storiche, ETH `<chiave>:eth`; lock di
+dedup Deribit per asset. `/api/signals`, `/api/barriers`, `/report` restano solo BTC.
+Soglia di neutralità GEX per asset in `deribit.gex_threshold_usd_by_asset` (ETH 100k,
+da ritarare quando ci sarà storico ETH). `cron_gex.py --asset {BTC,ETH,all}`.
 
 ## Refresh dati EDGAR (note IBIT)
 
