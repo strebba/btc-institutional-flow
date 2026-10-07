@@ -39,8 +39,8 @@ _DEFAULT_OUT = Path("out/tradingview/gex_levels.pine")
 def _fetch_snapshot() -> dict:
     """Richiama l'endpoint GEX in-process e appiattisce la risposta.
 
-    Stesso pattern di ``report._payload``, ma riporta la forma attesa da
-    ``build_pine_indicator``: campi di ``snapshot`` + ``regime`` stringa.
+    Riporta la forma attesa da ``build_pine_indicator``: campi di
+    ``snapshot`` + ``regime`` stringa.
     """
     from src.api.routers import gex as r_gex
 

@@ -107,6 +107,18 @@ class TestDailyRecap:
         msg = format_daily_recap(_snap(), None, _regime(alerts=[]), None, now=NOW)
         assert "⚠" not in msg
 
+    def test_solo_livelli_gex_e_flussi_niente_punteggi(self) -> None:
+        """Il recap porta livelli GEX e flussi ETF: nessun indice composito né punteggio."""
+        msg = format_daily_recap(_snap(), None, _regime(), None, now=NOW)
+        assert "IFI" not in msg and "Score" not in msg and "/100" not in msg
+        assert "Gamma Flip" in msg and "ETF Flows" in msg
+
+    def test_template_segnale_rimosso(self) -> None:
+        import src.alerts.templates as t
+
+        assert not hasattr(t, "format_signal_message")
+        assert not hasattr(t, "IFISummary")
+
     def test_no_dashboard_link(self) -> None:
         msg = format_daily_recap(_snap(), None, _regime(), None, now=NOW)
         assert "https://" not in msg

@@ -8,8 +8,9 @@ BTC conserva i nomi legacy delle colonne (``btc_close``, ``ibit_flow``, …): so
 il contratto di analytics, API e PTF-Dashboard e non cambiano. ETH usa nomi con
 prefisso (``eth_close``, ``etha_flow``, …).
 
-``features`` dice cosa è disponibile per l'asset: ETH in fase 1 ha solo i dati
-(GEX, flussi, macro), senza segnale composito, barriere né EDGAR.
+``features`` dice cosa è disponibile per l'asset: ETH ha solo i dati (GEX, flussi,
+macro); BTC anche barriere/EDGAR e ``analytics`` (regime analysis e alert flussi
+tarati su storico e soglie IBIT).
 """
 from __future__ import annotations
 
@@ -76,7 +77,7 @@ ASSETS: dict[str, AssetSpec] = {
         coinglass_symbol="BTC",
         coinglass_pair="BTCUSDT",
         coingecko_index_id="BTC",
-        features=DATA_FEATURES | {"signal", "barriers", "edgar"},
+        features=DATA_FEATURES | {"analytics", "barriers", "edgar"},
     ),
     "ETH": AssetSpec(
         key="ETH",

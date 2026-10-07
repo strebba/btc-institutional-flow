@@ -47,13 +47,10 @@ btc-institutional-flow/
 │   │   └── models.py          # EtfFlowData, AggregateFlows
 │   │
 │   ├── analytics/      # Statistical Analysis
-│   │   ├── pillars.py         # CompositeSignal a 4 pilastri (single source of truth)
-│   │   ├── factor_scorers.py  # Libreria scoring 8 fattori (ex signal_model)
-│   │   ├── backtest.py        # Backtest + null models (random, always_long, momentum)
+│   │   ├── factor_scorers.py  # Scoring a 8 fattori (usato solo dal forecast spine)
 │   │   ├── granger.py         # Granger causality + find_optimal_lag()
 │   │   ├── event_study.py     # CAR intorno ai barrier levels
-│   │   ├── regime_analysis.py # Welch t-test positive vs negative gamma
-│   │   └── ifi.py / ifi_db.py / ifi_updater.py  # Institutional Flow Index (legacy)
+│   │   └── regime_analysis.py # Welch t-test positive vs negative gamma
 │   │
 │   ├── forecast/       # Forecast spine: predizioni verificabili
 │   │   ├── jobs.py            # predict / verify / calibrate
@@ -61,9 +58,8 @@ btc-institutional-flow/
 │   │   ├── calibration.py     # Proposta pesi human-gated
 │   │   └── sources/dealer_flow.py
 │   │
-│   ├── alerts/         # Alert Telegram (recap, ETF flow check, /signal)
-│   ├── report/         # Desk Note — report a card (facts/narrative/events/renderer)
-│   ├── api/            # FastAPI — main.py + routers/ (7), cache, scheduler
+│   ├── alerts/         # Alert Telegram: livelli GEX + flussi ETF (recap, ETF flow check)
+│   ├── api/            # FastAPI — main.py + routers/ (6), cache, scheduler
 │   │
 │   ├── dashboard/      # Streamlit Dashboard
 │   │   ├── app.py             # Orchestratore + st.navigation (5 pagine, lazy)
@@ -80,7 +76,6 @@ btc-institutional-flow/
 │   ├── cron_edgar.py          # Refresh incrementale EDGAR
 │   ├── cron_gex.py            # Snapshot GEX giornaliero
 │   ├── cron_macro.py          # Snapshot funding/OI giornaliero
-│   ├── export_desk_note.py    # Esporta Desk Note in PNG
 │   ├── export_pine_indicator.py # Indicatore TradingView (Pine Script)
 │   ├── fetch_farside.py       # Aggiorna cache Farside HTML
 │   ├── notify_telegram.py     # Notifica CI/alert Telegram
@@ -102,10 +97,11 @@ btc-institutional-flow/
 Navigazione a **5 pagine** con `st.navigation(position="top")`: solo la pagina attiva
 viene eseguita. Selettore BTC/ETH in sidebar (`?asset=eth`): con ETH restano
 Panoramica, GEX ed ETF Flows. **Panoramica è
-la default**, answer-first: segnale + livelli + flussi a colpo d'occhio.
+la default**, answer-first: livelli GEX + flussi + derivati a colpo d'occhio. Solo dati
+osservati: nessun punteggio composito.
 
 **Pagine:**
-- **Panoramica** — tape di stato, hero del CompositeSignal, pillar bars, posizionamento GEX, flussi/derivati, prossimo trigger
+- **Panoramica** — tape di stato, posizionamento GEX, flussi/derivati, prossimo trigger (barriera più vicina)
 - **GEX** — Profilo Gamma Exposure, regime, gamma flip, put/call wall
 - **ETF Flows** — Flussi IBIT e multi-ETF, correlazione rolling, Granger causality
 - **Barrier Map** — Mappa visiva dei livelli critici EDGAR con confluenza GEX
@@ -203,7 +199,6 @@ python scripts/run_analytics.py              # tutto
 python scripts/run_analytics.py --granger    # solo Granger
 python scripts/run_analytics.py --regime     # solo regime analysis
 python scripts/run_analytics.py --events     # solo event study
-python scripts/run_analytics.py --backtest   # solo backtest
 ```
 
 ### 5. Avvia la dashboard

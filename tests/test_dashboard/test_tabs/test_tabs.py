@@ -59,8 +59,7 @@ class TestComponents:
         assert components is not None
 
     def test_component_functions_exist(self):
-        from src.dashboard.components import inject_style, tape, hero, pillar_bars
+        from src.dashboard.components import eyebrow, inject_style, tape
         assert callable(inject_style)
         assert callable(tape)
-        assert callable(hero)
-        assert callable(pillar_bars)
+        assert callable(eyebrow)

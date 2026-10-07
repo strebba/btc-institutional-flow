@@ -169,7 +169,7 @@ def _flow_alerts(merged_df: pd.DataFrame, etf_tickers: list[str], spec: AssetSpe
     """
     alerts: list[tuple[str, str, str]] = []  # (icon, message, detail)
 
-    if spec.has("signal") and "ibit_flow_3d" in merged_df.columns:
+    if spec.has("analytics") and "ibit_flow_3d" in merged_df.columns:
         ibit_3d_col = merged_df["ibit_flow_3d"].dropna()
         if not ibit_3d_col.empty:
             ibit_3d = float(ibit_3d_col.iloc[-1]) / 1e6

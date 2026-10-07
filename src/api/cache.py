@@ -12,15 +12,11 @@ _cache_lock = threading.Lock()
 
 _TTL: dict[str, int] = {
     "gex":            300,   # 5 min  — opzioni Deribit, ~90s fetch
-    "_gex_data":      300,   # 5 min  — raw GexSnapshot objects (condivisi tra /gex e /signals)
+    "_gex_data":      300,   # 5 min  — raw GexSnapshot objects (condivisi tra /gex e /barriers)
     "gex_enrichment": 3600,  # 1 ora  — CoinGlass coverage score + multi-exchange PCR
     "flows":          900,   # 15 min — Farside scrape
     "barriers":       3600,  # 1 ora  — dati SEC EDGAR statici
-    "signals":        300,   # 5 min  — dipende da gex + flows
     "macro":          3600,  # 1 ora  — dati CoinGlass giornalieri
-    "ifi":            900,   # 15 min — serie giornaliera, cambia lentamente
-    "report_cards":   300,   # 5 min  — dipende da gex + signals + barriers
-    "pillars_series": 900,   # 15 min — compute_series + Farside scrape (costoso)
 }
 
 # Lock che impedisce fetch Deribit concorrenti: il secondo richiedente attende

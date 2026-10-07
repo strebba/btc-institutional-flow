@@ -306,10 +306,14 @@ class TestNotes:
         assert data["notes"][0]["underlying"] == "IBIT"
 
 
-class TestPillarsSeries:
-    def test_invalid_pillar_returns_400(self, client):
-        r = client.get("/api/pillars/series", params={"pillar": "bogus"})
-        assert r.status_code == 400
+class TestPunteggiRimossi:
+    """Segnale composito, IFI e Desk Note sono stati rimossi: nessun endpoint li espone più."""
+
+    @pytest.mark.parametrize(
+        "path", ["/api/signals", "/api/pillars/series", "/api/ifi", "/api/report/cards", "/report"]
+    )
+    def test_endpoint_non_esiste(self, client, path):
+        assert client.get(path).status_code == 404
 
 
 # ──────────────────────────────────────────────────────────────────────────────

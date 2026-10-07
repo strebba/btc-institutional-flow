@@ -129,7 +129,7 @@ def load_macro(asset: str = "BTC") -> dict:
     Best-effort: se CoinGlass non è disponibile ritorna {} e il pilastro Macro
     risulterà 'n/d' (i pesi vengono riscalati sugli altri).
 
-    Usa src.flows.macro_fetcher.fetch_macro_data() — stessa fonte di /api/signals.
+    Usa src.flows.macro_fetcher.fetch_macro_data() — stessa fonte di /api/macro.
     """
     from src.flows.macro_fetcher import fetch_macro_data
 
@@ -180,51 +180,3 @@ def run_event_study(barriers: list[dict], merged_df: pd.DataFrame) -> list:
     study = EventStudy()
     prices_df = merged_df[["btc_close"]].rename(columns={"btc_close": "close"}).dropna()
     return study.run(barriers, prices_df)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Composite signal
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-def compute_composite(
-    snap: dict,
-    merged_df: pd.DataFrame,
-    barriers: list[dict],
-    macro: dict | None = None,
-):
-    """Calcola il segnale composito a 4 pilastri (GEX, Barrier, ETF Flows, Macro).
-
-    Riusa l'unica sorgente di verità `CompositeSignal` (stessa logica di /api/signals),
-    così dashboard e API non divergono.
-
-    Returns:
-        CompositeResult con score, signal, pillars[], reason.
-    """
-    from src.analytics.pillars import CompositeSignal, CompositeInputs
-
-    macro = macro or {}
-
-    ibit_3d = 0.0
-    if not merged_df.empty and "ibit_flow_3d" in merged_df.columns:
-        last = merged_df["ibit_flow_3d"].dropna()
-        if not last.empty:
-            ibit_3d = float(last.iloc[-1])
-
-    inputs = CompositeInputs(
-        gex_usd=snap.get("total_net_gex"),
-        gamma_flip_price=snap.get("gamma_flip_price"),
-        put_wall=snap.get("put_wall"),
-        call_wall=snap.get("call_wall"),
-        active_barriers=barriers or None,
-        etf_flow_3d_usd=ibit_3d,
-        flow_history_df=merged_df if not merged_df.empty else None,
-        put_call_ratio=snap.get("put_call_ratio"),
-        spot_price=snap.get("spot_price"),
-        funding_rate_annualized_pct=macro.get("funding_rate_annualized_pct"),
-        oi_change_7d_pct=macro.get("oi_change_7d_pct"),
-        long_short_ratio=macro.get("long_short_ratio"),
-        liquidations_long_24h_usd=macro.get("liquidations_long_24h_usd"),
-        liquidations_short_24h_usd=macro.get("liquidations_short_24h_usd"),
-    )
-    return CompositeSignal().compute(inputs)
