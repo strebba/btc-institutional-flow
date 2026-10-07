@@ -297,3 +297,29 @@ class TestFetchTakerVolume:
         client = _client()
         _mock_get_raise(client, CoinGlassError("err"))
         assert client.fetch_taker_volume().empty
+
+
+class TestAssetEth:
+    """Con asset="ETH" ogni richiesta usa i simboli ETH: nessun BTC cablato."""
+
+    def _params(self, mock: MagicMock) -> list[tuple[str, dict]]:
+        return [(c.args[0], c.args[1] if len(c.args) > 1 else c.kwargs.get("params", {}))
+                for c in mock.call_args_list]
+
+    def test_etf_flows_usa_il_path_ethereum(self):
+        client = _client()
+        mock = _mock_get(client, [])
+        client.fetch_etf_flows(asset="ETH")
+        assert self._params(mock)[0][0] == "/api/etf/ethereum/flow-history"
+
+    def test_fetch_macro_eth_non_chiedono_mai_btc(self):
+        client = _client()
+        mock = _mock_get(client, [])
+        client.fetch_funding_rate_history(asset="ETH")
+        client.fetch_aggregated_oi_history(asset="ETH")
+        client.fetch_long_short_ratio(asset="ETH")
+        client.fetch_liquidations(asset="ETH")
+        client.fetch_taker_volume(asset="ETH")
+        simboli = {p.get("symbol") for _, p in self._params(mock)}
+        assert simboli <= {"ETH", "ETHUSDT"}
+        assert simboli

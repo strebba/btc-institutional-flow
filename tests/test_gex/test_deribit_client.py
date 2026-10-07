@@ -170,3 +170,20 @@ class TestHTTPErrorHandling:
                 with pytest.raises(HTTPError):
                     client._get("/ticker", {"instrument_name": "BTC-OPT"})
         assert client._circuit_breaker.failures == 1
+
+
+class TestSpotPriceAsset:
+    def test_eth_interroga_l_indice_eth_usd(self):
+        client = DeribitClient()
+        seen = []
+
+        def mock_get(url, params=None, **kwargs):
+            seen.append(params)
+            resp = MagicMock()
+            resp.json.return_value = {"result": {"index_price": 2500.0}}
+            resp.raise_for_status.return_value = None
+            return resp
+
+        with patch.object(client._session, "get", side_effect=mock_get):
+            assert client.get_spot_price("ETH") == 2500.0
+        assert seen[0]["index_name"] == "eth_usd"

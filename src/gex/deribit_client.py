@@ -178,13 +178,19 @@ class DeribitClient:
     # Public API methods
     # ──────────────────────────────────────────────────────────────────────────
 
-    def get_spot_price(self) -> float:
-        """Restituisce il prezzo spot corrente di BTC-USD.
+    def get_spot_price(self, asset: str = "BTC") -> float:
+        """Restituisce il prezzo spot corrente dell'indice Deribit dell'asset.
+
+        Args:
+            asset: "BTC" (indice btc_usd) o "ETH" (indice eth_usd).
 
         Returns:
             float: prezzo in USD.
         """
-        result = self._get("/get_index_price", {"index_name": "btc_usd"})
+        from src.assets import get_asset
+
+        index_name = get_asset(asset).deribit_index
+        result = self._get("/get_index_price", {"index_name": index_name})
         return float(result["index_price"])
 
     def get_instruments(

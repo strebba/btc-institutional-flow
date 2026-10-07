@@ -23,6 +23,7 @@ import requests
 
 import pandas as pd
 
+from src.assets import get_asset
 from src.config import get_settings, setup_logging
 from src.flows.models import EtfFlowData
 
@@ -198,18 +199,20 @@ class CoinGlassClient:
 
     # ─── ETF Flows ────────────────────────────────────────────────────────────
 
-    def fetch_etf_flows(self, days: int = 365) -> list[EtfFlowData]:
-        """Scarica i flussi giornalieri di tutti i Bitcoin ETF spot USA.
+    def fetch_etf_flows(self, days: int = 365, asset: str = "BTC") -> list[EtfFlowData]:
+        """Scarica i flussi giornalieri di tutti gli ETF spot USA dell'asset (BTC o ETH).
 
         Args:
             days: numero di giorni storici da richiedere.
+            asset: "BTC" o "ETH".
 
         Returns:
             list[EtfFlowData] con source='coinglass', ordinata per data crescente.
             Lista vuota se l'endpoint non risponde o non ci sono dati.
         """
+        spec = get_asset(asset)
         try:
-            data = self._get("/api/etf/bitcoin/flow-history", {"limit": min(days, 500)})
+            data = self._get(f"/api/etf/{spec.coinglass_etf_path}/flow-history", {"limit": min(days, 500)})
         except (CoinGlassError, CoinGlassApiError) as e:
             _log.warning("CoinGlass ETF flows: %s", e)
             return []
@@ -281,20 +284,22 @@ class CoinGlassClient:
 
     # ─── Funding Rate ─────────────────────────────────────────────────────────
 
-    def fetch_funding_rate_history(self, days: int = 365) -> pd.Series:
+    def fetch_funding_rate_history(self, days: int = 365, asset: str = "BTC") -> pd.Series:
         """Scarica il funding rate OI-weighted (daily, annualizzato).
 
         Args:
             days: numero di giorni storici.
+            asset: "BTC" o "ETH".
 
         Returns:
             pd.Series con DatetimeIndex (UTC) e valori float (funding rate 8h in %).
             Serie vuota su errore.
         """
+        spec = get_asset(asset)
         try:
             data = self._get(
                 "/api/futures/funding-rate/oi-weight-history",
-                {"symbol": "BTC", "interval": "8h", "limit": min(days * 3, 1000)},
+                {"symbol": spec.coinglass_symbol, "interval": "8h", "limit": min(days * 3, 1000)},
             )
         except (CoinGlassError, Exception) as e:
             _log.warning("CoinGlass funding rate: %s", e)
@@ -332,20 +337,22 @@ class CoinGlassClient:
 
     # ─── Aggregated Futures OI ────────────────────────────────────────────────
 
-    def fetch_aggregated_oi_history(self, days: int = 365) -> pd.Series:
+    def fetch_aggregated_oi_history(self, days: int = 365, asset: str = "BTC") -> pd.Series:
         """Scarica l'open interest futures aggregato cross-exchange (daily, USD).
 
         Args:
             days: numero di giorni storici.
+            asset: "BTC" o "ETH".
 
         Returns:
             pd.Series con DatetimeIndex (UTC) e valori float (OI in USD).
             Serie vuota su errore.
         """
+        spec = get_asset(asset)
         try:
             data = self._get(
                 "/api/futures/open-interest/aggregated-history",
-                {"symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
+                {"symbol": spec.coinglass_symbol, "interval": "1d", "limit": min(days, 500)},
             )
         except (CoinGlassError, Exception) as e:
             _log.warning("CoinGlass aggregated OI: %s", e)
@@ -387,29 +394,31 @@ class CoinGlassClient:
 
     # ─── Long/Short Ratio ────────────────────────────────────────────────────
 
-    def fetch_long_short_ratio(self, days: int = 90) -> pd.Series:
-        """Scarica il rapporto long/short globale degli account futures BTC.
+    def fetch_long_short_ratio(self, days: int = 90, asset: str = "BTC") -> pd.Series:
+        """Scarica il rapporto long/short globale degli account futures dell'asset.
 
         Un valore > 1.0 indica più account long che short.
         Valore > 2.0 = folla retail crowded long = segnale contrarian bearish.
 
         Args:
             days: numero di giorni storici.
+            asset: "BTC" o "ETH".
 
         Returns:
             pd.Series con DatetimeIndex (tz-naive) e valori float (ratio).
             Serie vuota su errore.
         """
+        spec = get_asset(asset)
         data = None
 
         # Try different exchange/symbol combinations based on CoinGlass API docs
         param_sets = [
-            {"exchange": "Binance", "symbol": "BTCUSDT", "interval": "1d", "limit": min(days, 500)},
-            {"exchange": "OKX", "symbol": "BTCUSDT", "interval": "1d", "limit": min(days, 500)},
-            {"exchange": "Bybit", "symbol": "BTCUSDT", "interval": "1d", "limit": min(days, 500)},
+            {"exchange": "Binance", "symbol": spec.coinglass_pair, "interval": "1d", "limit": min(days, 500)},
+            {"exchange": "OKX", "symbol": spec.coinglass_pair, "interval": "1d", "limit": min(days, 500)},
+            {"exchange": "Bybit", "symbol": spec.coinglass_pair, "interval": "1d", "limit": min(days, 500)},
             {
                 "exchange": "Binance,OKX,Bybit",
-                "symbol": "BTCUSDT",
+                "symbol": spec.coinglass_pair,
                 "interval": "1d",
                 "limit": min(days, 500),
             },
@@ -470,14 +479,15 @@ class CoinGlassClient:
 
     # ─── Liquidations ────────────────────────────────────────────────────────
 
-    def fetch_liquidations(self, days: int = 90) -> pd.DataFrame:
-        """Scarica la storia delle liquidazioni futures BTC (long + short).
+    def fetch_liquidations(self, days: int = 90, asset: str = "BTC") -> pd.DataFrame:
+        """Scarica la storia delle liquidazioni futures dell'asset (long + short).
 
         Utile per identificare cascade risk: liquidazioni >500M USD in 24h
         indicano eventi di stress con potenziale momentum direzionale.
 
         Args:
             days: numero di giorni storici.
+            asset: "BTC" o "ETH".
 
         Returns:
             pd.DataFrame con DatetimeIndex (tz-naive) e colonne:
@@ -485,6 +495,7 @@ class CoinGlassClient:
             'total_usd' (somma).
             DataFrame vuoto su errore.
         """
+        spec = get_asset(asset)
         _EMPTY = pd.DataFrame(columns=["long_usd", "short_usd", "total_usd"])
 
         data = None
@@ -492,18 +503,18 @@ class CoinGlassClient:
         param_sets = [
             {
                 "exchange_list": "Binance,OKX,Bybit",
-                "symbol": "BTC",
+                "symbol": spec.coinglass_symbol,
                 "interval": "1d",
                 "limit": min(days, 500),
             },
             {
                 "exchange_list": "Binance",
-                "symbol": "BTC",
+                "symbol": spec.coinglass_symbol,
                 "interval": "1d",
                 "limit": min(days, 500),
             },
-            {"exchange_list": "OKX", "symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
-            {"exchange_list": "Bybit", "symbol": "BTC", "interval": "1d", "limit": min(days, 500)},
+            {"exchange_list": "OKX", "symbol": spec.coinglass_symbol, "interval": "1d", "limit": min(days, 500)},
+            {"exchange_list": "Bybit", "symbol": spec.coinglass_symbol, "interval": "1d", "limit": min(days, 500)},
         ]
 
         for params in param_sets:
@@ -568,25 +579,27 @@ class CoinGlassClient:
 
     # ─── Taker Buy/Sell Volume ────────────────────────────────────────────────
 
-    def fetch_taker_volume(self, days: int = 90) -> pd.Series:
-        """Scarica il rapporto taker buy/(buy+sell) per futures BTC.
+    def fetch_taker_volume(self, days: int = 90, asset: str = "BTC") -> pd.Series:
+        """Scarica il rapporto taker buy/(buy+sell) per i futures dell'asset.
 
         Indica la pressione direzionale degli ordini market (aggressori):
         > 0.55 = pressione acquisto dominante; < 0.45 = pressione vendita.
 
         Args:
             days: numero di giorni storici.
+            asset: "BTC" o "ETH".
 
         Returns:
             pd.Series con DatetimeIndex (tz-naive) e valori float (ratio 0-1).
             Serie vuota su errore.
         """
+        spec = get_asset(asset)
         data = None
         # Use correct endpoint from CoinGlass API docs: /api/futures/taker-buy-sell-volume/exchange-list
         param_sets = [
-            {"symbol": "BTC", "range": "1d"},
-            {"symbol": "BTC", "range": "4h"},
-            {"symbol": "BTC", "range": "24h"},
+            {"symbol": spec.coinglass_symbol, "range": "1d"},
+            {"symbol": spec.coinglass_symbol, "range": "4h"},
+            {"symbol": spec.coinglass_symbol, "range": "24h"},
         ]
 
         for params in param_sets:

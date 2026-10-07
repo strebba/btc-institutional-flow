@@ -95,3 +95,44 @@ class TestSummaryStats:
         outflow = stats["ibit"]["total_outflow_usd_b"]
         assert abs(net - (inflow + outflow)) < 0.01  # outflow è già negativo
 
+
+
+class TestMergeEth:
+    @pytest.fixture
+    def eth_flows(self):
+        base = date(2024, 1, 1)
+        return [
+            AggregateFlows(
+                date=base + timedelta(days=i),
+                total_flow_usd=float(i * 2e6),
+                ibit_flow_usd=0.0,
+                flows_by_ticker={"ETHA": float(i * 1e6), "FETH": float(i * 1e6)},
+                lead_flow_usd=float(i * 1e6),
+            )
+            for i in range(30)
+        ]
+
+    @pytest.fixture
+    def eth_prices(self):
+        idx = pd.date_range("2024-01-01", periods=30, freq="D")
+        rng = np.random.default_rng(7)
+        return pd.DataFrame({
+            "eth_close": np.cumsum(rng.normal(0, 30, 30)) + 2_500,
+            "eth_return": rng.normal(0, 0.03, 30),
+            "eth_vol_7d": rng.uniform(0.4, 0.9, 30),
+        }, index=idx)
+
+    def test_colonne_eth_senza_residui_btc(self, eth_flows, eth_prices):
+        merged = FlowCorrelation().merge(eth_flows, eth_prices, asset="ETH")
+        assert {"etha_flow", "etha_flow_3d", "eth_return_next1d", "feth_flow"} <= set(merged.columns)
+        assert "ibit_flow" not in merged.columns
+        assert not any(c.startswith("btc") for c in merged.columns)
+
+    def test_statistiche_e_correlazioni_eth(self, eth_flows, eth_prices):
+        engine = FlowCorrelation()
+        merged = engine.merge(eth_flows, eth_prices, asset="ETH")
+        stats = engine.summary_stats(merged, asset="ETH")
+        assert stats["etha"]["net_flow_usd_b"] == pytest.approx(sum(i * 1e6 for i in range(30)) / 1e9)
+        assert "eth" in stats and "ETHA" not in stats.get("by_ticker", {})
+        roll = engine.rolling_correlations(merged, windows=[10], asset="ETH")
+        assert "etha_flow_vs_eth_return" in roll["10d"].columns

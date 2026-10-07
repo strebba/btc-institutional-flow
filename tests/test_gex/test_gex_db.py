@@ -156,3 +156,67 @@ class TestGetLatestN:
         assert abs(result[0].spot_price - 88_000.0) < 1.0
         assert abs(result[0].total_net_gex - 300_000_000.0) < 1.0
 
+
+
+# ─── Multi-asset (BTC + ETH) ───────────────────────────────────────────────────
+
+_LEGACY_DDL = """
+CREATE TABLE gex_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL UNIQUE, timestamp TEXT NOT NULL, spot_price REAL NOT NULL,
+    total_net_gex REAL NOT NULL, gamma_flip_price REAL, put_wall REAL, call_wall REAL,
+    max_pain REAL, regime TEXT, total_call_oi REAL, total_put_oi REAL,
+    put_call_ratio REAL, n_instruments INTEGER, created_at TEXT NOT NULL
+);
+CREATE INDEX idx_gex_date ON gex_snapshots(date);
+"""
+
+
+def _legacy_db(path: Path) -> Path:
+    """DB con lo schema pre-ETH (date UNIQUE, senza colonna asset) e due righe."""
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.executescript(_LEGACY_DDL)
+    for d, gex in (("2026-01-01", 1e8), ("2026-01-02", -2e8)):
+        conn.execute(
+            "INSERT INTO gex_snapshots (date, timestamp, spot_price, total_net_gex, "
+            "regime, created_at) VALUES (?, ?, 85000, ?, 'neutral', ?)",
+            (d, f"{d}T10:00:00+00:00", gex, f"{d}T10:00:00+00:00"),
+        )
+    conn.commit()
+    conn.close()
+    return path
+
+
+class TestMultiAsset:
+    def test_migrazione_conserva_le_righe_legacy_come_btc(self, tmp_path: Path) -> None:
+        db = GexDB(db_path=_legacy_db(tmp_path / "legacy.db"))
+        assert db.count() == 2
+        assert db.count(asset="ETH") == 0
+        assert list(db.get_latest_n(10, asset="BTC")[i].total_net_gex for i in range(2)) == [1e8, -2e8]
+
+    def test_migrazione_idempotente(self, tmp_path: Path) -> None:
+        path = _legacy_db(tmp_path / "legacy.db")
+        GexDB(db_path=path)
+        db = GexDB(db_path=path)
+        assert db.count() == 2
+
+    def test_btc_ed_eth_convivono_nello_stesso_giorno(self, db: GexDB) -> None:
+        db.insert_snapshot(_make_snapshot(), "positive_gamma")
+        db.insert_snapshot(_make_snapshot(spot=2_500.0, gex=30_000_000.0), "negative_gamma", asset="ETH")
+
+        assert db.count() == 1
+        assert db.count(asset="ETH") == 1
+        assert db.get_last_regime_label() == "positive_gamma"
+        assert db.get_last_regime_label(asset="ETH") == "negative_gamma"
+        assert db.get_latest_n(5, asset="ETH")[0].spot_price == 2_500.0
+        assert db.get_series(asset="ETH").iloc[-1] == 30_000_000.0
+
+    def test_upsert_eth_aggiorna_solo_eth(self, db: GexDB) -> None:
+        db.insert_snapshot(_make_snapshot(), "positive_gamma")
+        db.insert_snapshot(_make_snapshot(spot=2_500.0), "neutral", asset="ETH")
+        db.insert_snapshot(_make_snapshot(spot=2_600.0), "neutral", asset="ETH")
+        assert db.count(asset="ETH") == 1
+        assert db.get_latest_n(5, asset="ETH")[0].spot_price == 2_600.0
+        assert db.get_latest_n(5)[0].spot_price == 85_000.0

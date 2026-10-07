@@ -329,3 +329,39 @@ class TestMacroSnapshots:
                                  snapshot_date=(date.today() - timedelta(days=7)).isoformat())
         db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=66e9, n_contracts=138)
         assert db.get_oi_change_pct(days=7) is None
+
+
+class TestMacroSnapshotsMultiAsset:
+    def test_eth_e_btc_hanno_storici_separati(self, db):
+        from datetime import date, timedelta
+
+        vecchio = (date.today() - timedelta(days=7)).isoformat()
+        db.record_macro_snapshot(funding_ann_pct=10.0, oi_usd=60e9, snapshot_date=vecchio)
+        db.record_macro_snapshot(funding_ann_pct=12.0, oi_usd=66e9)
+        db.record_macro_snapshot(funding_ann_pct=8.0, oi_usd=20e9, snapshot_date=vecchio, asset="ETH")
+        db.record_macro_snapshot(funding_ann_pct=9.0, oi_usd=18e9, asset="ETH")
+
+        assert db.get_oi_change_pct(days=7) == pytest.approx(10.0, abs=0.01)
+        assert db.get_oi_change_pct(days=7, asset="ETH") == pytest.approx(-10.0, abs=0.01)
+
+    def test_migra_lo_schema_senza_asset(self, tmp_path):
+        import sqlite3
+
+        from src.edgar.structured_notes_db import StructuredNotesDB
+
+        path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE macro_snapshots (snapshot_date TEXT PRIMARY KEY, captured_at TEXT NOT NULL, "
+            "funding_ann_pct REAL, oi_usd REAL, n_contracts INTEGER);"
+            "INSERT INTO macro_snapshots VALUES ('2026-01-01', '2026-01-01T00:00:00', 10.0, 60e9, 100);"
+        )
+        conn.commit()
+        conn.close()
+
+        db = StructuredNotesDB(path)
+        StructuredNotesDB(path)  # idempotente
+        db.record_macro_snapshot(funding_ann_pct=8.0, oi_usd=20e9, snapshot_date="2026-01-01", asset="ETH")
+        with db._conn() as c:
+            rows = c.execute("SELECT asset, oi_usd FROM macro_snapshots ORDER BY asset").fetchall()
+        assert [(r["asset"], r["oi_usd"]) for r in rows] == [("BTC", 60e9), ("ETH", 20e9)]

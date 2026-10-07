@@ -3,6 +3,14 @@
 Glossario dei termini canonici del dominio. Usa questi termini esattamente in
 tutto il codice, i commit, i test e le discussioni.
 
+## Asset
+
+| Termine | Definizione |
+|---------|-------------|
+| **Asset** | Sottostante tracciato: `BTC` o `ETH`. Descritto da un `AssetSpec` in `src/assets.py`, l'unico punto in cui stanno simboli, URL e nomi di colonna per-asset. Default `BTC` ovunque |
+| **LeadEtf** | ETF spot di riferimento dell'asset: `IBIT` per BTC, `ETHA` per ETH. Il suo flusso è la colonna `<lead>_flow` del `merged_df` (`ibit_flow`, `etha_flow`) |
+| **AssetFeatures** | Cosa è disponibile per l'asset. BTC: gex, flows, macro, signal, barriers, edgar. ETH (fase 1): solo gex, flows, macro, senza segnale composito |
+
 ## Note Strutturate
 
 | Termine | Definizione |
@@ -32,7 +40,7 @@ tutto il codice, i commit, i test e le discussioni.
 | Termine | Definizione |
 |---------|-------------|
 | **EtfFlow** | Flusso netto giornaliero in USD per un singolo ticker ETF |
-| **AggregateFlows** | Flusso aggregato multi-ticker (IBIT, FBTC, BITB, ARKB, …) |
+| **AggregateFlows** | Flusso aggregato multi-ticker di un asset (IBIT, FBTC, … per BTC; ETHA, FETH, … per ETH), con `lead_flow_usd` del LeadEtf |
 | **MergedRecord** | Riga del `merged_df`: flussi + prezzi uniti tramite `FlowCorrelation.merge()` |
 | **FlowDataSource** | Sorgente dati flussi nella waterfall: CoinGlass, Farside, SoSoValue, EDGAR N-PORT, yfinance |
 | **IbitBtcRatio** | Rapporto `IBIT / BTC-USD` usato per convertire prezzi barriera da IBIT a BTC |

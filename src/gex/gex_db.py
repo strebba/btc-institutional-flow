@@ -1,11 +1,15 @@
 """Database SQLite per gli snapshot GEX storici.
 
-Persiste uno snapshot GEX per giorno (UPSERT su date), consentendo
+Persiste uno snapshot GEX per giorno e per asset (UPSERT su date+asset), consentendo
 al backtest e al regime analysis di operare su serie storiche reali
 invece di un singolo punto live.
 
 Schema:
-  - gex_snapshots: una riga per giorno di trading.
+  - gex_snapshots: una riga per giorno di trading e per asset (BTC, ETH).
+
+Lo schema pre-ETH aveva ``date UNIQUE`` e nessuna colonna asset: SQLite non
+permette di togliere un vincolo UNIQUE, quindi ``_ensure_table`` ricostruisce la
+tabella una volta sola, marcando le righe esistenti come BTC.
 """
 from __future__ import annotations
 
@@ -27,7 +31,8 @@ _VERSIONED_DB = Path(__file__).resolve().parent.parent.parent / "data" / "struct
 _DDL = """
 CREATE TABLE IF NOT EXISTS gex_snapshots (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    date             TEXT    NOT NULL UNIQUE,   -- YYYY-MM-DD, chiave primaria logica
+    date             TEXT    NOT NULL,          -- YYYY-MM-DD
+    asset            TEXT    NOT NULL DEFAULT 'BTC',  -- BTC | ETH
     timestamp        TEXT    NOT NULL,          -- ISO datetime del calcolo
     spot_price       REAL    NOT NULL,
     total_net_gex    REAL    NOT NULL,          -- USD raw (es. 450_000_000)
@@ -40,10 +45,17 @@ CREATE TABLE IF NOT EXISTS gex_snapshots (
     total_put_oi     REAL,
     put_call_ratio   REAL,
     n_instruments    INTEGER,
-    created_at       TEXT    NOT NULL
+    created_at       TEXT    NOT NULL,
+    UNIQUE (date, asset)
 );
 CREATE INDEX IF NOT EXISTS idx_gex_date ON gex_snapshots(date);
 """
+
+_COLUMNS = (
+    "date, timestamp, spot_price, total_net_gex, gamma_flip_price, put_wall, "
+    "call_wall, max_pain, regime, total_call_oi, total_put_oi, put_call_ratio, "
+    "n_instruments, created_at"
+)
 
 
 class GexDB:
@@ -78,21 +90,46 @@ class GexDB:
             conn.close()
 
     def _ensure_table(self) -> None:
-        """Crea tabella e indice se non esistono (idempotente)."""
+        """Crea tabella e indice se non esistono, migrando lo schema pre-ETH (idempotente)."""
         with self._conn() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(gex_snapshots)")}
+            if cols and "asset" not in cols:
+                self._migrate_add_asset(conn)
             conn.executescript(_DDL)
+
+    @staticmethod
+    def _migrate_add_asset(conn: sqlite3.Connection) -> None:
+        """Ricostruisce la tabella con UNIQUE(date, asset); le righe esistenti sono BTC.
+
+        Un solo script in BEGIN/COMMIT: se la copia fallisce non resta una tabella
+        a metà (``executescript`` farebbe commit implicito tra uno statement e l'altro).
+        """
+        n = conn.execute("SELECT COUNT(*) FROM gex_snapshots").fetchone()[0]
+        conn.commit()
+        conn.executescript(
+            "BEGIN;"
+            "DROP INDEX IF EXISTS idx_gex_date;"
+            "ALTER TABLE gex_snapshots RENAME TO gex_snapshots_legacy;"
+            + _DDL
+            + f"INSERT INTO gex_snapshots (id, asset, {_COLUMNS}) "
+            f"SELECT id, 'BTC', {_COLUMNS} FROM gex_snapshots_legacy;"
+            "DROP TABLE gex_snapshots_legacy;"
+            "COMMIT;"
+        )
+        _log.info("gex_snapshots migrata a schema multi-asset: %d righe marcate BTC", n)
 
     # ─── Write ───────────────────────────────────────────────────────────────
 
-    def insert_snapshot(self, snapshot: GexSnapshot, regime: str) -> None:
-        """Salva o aggiorna lo snapshot GEX del giorno corrente.
+    def insert_snapshot(self, snapshot: GexSnapshot, regime: str, asset: str = "BTC") -> None:
+        """Salva o aggiorna lo snapshot GEX del giorno corrente per l'asset.
 
-        Usa UPSERT su (date): se oggi è già presente, aggiorna tutti i campi.
+        Usa UPSERT su (date, asset): se oggi è già presente, aggiorna tutti i campi.
         Sicuro da chiamare più volte nello stesso giorno (cron ogni 4h).
 
         Args:
             snapshot: GexSnapshot appena calcolato da Deribit.
             regime: stringa regime da RegimeDetector ('positive_gamma' ecc.).
+            asset: "BTC" o "ETH".
         """
         today   = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
         now_iso = datetime.now(tz=timezone.utc).isoformat()
@@ -101,11 +138,11 @@ class GexDB:
             conn.execute(
                 """
                 INSERT INTO gex_snapshots
-                    (date, timestamp, spot_price, total_net_gex, gamma_flip_price,
+                    (date, asset, timestamp, spot_price, total_net_gex, gamma_flip_price,
                      put_wall, call_wall, max_pain, regime, total_call_oi,
                      total_put_oi, put_call_ratio, n_instruments, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(date) DO UPDATE SET
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(date, asset) DO UPDATE SET
                     timestamp        = excluded.timestamp,
                     spot_price       = excluded.spot_price,
                     total_net_gex    = excluded.total_net_gex,
@@ -121,6 +158,7 @@ class GexDB:
                 """,
                 (
                     today,
+                    asset,
                     snapshot.timestamp.isoformat(),
                     snapshot.spot_price,
                     snapshot.total_net_gex,
@@ -138,17 +176,18 @@ class GexDB:
             )
 
         _log.info(
-            "GEX snapshot salvato: date=%s spot=%.0f gex=%.1fM regime=%s",
-            today, snapshot.spot_price, snapshot.total_net_gex / 1e6, regime,
+            "GEX snapshot salvato: asset=%s date=%s spot=%.0f gex=%.1fM regime=%s",
+            asset, today, snapshot.spot_price, snapshot.total_net_gex / 1e6, regime,
         )
 
     # ─── Read ────────────────────────────────────────────────────────────────
 
-    def get_series(self, days: int = 365) -> pd.Series:
-        """Restituisce la serie storica del GEX totale.
+    def get_series(self, days: int = 365, asset: str = "BTC") -> pd.Series:
+        """Restituisce la serie storica del GEX totale dell'asset.
 
         Args:
             days: numero di giorni passati da includere.
+            asset: "BTC" o "ETH".
 
         Returns:
             pd.Series con DatetimeIndex (UTC, normalizzato a mezzanotte)
@@ -160,10 +199,10 @@ class GexDB:
                 """
                 SELECT date, total_net_gex
                 FROM gex_snapshots
-                WHERE date >= date('now', ? || ' days')
+                WHERE date >= date('now', ? || ' days') AND asset = ?
                 ORDER BY date ASC
                 """,
-                (f"-{days}",),
+                (f"-{days}", asset),
             ).fetchall()
 
         if not rows:
@@ -174,13 +213,14 @@ class GexDB:
         values = [r["total_net_gex"] for r in rows]
         return pd.Series(values, index=index, name="total_net_gex")
 
-    def get_latest_n(self, n: int = 90) -> list[GexSnapshot]:
+    def get_latest_n(self, n: int = 90, asset: str = "BTC") -> list[GexSnapshot]:
         """Restituisce gli ultimi N snapshot come oggetti GexSnapshot.
 
         Usato per pre-popolare RegimeDetector._history al boot.
 
         Args:
             n: numero massimo di snapshot da restituire.
+            asset: "BTC" o "ETH".
 
         Returns:
             list[GexSnapshot] ordinata per data crescente.
@@ -192,10 +232,11 @@ class GexDB:
                        put_wall, call_wall, max_pain, total_call_oi, total_put_oi,
                        put_call_ratio
                 FROM gex_snapshots
+                WHERE asset = ?
                 ORDER BY date DESC
                 LIMIT ?
                 """,
-                (n,),
+                (asset, n),
             ).fetchall()
 
         snapshots = []
@@ -220,15 +261,18 @@ class GexDB:
             )
         return snapshots
 
-    def count(self) -> int:
-        """Conta il numero totale di snapshot nel DB."""
+    def count(self, asset: str = "BTC") -> int:
+        """Conta gli snapshot dell'asset nel DB."""
         with self._conn() as conn:
-            return conn.execute("SELECT COUNT(*) FROM gex_snapshots").fetchone()[0]
+            return conn.execute(
+                "SELECT COUNT(*) FROM gex_snapshots WHERE asset = ?", (asset,)
+            ).fetchone()[0]
 
-    def get_last_regime_label(self) -> Optional[str]:
-        """Restituisce il regime dell'ultimo snapshot, o None se DB vuoto."""
+    def get_last_regime_label(self, asset: str = "BTC") -> Optional[str]:
+        """Restituisce il regime dell'ultimo snapshot dell'asset, o None se assente."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT regime FROM gex_snapshots ORDER BY date DESC LIMIT 1"
+                "SELECT regime FROM gex_snapshots WHERE asset = ? ORDER BY date DESC LIMIT 1",
+                (asset,),
             ).fetchone()
         return row["regime"] if row else None

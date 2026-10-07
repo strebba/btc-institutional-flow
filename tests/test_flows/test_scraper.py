@@ -114,3 +114,45 @@ class TestFarSideScraper:
         day13 = next(a for a in agg if a.date == date(2025, 1, 13))
         assert day13.ibit_flow_usd == pytest.approx(500_100_000)
         assert day13.total_flow_usd == pytest.approx(550_300_000)
+
+
+class TestFarsideEth:
+    SAMPLE_HTML = """
+    <html><body><table>
+      <tr><th>Date</th><th>ETHA</th><th>FETH</th><th>ETHE</th><th>Total</th></tr>
+      <tr><td>13 Jan 2025</td><td>120.0</td><td>30.0</td><td>(50.0)</td><td>100.0</td></tr>
+    </table></body></html>
+    """
+
+    def test_aggregate_usa_etha_come_lead(self):
+        scraper = FarsideScraper(asset="ETH")
+        agg = scraper.aggregate(scraper._parse_table(self.SAMPLE_HTML))
+        assert agg[0].lead_flow_usd == pytest.approx(120_000_000)
+        assert agg[0].total_flow_usd == pytest.approx(100_000_000)
+        assert agg[0].ibit_flow_usd == 0.0
+
+    def test_btc_lead_coincide_con_ibit(self):
+        scraper = FarsideScraper()
+        agg = scraper.aggregate(scraper._parse_table(TestFarSideScraper.SAMPLE_HTML))
+        assert all(a.lead_flow_usd == a.ibit_flow_usd for a in agg)
+
+    def test_to_dataframe_garantisce_la_colonna_etha(self):
+        scraper = FarsideScraper(asset="ETH")
+        df = scraper.to_dataframe(scraper._parse_table(self.SAMPLE_HTML))
+        assert "ETHA" in df.columns and "IBIT" not in df.columns
+
+    def test_url_e_cache_sono_per_asset(self):
+        btc, eth = FarsideScraper(), FarsideScraper(asset="ETH")
+        assert "ethereum" in eth.farside_url and "bitcoin" in btc.farside_url
+        assert btc.cache_file != eth.cache_file
+
+    def test_waterfall_eth_non_usa_le_stime_ibit(self, monkeypatch):
+        """SoSoValue, N-PORT e la stima yfinance sono costruiti su IBIT: per ETH darebbero numeri BTC."""
+        scraper = FarsideScraper(asset="ETH")
+        monkeypatch.setattr("src.flows.coinglass_client.CoinGlassClient.fetch_etf_flows",
+                            lambda self, **k: [])
+        monkeypatch.setattr(scraper, "_fetch_html", lambda url: "<html></html>")
+        monkeypatch.setattr(scraper, "_read_cache", lambda: None)
+        monkeypatch.setattr(scraper, "_fetch_yfinance_fallback",
+                            lambda: pytest.fail("stima IBIT usata per ETH"))
+        assert scraper.fetch() == []
