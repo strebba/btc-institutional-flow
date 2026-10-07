@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from src.assets import AssetSpec, get_asset
 from src.config import get_settings
 
 _theme = get_settings()["dashboard"]["theme"]
@@ -166,12 +167,13 @@ def barrier_map(barriers: list[dict], spot_price: float) -> go.Figure:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def gex_profile(gex_by_strike: list[dict], spot: float) -> go.Figure:
+def gex_profile(gex_by_strike: list[dict], spot: float, asset: str = "BTC") -> go.Figure:
     """Grafico a barre del profilo GEX per strike.
 
     Args:
         gex_by_strike: lista di dict {strike, net_gex, call_gex, put_gex}.
-        spot: prezzo spot BTC corrente.
+        spot: prezzo spot corrente dell'asset.
+        asset: "BTC" o "ETH" (etichette degli assi).
 
     Returns:
         Figure Plotly.
@@ -206,18 +208,19 @@ def gex_profile(gex_by_strike: list[dict], spot: float) -> go.Figure:
     )
     fig.update_layout(
         title="Gamma Exposure per Strike",
-        xaxis=_axis_style(title="Strike BTC ($)"),
+        xaxis=_axis_style(title=f"Strike {asset} ($)"),
         yaxis=_axis_style(title="Net GEX (M$)"),
         **_LAYOUT_BASE,
     )
     return fig
 
 
-def gex_walls(snapshot_dict: dict) -> go.Figure:
+def gex_walls(snapshot_dict: dict, asset: str = "BTC") -> go.Figure:
     """Indicatore a gauge del GEX totale con put/call wall.
 
     Args:
         snapshot_dict: dict da GexCalculator.gex_to_dict().
+        asset: "BTC" o "ETH" (etichetta dell'asse prezzi).
 
     Returns:
         Figure Plotly.
@@ -260,7 +263,7 @@ def gex_walls(snapshot_dict: dict) -> go.Figure:
         title=f"Livelli chiave — GEX totale: {gex_m:+.1f}M$",
         showlegend=False,
         xaxis=dict(visible=False, range=[0, 1]),
-        yaxis=_axis_style(title="Prezzo BTC ($)", tickformat="$,.0f"),
+        yaxis=_axis_style(title=f"Prezzo {asset} ($)", tickformat="$,.0f"),
         height=300,
         **_LAYOUT_BASE,
     )
@@ -490,46 +493,51 @@ def pillar_gauges(pillars: list[dict]) -> go.Figure:
 
 
 
-def flows_chart(merged_df: pd.DataFrame) -> go.Figure:
-    """Grafico a 3 pannelli: flussi IBIT, prezzo BTC, correlazione rolling.
+def flows_chart(merged_df: pd.DataFrame, spec: AssetSpec | None = None) -> go.Figure:
+    """Grafico a 3 pannelli: flussi del lead ETF, prezzo spot, correlazione rolling.
 
     Args:
         merged_df: DataFrame da FlowCorrelation.merge().
+        spec: asset (default BTC: IBIT e BTC, colonne storiche).
 
     Returns:
         Figure Plotly.
     """
+    spec = spec or get_asset("BTC")
+    lead_col, price_col, ret_col = spec.lead_flow_col, spec.price_col, spec.return_col
     fig = make_subplots(
         rows=3,
         cols=1,
         shared_xaxes=True,
-        subplot_titles=["IBIT Flows (M$)", "BTC Price ($)", "Correlazione rolling 30d"],
+        subplot_titles=[
+            f"{spec.lead_etf} Flows (M$)", f"{spec.key} Price ($)", "Correlazione rolling 30d",
+        ],
         vertical_spacing=0.06,
         row_heights=[0.3, 0.4, 0.3],
     )
 
-    df = merged_df.dropna(subset=["ibit_flow"])
+    df = merged_df.dropna(subset=[lead_col]) if lead_col in merged_df.columns else pd.DataFrame()
 
     if not df.empty:
-        colors = [_POS if v >= 0 else _NEG for v in df["ibit_flow"]]
+        colors = [_POS if v >= 0 else _NEG for v in df[lead_col]]
         fig.add_trace(
             go.Bar(
                 x=df.index,
-                y=df["ibit_flow"] / 1e6,
+                y=df[lead_col] / 1e6,
                 marker_color=colors,
-                name="IBIT Flow (M$)",
+                name=f"{spec.lead_etf} Flow (M$)",
                 hovertemplate="%{x|%Y-%m-%d}<br>%{y:.1f}M$<extra></extra>",
             ),
             row=1,
             col=1,
         )
 
-    if "btc_close" in merged_df.columns:
+    if price_col in merged_df.columns:
         fig.add_trace(
             go.Scatter(
                 x=merged_df.index,
-                y=merged_df["btc_close"],
-                name="BTC",
+                y=merged_df[price_col],
+                name=spec.key,
                 line=dict(color=_NEU, width=1.5),
                 hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.0f}<extra></extra>",
             ),
@@ -537,10 +545,10 @@ def flows_chart(merged_df: pd.DataFrame) -> go.Figure:
             col=1,
         )
 
-    if "ibit_flow" in merged_df.columns and "btc_return" in merged_df.columns:
-        valid = merged_df[["ibit_flow", "btc_return"]].dropna()
+    if lead_col in merged_df.columns and ret_col in merged_df.columns:
+        valid = merged_df[[lead_col, ret_col]].dropna()
         if len(valid) >= 30:
-            corr = valid["ibit_flow"].rolling(30, min_periods=15).corr(valid["btc_return"])
+            corr = valid[lead_col].rolling(30, min_periods=15).corr(valid[ret_col])
             color_corr = [_POS if v >= 0 else _NEG for v in corr.fillna(0)]
             fig.add_trace(
                 go.Bar(
@@ -569,12 +577,15 @@ def flows_chart(merged_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def flows_stacked_chart(merged_df: pd.DataFrame, etf_tickers: list[str]) -> go.Figure:
+def flows_stacked_chart(
+    merged_df: pd.DataFrame, etf_tickers: list[str], spec: AssetSpec | None = None
+) -> go.Figure:
     """Grafico stacked bar: flussi di tutti gli ETF sovrapposti per giorno.
 
     Args:
         merged_df: DataFrame da FlowCorrelation.merge().
         etf_tickers: lista dei ticker ETF da visualizzare (es. ["IBIT", "FBTC", ...]).
+        spec: asset (default BTC); il lead ETF prende il colore principale.
 
     Returns:
         Figure Plotly.
@@ -584,8 +595,9 @@ def flows_stacked_chart(merged_df: pd.DataFrame, etf_tickers: list[str]) -> go.F
     # Colori noti per branding, fallback a cycle automatico
     from plotly.colors import qualitative
     _cycle = qualitative.Plotly
+    spec = spec or get_asset("BTC")
     colors_map = {
-        "IBIT": _POS,
+        spec.lead_etf: _POS,
         "FBTC": _cycle[0],
         "GBTC": _cycle[1],
         "BITB": _cycle[2],
@@ -616,7 +628,7 @@ def flows_stacked_chart(merged_df: pd.DataFrame, etf_tickers: list[str]) -> go.F
     fig.add_hline(y=0, line_dash="dot", line_color=_GRID)
     fig.update_layout(
         **_LAYOUT_BASE,
-        title="Flussi ETF Bitcoin per Emittente (M$)",
+        title=f"Flussi ETF {spec.label} per Emittente (M$)",
         barmode="relative",
         height=400,
         xaxis=_axis_style(),

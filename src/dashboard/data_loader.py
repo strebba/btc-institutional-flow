@@ -32,16 +32,17 @@ def _get_backtest_context(days: int = 365):
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
-def load_prices_and_flows() -> pd.DataFrame:
-    """Carica prezzi BTC/IBIT e flussi ETF aggregati."""
+def load_prices_and_flows(asset: str = "BTC") -> pd.DataFrame:
+    """Carica prezzi spot/lead ETF e flussi ETF aggregati dell'asset."""
     from src.api.data_pipeline import get_flow_context
 
-    return get_flow_context(price_fallback=True)["merged_df"]
+    return get_flow_context(price_fallback=True, asset=asset)["merged_df"]
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
-def load_gex() -> tuple[dict, list[dict]]:
-    """Carica snapshot GEX live da Deribit e salva nel DB storico."""
+def load_gex(asset: str = "BTC") -> tuple[dict, list[dict]]:
+    """Carica snapshot GEX live da Deribit per l'asset e salva nel DB storico."""
+    from src.assets import get_asset
     from src.gex.deribit_client import DeribitClient
     from src.gex.gex_calculator import GexCalculator
     from src.gex.gex_db import GexDB
@@ -50,19 +51,19 @@ def load_gex() -> tuple[dict, list[dict]]:
     client = DeribitClient()
     calc = GexCalculator()
     db = GexDB()
-    detector = RegimeDetector()
+    detector = RegimeDetector(asset=asset)
 
     # Pre-popola storico per percentile GEX corretto
-    detector.load_history_from_db(db.get_latest_n(90))
+    detector.load_history_from_db(db.get_latest_n(90, asset=asset))
 
-    spot = client.get_spot_price()
-    options = client.fetch_all_options("BTC")
+    spot = client.get_spot_price(asset)
+    options = client.fetch_all_options(get_asset(asset).deribit_currency)
     snap = calc.calculate_gex(options, spot)
     state = detector.detect(snap)
 
     # Persiste snapshot nel DB
     try:
-        db.insert_snapshot(snap, state.regime)
+        db.insert_snapshot(snap, state.regime, asset=asset)
     except Exception as _e:
         _log.warning("GEX DB insert fallito: %s", _e)
 
@@ -141,8 +142,10 @@ def load_db_summary() -> dict:
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
-def load_macro() -> dict:
-    """Carica i dati macro CoinGlass (funding/OI/L-S/liquidazioni) per il pilastro Macro.
+def load_macro(asset: str = "BTC") -> dict:
+    """Carica i dati macro CoinGlass (funding/OI/L-S/liquidazioni) dell'asset.
+
+    Per BTC alimentano il pilastro Macro; per ETH sono solo visualizzati.
 
     Best-effort: se CoinGlass non è disponibile ritorna {} e il pilastro Macro
     risulterà 'n/d' (i pesi vengono riscalati sugli altri).
@@ -152,7 +155,7 @@ def load_macro() -> dict:
     from src.flows.macro_fetcher import fetch_macro_data
 
     try:
-        macro = fetch_macro_data()
+        macro = fetch_macro_data(asset=asset)
         return macro.to_dict()
     except Exception as e:
         _log.warning("Macro CoinGlass non disponibile per la dashboard: %s", e)
@@ -160,14 +163,16 @@ def load_macro() -> dict:
 
 
 @st.cache_data(ttl=_REFRESH, show_spinner=False)
-def run_granger(merged_df: pd.DataFrame) -> tuple[dict, pd.DataFrame, str]:
-    """Esegue il test di Granger causality."""
+def run_granger(merged_df: pd.DataFrame, asset: str = "BTC") -> tuple[dict, pd.DataFrame, str]:
+    """Esegue il test di Granger causality (flussi del lead ETF ↔ rendimenti spot)."""
     from src.analytics.granger import GrangerAnalysis
+    from src.assets import get_asset
 
+    spec = get_asset(asset)
     analyzer = GrangerAnalysis()
-    results = analyzer.run(merged_df)
+    results = analyzer.run(merged_df, flow_col=spec.lead_flow_col, return_col=spec.return_col)
     df = analyzer.to_dataframe(results)
-    interp = analyzer.interpret(results)
+    interp = analyzer.interpret(results, flow_label=spec.lead_etf, return_label=spec.key)
     return results, df, interp
 
 
