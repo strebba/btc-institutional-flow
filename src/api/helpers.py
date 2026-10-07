@@ -3,12 +3,19 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import numpy as np
 import pandas as pd
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from fastapi.responses import JSONResponse
+
+#: Parametro ``?asset=`` condiviso dagli endpoint dati (GEX, flussi, macro).
+#: Default ``btc``: senza parametro la risposta è quella storica.
+AssetParam = Annotated[
+    Literal["btc", "eth"],
+    Query(description="Asset sottostante: btc (default) o eth"),
+]
 
 
 def sanitize(obj: Any) -> Any:
