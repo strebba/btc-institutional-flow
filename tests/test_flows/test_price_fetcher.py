@@ -87,3 +87,29 @@ class TestIbitBtcRatio:
     def test_ratio_missing(self, fetcher):
         ratio = fetcher.get_ibit_btc_ratio(target_date=date(2020, 1, 1))
         assert ratio is None
+
+
+class TestGetAllPricesAsset:
+    @pytest.fixture
+    def offline(self, fetcher, sample_df, monkeypatch):
+        """Prezzi già in DB e nessun download: fetch legge solo la cache locale."""
+        for ticker, scala in (("BTC-USD", 1.0), ("IBIT", 0.0006), ("ETH-USD", 0.04), ("ETHA", 0.008)):
+            fetcher._store_df(ticker, sample_df * scala)
+        monkeypatch.setattr(
+            fetcher, "fetch",
+            lambda t, start_date=None, end_date=None, **k: fetcher._load_from_db(
+                t, date(2024, 10, 1), date(2024, 10, 5)
+            ),
+        )
+        return fetcher
+
+    def test_btc_conserva_le_colonne_storiche(self, offline):
+        df = offline.get_all_prices()
+        assert {"btc_close", "btc_return", "ibit_close", "ibit_btc_ratio", "btc_vol_7d"} <= set(df.columns)
+        assert not any(c.startswith("eth") for c in df.columns)
+
+    def test_eth_usa_eth_usd_ed_etha(self, offline):
+        df = offline.get_all_prices(asset="ETH")
+        assert {"eth_close", "eth_return", "etha_close", "etha_eth_ratio", "eth_vol_7d"} <= set(df.columns)
+        assert df["eth_close"].iloc[0] == pytest.approx(61_000 * 0.04)
+        assert not any(c.startswith("btc") for c in df.columns)

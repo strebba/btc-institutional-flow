@@ -98,3 +98,17 @@ class TestSummary:
         s     = detector.summary(state)
         assert "POSITIVE_GAMMA" in s
         assert "$" in s
+
+
+class TestSogliaPerAsset:
+    """Il GEX ETH è un ordine di grandezza più piccolo: la soglia BTC lo darebbe sempre neutrale."""
+
+    _cfg = {"gex_threshold_usd": 1_000_000, "gex_threshold_usd_by_asset": {"ETH": 200_000}}
+
+    def test_eth_usa_la_propria_soglia(self):
+        det = RegimeDetector(cfg=self._cfg, asset="ETH")
+        assert det.detect(_make_snapshot(gex=500_000)).regime == "positive_gamma"
+
+    def test_btc_resta_sulla_soglia_scalare(self):
+        det = RegimeDetector(cfg=self._cfg)
+        assert det.detect(_make_snapshot(gex=500_000)).regime == "neutral"

@@ -157,3 +157,26 @@ class TestChiave:
         monkeypatch.delenv("COINGECKO_API_KEY", raising=False)
         c = CoinGeckoClient()
         assert "x-cg-demo-api-key" not in c._session.headers
+
+
+class TestAssetEth:
+    def test_filtra_i_perpetui_eth(self, client):
+        payload = [
+            _contratto("Binance", 8e9, 0.01),
+            _contratto("Binance ETH", 5e9, 0.009, index="ETH"),
+        ]
+        with _con_risposta(payload):
+            righe = client.fetch_derivatives("ETH")
+        assert [r["market"] for r in righe] == ["Binance ETH"]
+
+    def test_btc_ed_eth_condividono_un_solo_download(self, client):
+        """La risposta pesa 8 MB: chiederla una volta per asset sarebbe banda sprecata."""
+        payload = [
+            _contratto("Binance", 8e9, 0.01),
+            _contratto("Binance ETH", 5e9, 0.009, index="ETH"),
+        ]
+        with _con_risposta(payload) as get:
+            client.fetch_funding_and_oi("BTC")
+            _, oi_eth, n_eth = client.fetch_funding_and_oi("ETH")
+        assert get.call_count == 1
+        assert oi_eth == 5e9 and n_eth == 1

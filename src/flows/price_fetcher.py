@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from src.assets import get_asset
 from src.config import get_settings, setup_logging
 
 
@@ -296,40 +297,50 @@ class PriceFetcher:
         self,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        asset: str = "BTC",
     ) -> pd.DataFrame:
-        """Scarica entrambi (BTC + IBIT) e li unisce in un DataFrame.
+        """Scarica spot e lead ETF dell'asset e li unisce in un DataFrame.
 
-        Colonne: btc_close, btc_return, ibit_close, ibit_btc_ratio.
+        Colonne (nomi dallo spec dell'asset): per BTC btc_close, btc_return,
+        ibit_close, ibit_btc_ratio, btc_vol_7d; per ETH eth_close, eth_return,
+        etha_close, etha_eth_ratio, eth_vol_7d.
 
         Args:
             start_date: inizio periodo.
             end_date: fine periodo.
+            asset: "BTC" o "ETH".
 
         Returns:
             pd.DataFrame.
         """
-        btc  = self.fetch_btc(start_date=start_date,  end_date=end_date)
-        ibit = self.fetch_ibit(start_date=start_date, end_date=end_date)
+        spec = get_asset(asset)
+        if spec.key == "BTC":
+            spot = self.fetch_btc(start_date=start_date,  end_date=end_date)
+            lead = self.fetch_ibit(start_date=start_date, end_date=end_date)
+        else:
+            spot = self.fetch(spec.spot_ticker, start_date=start_date, end_date=end_date)
+            lead = self.fetch(spec.lead_etf, start_date=start_date, end_date=end_date)
 
-        if btc.empty and ibit.empty:
+        if spot.empty and lead.empty:
             return pd.DataFrame()
 
-        merged = pd.DataFrame(index=btc.index if not btc.empty else ibit.index)
+        merged = pd.DataFrame(index=spot.index if not spot.empty else lead.index)
+        lead_close = f"{spec.lead_prefix}_close"
 
-        if not btc.empty:
-            merged["btc_close"]  = btc["close"]
-            merged["btc_return"] = btc["daily_return"]
+        if not spot.empty:
+            merged[spec.price_col]  = spot["close"]
+            merged[spec.return_col] = spot["daily_return"]
 
-        if not ibit.empty:
-            merged["ibit_close"] = ibit["close"]
+        if not lead.empty:
+            merged[lead_close] = lead["close"]
 
-        if "btc_close" in merged and "ibit_close" in merged:
-            merged["ibit_btc_ratio"] = merged["ibit_close"] / merged["btc_close"]
+        if spec.price_col in merged and lead_close in merged:
+            merged[f"{spec.lead_prefix}_{spec.prefix}_ratio"] = merged[lead_close] / merged[spec.price_col]
 
-        # Volatilità realizzata BTC 7 giorni (annualizzata — BTC trades 365 giorni/anno)
-        if "btc_return" in merged:
-            merged["btc_vol_7d"] = (
-                merged["btc_return"]
+        # Volatilità realizzata 7 giorni (annualizzata — le crypto tradano 365 giorni/anno)
+        if spec.return_col in merged:
+            merged[spec.vol_col] = (
+                merged[spec.return_col]
                 .rolling(7, min_periods=4)
                 .std() * (365 ** 0.5)
             )

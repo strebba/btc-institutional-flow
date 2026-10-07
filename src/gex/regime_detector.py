@@ -27,16 +27,19 @@ class RegimeDetector:
     Args:
         cfg: configurazione deribit (da settings.yaml).
         alert_cfg: configurazione analytics (da settings.yaml).
+        asset: "BTC" o "ETH" — sceglie la soglia di neutralità.
     """
 
     def __init__(
         self,
         cfg: dict | None = None,
         alert_cfg: dict | None = None,
+        asset: str = "BTC",
     ) -> None:
         settings       = get_settings()
         self._cfg      = cfg or settings["deribit"]
         self._alert_cfg = alert_cfg or settings["analytics"]
+        self._asset    = asset
         self._history: list[GexSnapshot] = []  # storico in memoria
 
     def load_history_from_db(self, snapshots: list[GexSnapshot]) -> None:
@@ -62,6 +65,13 @@ class RegimeDetector:
         if len(self._history) > 500:
             self._history = self._history[-400:]
 
+    def _threshold(self) -> float:
+        """Soglia di neutralità: per-asset se configurata, altrimenti lo scalare (BTC)."""
+        per_asset = self._cfg.get("gex_threshold_usd_by_asset") or {}
+        if self._asset in per_asset:
+            return per_asset[self._asset]
+        return self._cfg.get("gex_threshold_usd", 1_000_000)
+
     def detect(self, snapshot: GexSnapshot) -> GammaRegime:
         """Classifica il regime e genera alert per lo snapshot corrente.
 
@@ -71,7 +81,7 @@ class RegimeDetector:
         Returns:
             GammaRegime: regime classificato con alert.
         """
-        threshold = self._cfg.get("gex_threshold_usd", 1_000_000)
+        threshold = self._threshold()
         proximity = self._alert_cfg.get("barrier_proximity_pct", 3.0)
         gex       = snapshot.total_net_gex
 

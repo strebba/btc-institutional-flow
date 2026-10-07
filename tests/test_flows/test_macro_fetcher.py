@@ -276,3 +276,21 @@ class TestSerializzazioneNuoviCampi:
 
 def test_i_quattro_stati_sono_distinti():
     assert len({STATUS_OK, STATUS_NO_API_KEY, STATUS_UNAVAILABLE, STATUS_PARTIAL_COINGECKO}) == 4
+
+
+class TestAssetEth:
+    def test_coinglass_riceve_l_asset(self):
+        cg = _client(funding=pd.Series([0.01]))
+        fetch_macro_data(cg_client=cg, asset="ETH")
+        assert cg.fetch_funding_rate_history.call_args.kwargs["asset"] == "ETH"
+        assert cg.fetch_liquidations.call_args.kwargs["asset"] == "ETH"
+
+    def test_il_ripiego_chiede_eth_a_coingecko_e_allo_storico(self):
+        gecko = _gecko(funding=5.0, oi=2e10, n=40)
+        db = _db(oi_change=-3.0)
+        out = fetch_macro_data(
+            cg_client=_client(has_key=False), gecko_client=gecko, notes_db=db, asset="ETH"
+        )
+        gecko.fetch_funding_and_oi.assert_called_once_with("ETH")
+        assert db.get_oi_change_pct.call_args.kwargs["asset"] == "ETH"
+        assert out.oi_change_7d_pct == -3.0

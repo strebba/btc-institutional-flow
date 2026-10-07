@@ -1,4 +1,4 @@
-"""Client CoinGecko per funding rate e open interest dei perpetui BTC.
+"""Client CoinGecko per funding rate e open interest dei perpetui BTC ed ETH.
 
 Serve a coprire due dei cinque fattori del pilastro macro quando CoinGlass non è
 disponibile. È un ripiego dichiarato, non un sostituto: CoinGecko **non** espone
@@ -57,6 +57,9 @@ class CoinGeckoClient:
         self._timeout = self._cfg.get("timeout_s", 90)
         self._rate_limit = self._cfg.get("rate_limit_rps", 0.5)
         self._last_call_ts = 0.0
+        # La risposta di /derivatives copre tutti gli asset: la si scarica una volta
+        # per istanza e la si filtra per BTC ed ETH.
+        self._derivatives_raw: Any = None
 
         self._session = requests.Session()
         headers = {"Accept": "application/json"}
@@ -96,17 +99,30 @@ class CoinGeckoClient:
             raise CoinGeckoError(f"CoinGecko {path}: risposta non JSON") from exc
 
     def fetch_btc_derivatives(self) -> list[dict]:
-        """Perpetui BTC con open interest e funding rate utilizzabili.
+        """Alias storico di ``fetch_derivatives("BTC")``."""
+        return self.fetch_derivatives("BTC")
+
+    def fetch_derivatives(self, asset: str = "BTC") -> list[dict]:
+        """Perpetui dell'asset con open interest e funding rate utilizzabili.
 
         L'endpoint restituisce **tutti** gli asset — circa 25.000 contratti, 8 MB —
         quindi il filtro va fatto subito e il risultato va messo in cache a monte.
+        Il payload grezzo resta sull'istanza: BTC ed ETH costano un download solo.
+
+        Args:
+            asset: "BTC" o "ETH" (confrontato con ``index_id``).
 
         Returns:
             Lista di dict con ``market``, ``open_interest`` e ``funding_rate``.
             Lista vuota se la risposta non ha la forma attesa: un payload
             malformato è un dato mancante, non un errore fatale.
         """
-        data = self._get("/derivatives")
+        from src.assets import get_asset
+
+        index_id = get_asset(asset).coingecko_index_id
+        if self._derivatives_raw is None:
+            self._derivatives_raw = self._get("/derivatives")
+        data = self._derivatives_raw
         if not isinstance(data, list):
             _log.warning("CoinGecko /derivatives: risposta inattesa (%s)", type(data).__name__)
             return []
@@ -115,7 +131,7 @@ class CoinGeckoClient:
         for riga in data:
             if not isinstance(riga, dict):
                 continue
-            if riga.get("index_id") != "BTC" or riga.get("contract_type") != "perpetual":
+            if riga.get("index_id") != index_id or riga.get("contract_type") != "perpetual":
                 continue
             oi = _num(riga.get("open_interest"))
             funding = _num(riga.get("funding_rate"))
@@ -124,10 +140,12 @@ class CoinGeckoClient:
             out.append({"market": riga.get("market", "n/d"), "open_interest": oi,
                         "funding_rate": funding})
 
-        _log.info("CoinGecko: %d perpetui BTC utilizzabili su %d contratti", len(out), len(data))
+        _log.info(
+            "CoinGecko: %d perpetui %s utilizzabili su %d contratti", len(out), index_id, len(data)
+        )
         return out
 
-    def fetch_funding_and_oi(self) -> tuple[float | None, float | None, int]:
+    def fetch_funding_and_oi(self, asset: str = "BTC") -> tuple[float | None, float | None, int]:
         """Funding annualizzato pesato per OI, open interest aggregato, n. contratti.
 
         La ponderazione per open interest è ciò che rende il numero confrontabile
@@ -141,7 +159,7 @@ class CoinGeckoClient:
             il chiamante deve poter proseguire senza questo fattore.
         """
         try:
-            righe = self.fetch_btc_derivatives()
+            righe = self.fetch_derivatives(asset)
         except CoinGeckoError as exc:
             _log.warning("CoinGecko non raggiungibile: %s", exc)
             return None, None, 0

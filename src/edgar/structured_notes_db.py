@@ -95,11 +95,13 @@ CREATE INDEX IF NOT EXISTS idx_refresh_runs_at ON refresh_runs(run_at);
 
 _DDL_MACRO_SNAPSHOTS = """
 CREATE TABLE IF NOT EXISTS macro_snapshots (
-    snapshot_date   TEXT PRIMARY KEY,     -- una riga al giorno, in upsert
+    snapshot_date   TEXT NOT NULL,        -- una riga al giorno per asset, in upsert
+    asset           TEXT NOT NULL DEFAULT 'BTC',  -- BTC | ETH
     captured_at     TEXT NOT NULL,        -- ISO UTC datetime
     funding_ann_pct REAL,
     oi_usd          REAL,
-    n_contracts     INTEGER
+    n_contracts     INTEGER,
+    PRIMARY KEY (snapshot_date, asset)
 );
 """
 
@@ -198,24 +200,27 @@ class StructuredNotesDB:
         oi_usd: float | None,
         n_contracts: int = 0,
         snapshot_date: str | None = None,
+        asset: str = "BTC",
     ) -> None:
-        """Registra la fotografia macro del giorno, in upsert.
+        """Registra la fotografia macro del giorno per l'asset, in upsert.
 
-        Una riga al giorno: due giri ravvicinati aggiornano invece di duplicare,
-        cosi' la serie resta a passo giornaliero anche se il job gira due volte.
+        Una riga al giorno per asset: due giri ravvicinati aggiornano invece di
+        duplicare, cosi' la serie resta a passo giornaliero anche se il job gira
+        due volte.
         """
         giorno = snapshot_date or date.today().isoformat()
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO macro_snapshots "
-                "(snapshot_date, captured_at, funding_ann_pct, oi_usd, n_contracts) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(snapshot_date) DO UPDATE SET "
+                "(snapshot_date, asset, captured_at, funding_ann_pct, oi_usd, n_contracts) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(snapshot_date, asset) DO UPDATE SET "
                 "captured_at = excluded.captured_at, "
                 "funding_ann_pct = excluded.funding_ann_pct, "
                 "oi_usd = excluded.oi_usd, n_contracts = excluded.n_contracts",
                 (
                     giorno,
+                    asset,
                     datetime.now(timezone.utc).isoformat(),
                     funding_ann_pct,
                     oi_usd,
@@ -223,8 +228,8 @@ class StructuredNotesDB:
                 ),
             )
 
-    def get_oi_change_pct(self, days: int = 7) -> float | None:
-        """Variazione percentuale dell'open interest sulla finestra richiesta.
+    def get_oi_change_pct(self, days: int = 7, asset: str = "BTC") -> float | None:
+        """Variazione percentuale dell'open interest dell'asset sulla finestra richiesta.
 
         Restituisce None finche' non ci sono due punti abbastanza distanti: un
         solo campione non fa una variazione, e riempire il campo con uno zero
@@ -238,7 +243,8 @@ class StructuredNotesDB:
         with self._conn() as conn:
             recente = conn.execute(
                 "SELECT snapshot_date, oi_usd FROM macro_snapshots "
-                "WHERE oi_usd IS NOT NULL ORDER BY snapshot_date DESC LIMIT 1"
+                "WHERE oi_usd IS NOT NULL AND asset = ? ORDER BY snapshot_date DESC LIMIT 1",
+                (asset,),
             ).fetchone()
             if not recente:
                 return None
@@ -247,9 +253,9 @@ class StructuredNotesDB:
             ).isoformat()
             passato = conn.execute(
                 "SELECT oi_usd FROM macro_snapshots "
-                "WHERE oi_usd IS NOT NULL AND snapshot_date <= ? "
+                "WHERE oi_usd IS NOT NULL AND snapshot_date <= ? AND asset = ? "
                 "ORDER BY snapshot_date DESC LIMIT 1",
-                (limite,),
+                (limite, asset),
             ).fetchone()
 
         if not passato or not passato["oi_usd"]:
@@ -306,6 +312,8 @@ class StructuredNotesDB:
         Versioni:
           0 → 1: schema iniziale (nessuna modifica necessaria, solo bump version)
           1 → 2: colonna notes.is_preliminary
+          2 → 3: tabella barrier_snapshots
+          3 → 4: macro_snapshots multi-asset (PK snapshot_date+asset)
         """
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
         if ver < 1:
@@ -325,6 +333,25 @@ class StructuredNotesDB:
             conn.executescript(_DDL_BARRIER_SNAPSHOTS)
             conn.execute("PRAGMA user_version = 3")
             _log.debug("DB migrato a versione 3 (barrier_snapshots)")
+        if ver < 4:
+            # v4: macro_snapshots per asset. SQLite non cambia una PRIMARY KEY con
+            # ALTER: si ricostruisce la tabella, le righe esistenti sono BTC. Un solo
+            # script in BEGIN/COMMIT perche' executescript fa commit tra gli statement.
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(macro_snapshots)")}
+            if "asset" not in cols:
+                conn.commit()
+                conn.executescript(
+                    "BEGIN;"
+                    "ALTER TABLE macro_snapshots RENAME TO macro_snapshots_legacy;"
+                    + _DDL_MACRO_SNAPSHOTS
+                    + "INSERT INTO macro_snapshots (snapshot_date, asset, captured_at, "
+                    "funding_ann_pct, oi_usd, n_contracts) SELECT snapshot_date, 'BTC', "
+                    "captured_at, funding_ann_pct, oi_usd, n_contracts FROM macro_snapshots_legacy;"
+                    "DROP TABLE macro_snapshots_legacy;"
+                    "COMMIT;"
+                )
+            conn.execute("PRAGMA user_version = 4")
+            _log.debug("DB migrato a versione 4 (macro_snapshots multi-asset)")
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 

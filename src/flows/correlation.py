@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.assets import get_asset
 from src.config import get_settings, setup_logging
 from src.flows.models import AggregateFlows
 
@@ -35,18 +36,22 @@ class FlowCorrelation:
         self,
         flows: list[AggregateFlows],
         prices_df: pd.DataFrame,
+        asset: str = "BTC",
     ) -> pd.DataFrame:
         """Unisce flussi aggregati e prezzi in un unico DataFrame.
 
         Args:
             flows: lista di AggregateFlows (da FarsideScraper.aggregate).
             prices_df: DataFrame da PriceFetcher.get_all_prices().
+            asset: "BTC" o "ETH" — decide i nomi delle colonne.
 
         Returns:
-            pd.DataFrame: con colonne ibit_flow, total_flow, btc_close,
+            pd.DataFrame: per BTC con colonne ibit_flow, total_flow, btc_close,
                 btc_return, ibit_close, ibit_btc_ratio, btc_vol_7d,
                 e colonne per-ticker (es. fbtc_flow, gbtс_flow, ...).
+                Per ETH gli stessi ruoli con prefissi etha_/eth_.
         """
+        spec = get_asset(asset)
         if not flows:
             _log.warning("Lista flussi vuota — merge impossibile")
             return pd.DataFrame()
@@ -56,7 +61,7 @@ class FlowCorrelation:
         for f in flows:
             row: dict = {
                 "date": pd.Timestamp(f.date),
-                "ibit_flow": f.ibit_flow_usd,
+                spec.lead_flow_col: f.lead_flow_usd,
                 "total_flow": f.total_flow_usd,
             }
             # Aggiungi flussi per ogni ETF disponibile
@@ -73,11 +78,12 @@ class FlowCorrelation:
         merged = flow_df.join(prices_df, how="outer")
         merged.sort_index(inplace=True)
 
-        # Flussi BTC nei prossimi N giorni (per analisi di predittività)
-        merged["btc_return_next1d"] = merged["btc_return"].shift(-1)
-        merged["btc_return_next2d"] = merged["btc_return"].shift(-2)
+        # Rendimenti nei prossimi N giorni (per analisi di predittività)
+        ret = merged[spec.return_col] if spec.return_col in merged else pd.Series(np.nan, index=merged.index)
+        merged[f"{spec.return_col}_next1d"] = ret.shift(-1)
+        merged[f"{spec.return_col}_next2d"] = ret.shift(-2)
         # Flussi rolling 3 giorni
-        merged["ibit_flow_3d"] = merged["ibit_flow"].rolling(3, min_periods=1).sum()
+        merged[f"{spec.lead_flow_col}_3d"] = merged[spec.lead_flow_col].rolling(3, min_periods=1).sum()
         merged["total_flow_3d"] = merged["total_flow"].rolling(3, min_periods=1).sum()
 
         _log.info(
@@ -103,6 +109,7 @@ class FlowCorrelation:
         self,
         merged: pd.DataFrame,
         windows: list[int] | None = None,
+        asset: str = "BTC",
     ) -> dict[str, pd.DataFrame]:
         """Calcola rolling correlation per diverse finestre temporali.
 
@@ -114,6 +121,7 @@ class FlowCorrelation:
         Args:
             merged: DataFrame dal metodo merge().
             windows: finestre in giorni (default da settings.yaml).
+            asset: "BTC" o "ETH" (per ETH: etha_flow, eth_return_next1d, …).
 
         Returns:
             dict[str, pd.DataFrame]: chiave = "30d"/"60d"/"90d",
@@ -122,10 +130,13 @@ class FlowCorrelation:
         windows = windows or self._cfg.get("correlation_windows", [30, 60, 90])
         results: dict[str, pd.DataFrame] = {}
 
+        spec = get_asset(asset)
+        lead, px = spec.lead_flow_col, spec.prefix
+        next1d = f"{spec.return_col}_next1d"
         pairs = [
-            ("ibit_flow", "btc_return_next1d", "ibit_flow_vs_btc_return"),
-            ("total_flow", "btc_return_next1d", "total_flow_vs_btc_return"),
-            ("ibit_flow", "btc_vol_7d", "ibit_flow_vs_btc_vol"),
+            (lead, next1d, f"{lead}_vs_{px}_return"),
+            ("total_flow", next1d, f"total_flow_vs_{px}_return"),
+            (lead, spec.vol_col, f"{lead}_vs_{px}_vol"),
         ]
 
         for w in windows:
@@ -147,20 +158,25 @@ class FlowCorrelation:
 
         return results
 
-    def summary_stats(self, merged: pd.DataFrame) -> dict:
+    def summary_stats(self, merged: pd.DataFrame, asset: str = "BTC") -> dict:
         """Calcola statistiche descrittive sui flussi e sui rendimenti.
+
+        Le chiavi seguono l'asset: per BTC "ibit"/"btc", per ETH "etha"/"eth".
 
         Args:
             merged: DataFrame da merge().
+            asset: "BTC" o "ETH".
 
         Returns:
             dict: metriche aggregate.
         """
+        spec = get_asset(asset)
+        lead_col, next1d = spec.lead_flow_col, f"{spec.return_col}_next1d"
         stats: dict = {}
 
-        if "ibit_flow" in merged.columns:
-            ibit = merged["ibit_flow"].dropna()
-            stats["ibit"] = {
+        if lead_col in merged.columns:
+            ibit = merged[lead_col].dropna()
+            stats[spec.lead_prefix] = {
                 "total_inflow_usd_b": ibit[ibit > 0].sum() / 1e9,
                 "total_outflow_usd_b": ibit[ibit < 0].sum() / 1e9,
                 "net_flow_usd_b": ibit.sum() / 1e9,
@@ -176,26 +192,26 @@ class FlowCorrelation:
                 "avg_daily_usd_m": total.mean() / 1e6,
             }
 
-        if "btc_return" in merged.columns:
-            ret = merged["btc_return"].dropna()
-            stats["btc"] = {
+        if spec.return_col in merged.columns:
+            ret = merged[spec.return_col].dropna()
+            stats[spec.prefix] = {
                 "annualized_vol": ret.std() * (365**0.5),
                     "sharpe_approx": ret.mean() / ret.std() * (365**0.5) if ret.std() > 0 else 0,
                 "total_return": float(np.exp(ret.sum()) - 1),
             }
 
         # Correlazione punto (tutta la serie)
-        if "ibit_flow" in merged.columns and "btc_return_next1d" in merged.columns:
-            valid = merged[["ibit_flow", "btc_return_next1d"]].dropna()
+        if lead_col in merged.columns and next1d in merged.columns:
+            valid = merged[[lead_col, next1d]].dropna()
             if len(valid) > 5:
                 corr = valid.corr().iloc[0, 1]
-                stats["full_period_corr_ibit_btc_next1d"] = round(float(corr), 4)
+                stats[f"full_period_corr_{spec.lead_prefix}_{spec.prefix}_next1d"] = round(float(corr), 4)
 
         # Per-ticker stats (all ETFs)
         etf_flow_cols = [
             c
             for c in merged.columns
-            if c.endswith("_flow") and c not in ("ibit_flow", "total_flow")
+            if c.endswith("_flow") and c not in (lead_col, "total_flow")
         ]
         if etf_flow_cols:
             etf_stats: dict[str, dict] = {}

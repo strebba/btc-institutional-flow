@@ -23,14 +23,19 @@ except ImportError:
     import requests  # type: ignore[no-redef]
     _CURL_CFFI_AVAILABLE = False
 
+from src.assets import get_asset
 from src.config import get_settings, setup_logging
 from src.flows.models import AggregateFlows, EtfFlowData
 
 _log = setup_logging("flows.scraper")
 
-# Cache su disco: ultimo fetch Farside valido
+# Cache su disco: ultimo fetch Farside valido (un file per asset; BTC conserva il nome storico)
 _CACHE_DIR  = Path(__file__).resolve().parent.parent.parent / "data"
 _CACHE_FILE = _CACHE_DIR / "farside_cache.html"
+
+
+def _cache_file_for(asset: str) -> Path:
+    return _CACHE_FILE if asset == "BTC" else _CACHE_DIR / f"farside_cache_{asset.lower()}.html"
 
 # ETF ordinati come appaiono nella tabella Farside (colonne)
 FARSIDE_TICKERS = [
@@ -154,16 +159,21 @@ _get_ibit_shares_outstanding._cached_val = 0  # type: ignore[attr-defined]
 
 
 class FarsideScraper:
-    """Scarica e parsa i flussi ETF Bitcoin da Farside Investors.
+    """Scarica e parsa i flussi ETF spot (BTC o ETH) da Farside Investors.
 
     Args:
         cfg: configurazione flows (da settings.yaml["flows"]).
+        asset: "BTC" (default) o "ETH".
     """
 
     FARSIDE_URL  = "https://farside.co.uk/bitcoin-etf-flow-all-data/"
 
-    def __init__(self, cfg: dict | None = None) -> None:
+    def __init__(self, cfg: dict | None = None, asset: str = "BTC") -> None:
         self._cfg = cfg or get_settings()["flows"]
+        self._spec = get_asset(asset)
+        self.asset = self._spec.key
+        self.farside_url = self._spec.farside_url
+        self.cache_file = _cache_file_for(self.asset)
         if _CURL_CFFI_AVAILABLE:
             # curl_cffi non ha Session con headers globali nello stesso modo,
             # passiamo i parametri per-chiamata in _fetch_html
@@ -330,7 +340,7 @@ class FarsideScraper:
         # 0. CoinGlass API (JSON strutturato, affidabile, tutto lo storico)
         try:
             from src.flows.coinglass_client import CoinGlassClient
-            flows = CoinGlassClient(self._cfg).fetch_etf_flows()
+            flows = CoinGlassClient(self._cfg).fetch_etf_flows(asset=self.asset)
             if flows:
                 _log.info("CoinGlass: %d record flussi ETF", len(flows))
                 return flows
@@ -339,7 +349,7 @@ class FarsideScraper:
 
         # 1. Farside live (fonte primaria)
         try:
-            html = self._fetch_html(self.FARSIDE_URL)
+            html = self._fetch_html(self.farside_url)
             flows = self._parse_table(html)
             if flows:
                 self._write_cache(html)   # salva per usi futuri
@@ -354,10 +364,17 @@ class FarsideScraper:
             if cached_html:
                 flows = self._parse_table(cached_html)
                 if flows:
-                    _log.info("Farside: usando cache disco (%s)", _CACHE_FILE)
+                    _log.info("Farside: usando cache disco (%s)", self.cache_file)
                     return flows
         except Exception as e:
             _log.warning("Cache Farside non leggibile: %s", e)
+
+        # Le fonti successive sono costruite su IBIT (SoSoValue BTC, N-PORT del
+        # trust IBIT, stima da tracking error IBIT/BTC): per un altro asset
+        # darebbero numeri BTC. Meglio nessun flusso che un flusso sbagliato.
+        if self.asset != "BTC":
+            _log.warning("Flussi ETF %s non disponibili da CoinGlass/Farside", self.asset)
+            return []
 
         # 2. SoSoValue API (richiede API key gratuita)
         try:
@@ -472,8 +489,8 @@ class FarsideScraper:
         """Salva l'HTML Farside su disco come cache."""
         try:
             _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            _CACHE_FILE.write_text(html, encoding="utf-8")
-            _log.debug("Cache Farside aggiornata: %s", _CACHE_FILE)
+            self.cache_file.write_text(html, encoding="utf-8")
+            _log.debug("Cache Farside aggiornata: %s", self.cache_file)
         except Exception as e:
             _log.warning("Impossibile scrivere cache Farside: %s", e)
 
@@ -483,13 +500,13 @@ class FarsideScraper:
         Returns:
             str HTML se la cache è valida (< 36 ore), None altrimenti.
         """
-        if not _CACHE_FILE.exists():
+        if not self.cache_file.exists():
             return None
-        age_hours = (time.time() - _CACHE_FILE.stat().st_mtime) / 3600
+        age_hours = (time.time() - self.cache_file.stat().st_mtime) / 3600
         if age_hours > 36:
             _log.warning("Cache Farside troppo vecchia (%.0f ore) — skip", age_hours)
             return None
-        return _CACHE_FILE.read_text(encoding="utf-8")
+        return self.cache_file.read_text(encoding="utf-8")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Aggregazione
@@ -518,9 +535,9 @@ class FarsideScraper:
         )
         pivot.index = pd.to_datetime(pivot.index)
         pivot["total"] = pivot.sum(axis=1)
-        # Rinomina colonne per chiarezza
-        if "IBIT" not in pivot.columns:
-            pivot["IBIT"] = float("nan")
+        # Garantisce la colonna del lead ETF anche nei giorni senza dato
+        if self._spec.lead_etf not in pivot.columns:
+            pivot[self._spec.lead_etf] = float("nan")
         return pivot.sort_index()
 
     def aggregate(self, flows: list[EtfFlowData]) -> list[AggregateFlows]:
@@ -542,12 +559,12 @@ class FarsideScraper:
         for d in sorted(by_date.keys()):
             tickers_d    = by_date[d]
             total        = sum(tickers_d.values())
-            ibit_flow    = tickers_d.get("IBIT", 0.0)
             result.append(AggregateFlows(
                 date=d,
                 total_flow_usd=total,
-                ibit_flow_usd=ibit_flow,
+                ibit_flow_usd=tickers_d.get("IBIT", 0.0),
                 flows_by_ticker=tickers_d,
+                lead_flow_usd=tickers_d.get(self._spec.lead_etf, 0.0),
             ))
         return result
 

@@ -50,7 +50,12 @@ deribit:
   max_retries: 3
   retry_delay_s: 0.5
   contract_size: 1.0         # 1 BTC per contratto opzione BTC su Deribit
-  gex_threshold_usd: 1_000_000  # threshold per classificare regime "neutral"
+  gex_threshold_usd: 1_000_000  # threshold per classificare regime "neutral" (BTC)
+  # Override per asset: il GEX lordo ETH e' ~1/13 di quello BTC (2026-10: call 27M
+  # vs 361M), quindi la stessa soglia relativa (~0,3% del lordo) vale ~100k.
+  # Da ritarare quando gex_snapshots avra' qualche settimana di storico ETH.
+  gex_threshold_usd_by_asset:
+    ETH: 100_000
 
 # ─── FLOWS ──────────────────────────────────────────────────────────────────────
 flows:

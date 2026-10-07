@@ -104,7 +104,7 @@ class MacroData:
         )
 
 
-def _fetch_coinglass(cg, out: MacroData) -> bool:
+def _fetch_coinglass(cg, out: MacroData, asset: str = "BTC") -> bool:
     """Riempie da CoinGlass i campi ancora vuoti. Vero se ne ha riempito almeno uno.
 
     Ogni fattore ha il suo try: un tier che non copre le liquidazioni non deve
@@ -114,7 +114,7 @@ def _fetch_coinglass(cg, out: MacroData) -> bool:
 
     if out.funding_rate_annualized_pct is None:
         try:
-            fr = cg.fetch_funding_rate_history(days=14)
+            fr = cg.fetch_funding_rate_history(days=14, asset=asset)
             if not fr.empty:
                 out.funding_rate_annualized_pct = annualize_funding_pct(float(fr.iloc[-1]))
                 out.funding_source = SOURCE_COINGLASS
@@ -123,7 +123,7 @@ def _fetch_coinglass(cg, out: MacroData) -> bool:
 
     if out.oi_change_7d_pct is None:
         try:
-            oi = cg.fetch_aggregated_oi_history(days=14)
+            oi = cg.fetch_aggregated_oi_history(days=14, asset=asset)
             if len(oi) >= 8 and float(oi.iloc[-8]) > 0:
                 out.oi_change_7d_pct = (
                     (float(oi.iloc[-1]) - float(oi.iloc[-8]))
@@ -136,7 +136,7 @@ def _fetch_coinglass(cg, out: MacroData) -> bool:
 
     if out.long_short_ratio is None:
         try:
-            ls = cg.fetch_long_short_ratio(days=3)
+            ls = cg.fetch_long_short_ratio(days=3, asset=asset)
             if not ls.empty:
                 out.long_short_ratio = float(ls.iloc[-1])
         except (CoinGlassError, requests.RequestException) as exc:
@@ -144,7 +144,7 @@ def _fetch_coinglass(cg, out: MacroData) -> bool:
 
     if out.liquidations_long_24h_usd is None:
         try:
-            liq = cg.fetch_liquidations(days=2)
+            liq = cg.fetch_liquidations(days=2, asset=asset)
             if not liq.empty:
                 out.liquidations_long_24h_usd = float(liq["long_usd"].iloc[-1])
                 out.liquidations_short_24h_usd = float(liq["short_usd"].iloc[-1])
@@ -154,7 +154,7 @@ def _fetch_coinglass(cg, out: MacroData) -> bool:
     return out.has_any_value() and not prima
 
 
-def _oi_change_dallo_storico(notes_db, days: int = 7) -> float | None:
+def _oi_change_dallo_storico(notes_db, days: int = 7, asset: str = "BTC") -> float | None:
     """Variazione dell'OI dagli snapshot che accumuliamo noi.
 
     CoinGecko da' il livello istantaneo, non la serie: senza questo la finestra a
@@ -167,19 +167,19 @@ def _oi_change_dallo_storico(notes_db, days: int = 7) -> float | None:
             from src.edgar.structured_notes_db import StructuredNotesDB
 
             db = StructuredNotesDB()
-        return db.get_oi_change_pct(days)
+        return db.get_oi_change_pct(days, asset=asset)
     except Exception as exc:  # noqa: BLE001 — lo storico e' un di piu', non un requisito
         _log.warning("Storico OI non leggibile: %s", exc)
         return None
 
 
-def _fetch_coingecko(gecko, notes_db, out: MacroData) -> bool:
+def _fetch_coingecko(gecko, notes_db, out: MacroData, asset: str = "BTC") -> bool:
     """Riempie funding e open interest da CoinGecko. Vero se ha riempito qualcosa.
 
     Non tocca long/short ratio e liquidazioni: CoinGecko non li espone, e un
     campo riempito a caso e' peggio di un campo vuoto.
     """
-    funding, oi_usd, n_contratti = gecko.fetch_funding_and_oi()
+    funding, oi_usd, n_contratti = gecko.fetch_funding_and_oi(asset)
     if funding is None:
         return False
 
@@ -188,7 +188,7 @@ def _fetch_coingecko(gecko, notes_db, out: MacroData) -> bool:
     if oi_usd is not None:
         out.oi_usd = oi_usd
     if out.oi_change_7d_pct is None:
-        out.oi_change_7d_pct = _oi_change_dallo_storico(notes_db)
+        out.oi_change_7d_pct = _oi_change_dallo_storico(notes_db, asset=asset)
 
     _log.info(
         "Macro da CoinGecko: funding %.2f%% ann su %d perpetui (long/short e "
@@ -203,6 +203,7 @@ def fetch_macro_data(
     gecko_client=None,
     notes_db=None,
     cache_data: dict | None = None,
+    asset: str = "BTC",
 ) -> MacroData:
     """Fetch dati macro con CoinGlass preferito e CoinGecko di ripiego.
 
@@ -213,6 +214,7 @@ def fetch_macro_data(
         notes_db: StructuredNotesDB opzionale, per lo storico dell'open interest.
         cache_data: dict opzionale da cui leggere valori pre-esistenti
                     (es. cache_get("macro_data") nell'API).
+        asset: "BTC" o "ETH" — simboli CoinGlass/CoinGecko e storico OI.
 
     Returns:
         MacroData con i valori disponibili (None per quelli non fetchabili) e
@@ -224,7 +226,7 @@ def fetch_macro_data(
 
     da_coinglass = False
     if cg.has_api_key:
-        da_coinglass = _fetch_coinglass(cg, out)
+        da_coinglass = _fetch_coinglass(cg, out, asset)
     else:
         # Senza chiave ogni chiamata fallirebbe: cinque richieste e cinque warning
         # per niente, a ogni giro di /api/signals. Meglio saltarle e ripiegare.
@@ -240,7 +242,7 @@ def fetch_macro_data(
     if out.funding_rate_annualized_pct is None:
         try:
             da_coingecko = _fetch_coingecko(
-                gecko_client or CoinGeckoClient(), notes_db, out
+                gecko_client or CoinGeckoClient(), notes_db, out, asset
             )
         except Exception as exc:  # noqa: BLE001 — il ripiego non deve poter rompere il fetch
             _log.warning("Ripiego CoinGecko fallito: %s", exc)
