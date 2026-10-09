@@ -1,10 +1,34 @@
 # ibit-gamma-tracker — Project Memory
 
+## Solo dati osservati — rimozione punteggi (session 2026-10-07)
+
+Decisione di Stefano: il prodotto mostra solo dati osservati (livelli GEX, flussi ETF,
+barriere, derivati). Rimossi in due passi (PR #16):
+
+- Pagine dashboard **Segnali** e **Validation** + IC, walk-forward, factor decomposition,
+  sensitivity (moduli e test).
+- **Segnale composito** (`pillars.py`, `backtest.py`, `/api/signals`, `/api/pillars/series`),
+  hero e pilastri della Panoramica. `/api/macro` spostato in `routers/macro.py`.
+- **IFI** (modello, DB, updater, `/api/ifi`, job). Lo snapshot barriere giornaliero resta in
+  uno scheduler `maintenance` (`/api/health/scheduler` → chiave `maintenance`).
+- **Desk Note** (`src/report`, `/report`, `/api/report/*`, export, route nginx): `/report` ora
+  cade su Streamlit (200 con la dashboard).
+- **Telegram**: via `/signal` e blocco IFI; il recap porta solo livelli GEX + flussi ETF.
+- Feature `signal` dello `AssetSpec` → `analytics` (regime analysis + alert flussi 3gg, solo BTC).
+- `.wx-eyebrow` aveva CSS solo dentro l'hero: ora regola globale.
+
+### Esito (chiusura sessione)
+- CI verde, deploy DO verificato: endpoint rimossi → 404, GEX/flows/barriers/macro → 200.
+- Test: 721 pass, ruff clean, mypy 61 (da 71).
+- Aperte/aggiornate: PTF-Dashboard#36 (togliere SignalPanel, oggi 404); chiuse #12 e #14.
+- Non toccato: forecast spine (`src/forecast`, `factor_scorers.py`), ancora da decidere.
+- Alert Telegram su DO spenti: mancano `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` nei secrets.
+
 ## Estensione ETH — fase 1 "solo dati" (session 2026-10-07)
 
 Dashboard, API e pipeline estese a **ETH** con un registro asset unico. Decisioni prese
-con Stefano: **solo dati** (GEX Deribit, flussi ETF con ETHA come lead, macro), nessun
-segnale composito/barriere/EDGAR per ETH; **selettore globale** BTC/ETH (`?asset=eth`).
+con Stefano: **solo dati** (GEX Deribit, flussi ETF con ETHA come lead, macro), nessuna
+barriera/EDGAR per ETH (il segnale composito è poi stato rimosso per tutti, vedi sopra); **selettore globale** BTC/ETH (`?asset=eth`).
 
 - `src/assets.py` — `AssetSpec` (simboli, URL Farside, lead ETF, nomi colonna, `features`).
   BTC conserva i nomi legacy (`btc_close`, `ibit_flow`): output BTC invariato.
