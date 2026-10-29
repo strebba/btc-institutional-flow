@@ -18,9 +18,14 @@ from typing import Optional
 
 
 from src.config import get_settings, setup_logging
+from src.gex.greeks import black_scholes_greeks, time_to_expiry_years
 from src.gex.models import GexByStrike, GexSnapshot
 
 _log = setup_logging("gex.calculator")
+
+#: Griglia di spot ipotetici per il profilo gamma: ±25% dallo spot, passo 0,25%.
+_FLIP_RANGE_PCT = 0.25
+_FLIP_STEP_PCT = 0.0025
 
 
 class GexCalculator:
@@ -66,10 +71,36 @@ class GexCalculator:
         sign = 1.0 if option_type == "call" else -1.0
         return sign * gamma * open_interest * contract_size * (spot_price ** 2) * 0.01
 
+    @staticmethod
+    def _bs_gamma(opt: dict, spot: float, now_ms: float) -> Optional[float]:
+        """Gamma Black-Scholes ricostruita da mark_iv / scadenza / underlying.
+
+        Deribit pubblica ``greeks.gamma`` arrotondata a 5 decimali: su BTC (gamma
+        tipica 1e-5..5e-5) resta una sola cifra significativa e le opzioni OTM
+        con gamma < 5e-6 diventano 0 e vengono scartate dal GEX. La ricostruzione
+        usa gli stessi input di ``src.gex.greeks`` (già validato su delta Deribit).
+
+        Returns:
+            gamma per unità di sottostante, oppure None se non calcolabile.
+        """
+        exp = opt.get("expiration_timestamp") or 0
+        iv = opt.get("mark_iv") or 0.0
+        if not exp or iv <= 0:
+            return None
+        g = black_scholes_greeks(
+            spot=opt.get("underlying_price") or spot,   # forward della scadenza
+            strike=opt.get("strike", 0.0),
+            t_years=time_to_expiry_years(exp, now_ms),
+            sigma=iv / 100.0,              # Deribit quota la IV in %
+            option_type=opt.get("option_type", ""),
+        )
+        return g.gamma if g is not None else None
+
     def calculate_gex(
         self,
         options_data: list[dict],
         spot_price: float,
+        now_ms: Optional[float] = None,
     ) -> GexSnapshot:
         """Calcola il GEX completo dalla chain di opzioni.
 
@@ -77,9 +108,14 @@ class GexCalculator:
             options_data: lista di dict da DeribitClient.fetch_all_options().
             spot_price: prezzo spot BTC corrente.
 
+            now_ms: istante di riferimento in ms (default: adesso). Serve alla
+                ricostruzione delle greche; parametrico per i test.
+
         Returns:
             GexSnapshot: snapshot completo con tutte le metriche.
         """
+        if now_ms is None:
+            now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
         if not options_data:
             _log.warning("Nessun dato opzioni disponibile")
             return GexSnapshot(
@@ -99,13 +135,17 @@ class GexCalculator:
 
         for opt in options_data:
             strike       = opt.get("strike", 0.0)
-            gamma        = opt.get("gamma", 0.0)
             oi           = opt.get("open_interest", 0.0)
             option_type  = opt.get("option_type", "").lower()
 
-            if strike <= 0 or gamma <= 0 or oi <= 0:
+            if strike <= 0 or oi <= 0 or option_type not in ("call", "put"):
                 continue
-            if option_type not in ("call", "put"):
+
+            # Gamma BS a piena precisione; fallback sulla gamma Deribit (arrotondata).
+            gamma = self._bs_gamma(opt, spot_price, now_ms)
+            if gamma is None:
+                gamma = opt.get("gamma", 0.0) or 0.0
+            if gamma <= 0:
                 continue
 
             gex_val = self._option_gex(gamma, oi, option_type, spot_price)
@@ -131,7 +171,13 @@ class GexCalculator:
         total_net_gex = sum(g.net_gex for g in gex_by_strike)
 
         # ── Gamma flip price ──────────────────────────────────────────────────
-        gamma_flip = self._find_gamma_flip(gex_by_strike)
+        # Metodo corretto: zero del profilo GEX(S) ricalcolato su spot ipotetici.
+        # Il cumulativo per strike resta solo come fallback per chain senza
+        # IV/scadenza (es. fixture di test o dati parziali).
+        gamma_flip, n_legs = self._gamma_profile_flip(options_data, spot_price, now_ms)
+        if n_legs == 0:
+            _log.warning("Gamma flip: chain senza IV/scadenza, fallback cumulativo per strike")
+            gamma_flip = self._find_gamma_flip(gex_by_strike)
 
         # ── Put wall (strike con minimo GEX netto) ────────────────────────────
         put_wall = None
@@ -170,8 +216,77 @@ class GexCalculator:
             total_put_oi=total_put_oi,
         )
 
+    def _gamma_profile_flip(
+        self,
+        options_data: list[dict],
+        spot_price: float,
+        now_ms: float,
+    ) -> tuple[Optional[float], int]:
+        """Gamma flip come zero del profilo GEX totale in funzione dello spot.
+
+        Per ogni spot ipotetico S nella griglia ±``_FLIP_RANGE_PCT`` ricalcola la
+        gamma BS di ogni opzione a S e somma il GEX dealer (stessa convenzione di
+        segno di ``_option_gex``). Il flip è lo zero (interpolato) più vicino allo
+        spot corrente: sopra il flip GEX > 0, sotto GEX < 0, coerente con
+        ``total_net_gex`` e con il regime.
+
+        Returns:
+            (flip, n_legs): flip None se il profilo non cambia segno nel range;
+            n_legs = opzioni ri-prezzabili (0 → il chiamante usa il fallback).
+        """
+        if spot_price <= 0:
+            return None, 0
+
+        # (strike, t, iv, tipo, oi, basis): basis = forward/index della scadenza,
+        # così lo spot ipotetico S muove il forward in proporzione.
+        legs: list[tuple[float, float, float, str, float, float]] = []
+        for opt in options_data:
+            strike = opt.get("strike", 0.0) or 0.0
+            oi = opt.get("open_interest", 0.0) or 0.0
+            tipo = (opt.get("option_type") or "").lower()
+            iv = (opt.get("mark_iv") or 0.0) / 100.0
+            exp = opt.get("expiration_timestamp") or 0
+            if strike <= 0 or oi <= 0 or tipo not in ("call", "put") or iv <= 0 or not exp:
+                continue
+            t = time_to_expiry_years(exp, now_ms)
+            if t <= 0:
+                continue
+            und = opt.get("underlying_price") or spot_price
+            legs.append((strike, t, iv, tipo, oi, und / spot_price))
+
+        if not legs:
+            return None, 0
+
+        def total_gex_at(s: float) -> float:
+            tot = 0.0
+            for strike, t, iv, tipo, oi, basis in legs:
+                g = black_scholes_greeks(
+                    spot=s * basis, strike=strike, t_years=t, sigma=iv, option_type=tipo
+                )
+                if g is not None:
+                    tot += self._option_gex(g.gamma, oi, tipo, s)
+            return tot
+
+        n = int(round(_FLIP_RANGE_PCT / _FLIP_STEP_PCT))
+        grid = [spot_price * (1.0 + i * _FLIP_STEP_PCT) for i in range(-n, n + 1)]
+        values = [total_gex_at(s) for s in grid]
+
+        crossings: list[float] = []
+        for (s0, v0), (s1, v1) in zip(zip(grid, values), zip(grid[1:], values[1:])):
+            if (v0 < 0) != (v1 < 0):
+                den = abs(v0) + abs(v1)
+                crossings.append(s0 + (s1 - s0) * (abs(v0) / den if den > 0 else 0.0))
+
+        if not crossings:
+            return None, len(legs)
+        return min(crossings, key=lambda x: abs(x - spot_price)), len(legs)
+
     def _find_gamma_flip(self, gex_by_strike: list[GexByStrike]) -> Optional[float]:
-        """Trova il prezzo di gamma flip (dove il GEX cumulativo cambia segno).
+        """Fallback legacy: zero del GEX cumulativo per strike (dal basso).
+
+        NB: non è il gamma flip in senso stretto (usa le gamma allo spot
+        corrente e cade strutturalmente vicino all'ATM, dove le put lasciano
+        spazio alle call). Usato solo se la chain non ha IV/scadenza.
 
         Il gamma flip è calcolato cumulando il GEX dagli strike più bassi
         verso quelli più alti e cercando il cambio di segno. Quando il segno
