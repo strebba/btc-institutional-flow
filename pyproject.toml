@@ -30,6 +30,7 @@ dependencies = [
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
     "apscheduler>=3.10.4",
+    "psycopg[binary]>=3.2",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +59,7 @@ testpaths = ["tests"]
 addopts   = "-v --tb=short"
 markers = [
     "integration: tests that require external services or end-to-end data flows",
+    "sqlite_only: verifica dettagli specifici di SQLite (file, PRAGMA, migrazioni locali); saltato con BIF_TEST_BACKEND=postgres",
 ]
 
 [tool.ruff]

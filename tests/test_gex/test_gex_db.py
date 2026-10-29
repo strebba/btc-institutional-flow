@@ -42,6 +42,7 @@ def db(tmp_path: Path) -> GexDB:
 # ─── Schema ──────────────────────────────────────────────────────────────────
 
 class TestSchema:
+    @pytest.mark.sqlite_only
     def test_table_created_on_init(self, db: GexDB) -> None:
         """La tabella gex_snapshots esiste dopo __init__."""
         with db._conn() as conn:
@@ -53,6 +54,7 @@ class TestSchema:
             }
         assert "gex_snapshots" in tables
 
+    @pytest.mark.sqlite_only
     def test_index_created_on_init(self, db: GexDB) -> None:
         """L'indice idx_gex_date esiste dopo __init__."""
         with db._conn() as conn:
@@ -64,6 +66,7 @@ class TestSchema:
             }
         assert "idx_gex_date" in indexes
 
+    @pytest.mark.sqlite_only
     def test_db_created_in_tmp_dir(self, tmp_path: Path) -> None:
         """Il file DB viene creato nella directory specificata."""
         db_path = tmp_path / "subdir" / "gex.db"
@@ -190,12 +193,14 @@ def _legacy_db(path: Path) -> Path:
 
 
 class TestMultiAsset:
+    @pytest.mark.sqlite_only
     def test_migrazione_conserva_le_righe_legacy_come_btc(self, tmp_path: Path) -> None:
         db = GexDB(db_path=_legacy_db(tmp_path / "legacy.db"))
         assert db.count() == 2
         assert db.count(asset="ETH") == 0
         assert list(db.get_latest_n(10, asset="BTC")[i].total_net_gex for i in range(2)) == [1e8, -2e8]
 
+    @pytest.mark.sqlite_only
     def test_migrazione_idempotente(self, tmp_path: Path) -> None:
         path = _legacy_db(tmp_path / "legacy.db")
         GexDB(db_path=path)

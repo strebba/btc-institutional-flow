@@ -17,11 +17,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 
 import pandas as pd
 
 from src.config import setup_logging
+from src.db import connect, days_ago_iso, ensure_postgres_schema, is_postgres
 from src.gex.models import GexSnapshot
 
 _log = setup_logging("gex.db")
@@ -75,22 +76,16 @@ class GexDB:
         self._ensure_table()
 
     @contextmanager
-    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        """Context manager WAL con commit/rollback automatico."""
-        conn = sqlite3.connect(self._path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        try:
+    def _conn(self) -> Generator[Any, None, None]:
+        """Connessione al backend attivo (SQLite WAL o Postgres), commit/rollback automatico."""
+        with connect(self._path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def _ensure_table(self) -> None:
         """Crea tabella e indice se non esistono, migrando lo schema pre-ETH (idempotente)."""
+        if is_postgres():
+            ensure_postgres_schema()
+            return
         with self._conn() as conn:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(gex_snapshots)")}
             if cols and "asset" not in cols:
@@ -199,10 +194,10 @@ class GexDB:
                 """
                 SELECT date, total_net_gex
                 FROM gex_snapshots
-                WHERE date >= date('now', ? || ' days') AND asset = ?
+                WHERE date >= ? AND asset = ?
                 ORDER BY date ASC
                 """,
-                (f"-{days}", asset),
+                (days_ago_iso(days), asset),
             ).fetchall()
 
         if not rows:

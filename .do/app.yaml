@@ -9,9 +9,12 @@
 # Routing (gestito da nginx nel container):
 #   /api/* → FastAPI   |   /* → Streamlit
 #
-# I dati sono condivisi via DB versionato nel repo (App Platform non supporta
-# volumi): il workflow EDGAR committa data/structured_notes.db su main →
-# redeploy automatico di entrambi i servizi con dati freschi.
+# Persistenza: App Platform ha filesystem effimero e non supporta volumi, quindi
+# i dati di produzione (predizioni, esiti, pesi, GEX, prezzi, note EDGAR, macro)
+# vivono in Postgres (Supabase) via DATABASE_URL. Li scrivono i workflow GitHub
+# Actions daily-pipeline.yml, macro-snapshot.yml ed edgar-refresh.yml; l'API li
+# legge. Senza DATABASE_URL l'app ricade sui file SQLite in data/ (comportamento
+# precedente). Procedura di cutover: docs/cutover-postgres.md.
 #
 # Applicare: DO Console → Settings → App Spec → Edit → incolla questo file
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,6 +51,18 @@ services:
         type: GENERAL
       - key: DB_PATH
         value: "data/structured_notes.db"
+        scope: RUN_TIME
+        type: GENERAL
+      # Postgres di produzione (Supabase, connection pooler). Valorizzare da
+      # Console → Settings → App Spec, mai nel repo. Vuota = fallback SQLite.
+      - key: DATABASE_URL
+        value: ""
+        scope: RUN_TIME
+        type: SECRET
+      # predict/verify/calibrate girano nel workflow daily-pipeline.yml: lo
+      # scheduler forecast in-process resta spento per non avere due scrittori.
+      - key: FORECAST_SCHEDULER_ENABLED
+        value: "false"
         scope: RUN_TIME
         type: GENERAL
       # Completa il pilastro macro (funding, OI, long/short, liquidazioni) e

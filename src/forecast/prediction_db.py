@@ -11,13 +11,13 @@ WAL mode, path da settings.yaml, INSERT OR IGNORE per idempotenza.
 from __future__ import annotations
 
 import json
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Generator, Optional
 
 from src.config import get_settings, setup_logging
+from src.db import connect, days_ago_iso, ensure_postgres_schema, is_postgres
 from src.forecast.models import Outcome, Prediction, STATUS_OPEN, STATUS_SCORED
 
 _log = setup_logging("forecast.prediction_db")
@@ -91,18 +91,20 @@ class PredictionDB:
         self._init_db()
 
     @contextmanager
-    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        conn = sqlite3.connect(str(self._path), timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.row_factory = sqlite3.Row
-        try:
+    def _conn(self) -> Generator[Any, None, None]:
+        """Connessione al backend attivo (SQLite su ``self._path`` o Postgres)."""
+        with connect(
+            self._path,
+            sqlite_pragmas=("journal_mode=WAL", "foreign_keys=ON"),
+            sqlite_timeout=30,
+        ) as conn:
             yield conn
-            conn.commit()
-        finally:
-            conn.close()
 
     def _init_db(self) -> None:
+        if is_postgres():
+            # Su Postgres lo schema e' gestito da src/db/migrations (gia' migrato).
+            ensure_postgres_schema()
+            return
         with self._conn() as conn:
             conn.executescript(_DDL)
             # Migrazione: aggiunge la colonna status se un DB pre-esistente non l'ha.
@@ -142,12 +144,14 @@ class PredictionDB:
         placeholders = ",".join("?" for _ in _PRED_COLS.split(","))
         with self._conn() as conn:
             cur = conn.execute(
-                f"INSERT OR IGNORE INTO predictions ({_PRED_COLS}) VALUES ({placeholders})",
+                f"INSERT OR IGNORE INTO predictions ({_PRED_COLS}) VALUES ({placeholders}) "
+                "RETURNING id",
                 tuple(row[c.strip()] for c in _PRED_COLS.split(",")),
             )
-            if cur.rowcount == 1:
-                return int(cur.lastrowid)
-        return None
+            # RETURNING (non lastrowid): funziona su SQLite e Postgres; nessuna riga se ignorata.
+            # fetchall (non fetchone): esaurisce lo statement prima del commit su SQLite.
+            inserted = cur.fetchall()
+        return int(inserted[0][0]) if inserted else None
 
     def update_human_fields(
         self,
@@ -206,9 +210,9 @@ class PredictionDB:
             "SELECT p.*, o.hit, o.realized_return, o.realized_price, o.signed_error, "
             "       o.brier, o.detail AS outcome_detail, o.scored_at "
             "FROM predictions p LEFT JOIN outcomes o ON o.prediction_id = p.id "
-            "WHERE p.date >= date('now', ? || ' days') "
+            "WHERE p.date >= ? "
         )
-        params: list[Any] = [f"-{days}"]
+        params: list[Any] = [days_ago_iso(days)]
         if source:
             q += "AND p.source = ? "
             params.append(source)
@@ -258,16 +262,16 @@ class PredictionDB:
         with self._conn() as conn:
             cur = conn.execute(
                 "INSERT INTO weight_versions (created_at, source, weights, active, status, rationale) "
-                "VALUES (?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?) RETURNING id",
                 (ts, source, json.dumps(weights, ensure_ascii=False), 0, "proposed", rationale),
             )
-            vid = int(cur.lastrowid)
+            vid = int(cur.fetchall()[0][0])
             if activate:
                 self._activate(conn, vid, source)
         return vid
 
     @staticmethod
-    def _activate(conn: sqlite3.Connection, version_id: int, source: str) -> None:
+    def _activate(conn: Any, version_id: int, source: str) -> None:
         # Retira l'attiva corrente, attiva la nuova (audit trail: niente cancellazioni).
         conn.execute(
             "UPDATE weight_versions SET active = 0, status = 'retired' "

@@ -192,7 +192,10 @@ async def start_forecast_scheduler():
     global _forecast_scheduler
     fc = get_settings().get("forecast", {})
     if not fc.get("enabled", True):
-        _log.info("[forecast] scheduler disabilitato (settings.forecast.enabled=false)")
+        _log.info(
+            "[forecast] scheduler disabilitato "
+            "(settings.forecast.enabled=false o FORECAST_SCHEDULER_ENABLED=false)"
+        )
         return
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler

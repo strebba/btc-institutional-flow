@@ -11,8 +11,18 @@ router = APIRouter(tags=["meta"])
 
 @router.get("/api/health")
 def health() -> JSONResponse:
-    """Health check: verifica che il server sia attivo."""
-    return ok({"service": "btc-institutional-flow", "healthy": True})
+    """Health check: verifica che il server sia attivo.
+
+    ``database`` dice solo quale backend e' attivo (``postgres``/``sqlite``),
+    mai l'URL: serve a verificare il cutover senza esporre credenziali.
+    """
+    from src.db import backend_name
+
+    try:
+        database = backend_name()
+    except ValueError:
+        database = "misconfigured"
+    return ok({"service": "btc-institutional-flow", "healthy": True, "database": database})
 
 
 #: Il workflow gira lunedi' e mercoledi': oltre 10 giorni senza un refresh

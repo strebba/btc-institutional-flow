@@ -31,6 +31,13 @@ def get_settings() -> dict:
         cfg["edgar"]["user_agent"] = ua
     if db := os.getenv("DB_PATH"):
         cfg["database"]["path"] = db
+    # In produzione predict/verify/calibrate girano nel job schedulato
+    # (scripts/cron_daily.py): l'API su DO li disattiva con
+    # FORECAST_SCHEDULER_ENABLED=false per non avere due scheduler sullo stesso DB.
+    if (flag := os.getenv("FORECAST_SCHEDULER_ENABLED", "").strip().lower()) in (
+        "0", "false", "no", "off", "1", "true", "yes", "on",
+    ):
+        cfg.setdefault("forecast", {})["enabled"] = flag in ("1", "true", "yes", "on")
 
     if not cfg["edgar"].get("user_agent"):
         logging.getLogger("config").warning(

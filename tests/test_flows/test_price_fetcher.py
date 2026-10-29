@@ -63,6 +63,7 @@ class TestLoadFromDb:
 
 
 class TestIbitBtcRatio:
+    @pytest.mark.sqlite_only
     def test_ratio_calculation(self, fetcher):
         # Simula BTC=60000 e IBIT=60 → ratio=0.001
         import sqlite3

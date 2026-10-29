@@ -77,8 +77,9 @@ Container **unico** su DO App Platform, gestito da `supervisord` (3 processi):
 - **nginx** rimuove `X-Frame-Options` (impostato hardcoded da Streamlit) e aggiunge
   `Content-Security-Policy: frame-ancestors` → consente l'embed in iframe su wagmi-lab.com
 - **supervisord** riavvia automaticamente i processi in caso di crash
-- I dati sono condivisi via **DB versionato nel repo** (App Platform non supporta volumi):
-  refresh EDGAR settimanale → commit su `main` → redeploy
+- I dati vivono in **Postgres (Supabase)** via `DATABASE_URL` (App Platform non supporta
+  volumi): i workflow GitHub (`daily-pipeline`, `macro-snapshot`, `edgar-refresh`) scrivono
+  direttamente sul DB, senza commit né redeploy. Vedi `docs/cutover-postgres.md`
 - Config: `nginx.conf`, `supervisord.conf`, `.do/app.yaml`, `.streamlit/config.toml`
 
 ### URL
@@ -175,7 +176,7 @@ funding, OI, long/short, put/call, liquidazioni), poi CoinGecko
 (`/api/v3/derivatives`) come ripiego (funding + OI). L'annualizzazione del funding
 sta solo in `funding.py` (×3×365).
 
-**Storico OI a 7 giorni:** tabella `macro_snapshots` nel DB versionato, alimentata da
+**Storico OI a 7 giorni:** tabella `macro_snapshots` (Postgres in produzione), alimentata da
 `scripts/cron_macro.py` + workflow GitHub giornaliero.
 
 **Fix yfinance multi-index:**
@@ -248,7 +249,9 @@ Report a card pubblicabile (`facts.py`, `narrative.py`, `events.py`, `renderer.p
 
 ### `data/structured_notes.db`
 
-DB SQLite unico (versionato in git). Contiene: `notes`, `barrier_levels`, `prices`
+Backend SQLite (default, sviluppo/test) o Postgres se `DATABASE_URL` è impostata
+(`src/db/`, schema in `src/db/migrations/`; in Postgres tutte le tabelle stanno in un
+unico database). Il file SQLite resta versionato come seed. Contiene: `notes`, `barrier_levels`, `prices`
 (OHLCV BTC/IBIT), `gex_snapshots`, `barrier_snapshots`, `macro_snapshots`, `refresh_runs`.
 
 `data/runtime.db` (gitignorato) contiene i dati runtime: `predictions`, `outcomes`,
