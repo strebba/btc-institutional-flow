@@ -16,6 +16,7 @@ def db(tmp_path: Path) -> AlertDB:
 
 
 class TestSchema:
+    @pytest.mark.sqlite_only
     def test_table_created_on_init(self, db: AlertDB) -> None:
         with db._conn() as conn:
             tables = {

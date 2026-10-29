@@ -14,9 +14,10 @@ import pandas as pd
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 
 from src.config import setup_logging
+from src.db import connect, days_ago_iso, ensure_postgres_schema, is_postgres
 from src.edgar.models import BarrierLevel, StructuredNote
 
 _log = setup_logging("edgar.db")
@@ -136,24 +137,14 @@ class StructuredNotesDB:
         self._init_schema()
 
     @contextmanager
-    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        """Context manager per la connessione SQLite con WAL mode.
+    def _conn(self) -> Generator[Any, None, None]:
+        """Connessione al backend attivo: SQLite (WAL, FK on) o Postgres.
 
         Yields:
-            sqlite3.Connection: connessione attiva.
+            ``sqlite3.Connection`` o ``src.db.PgConnection`` (stessa API minima).
         """
-        conn = sqlite3.connect(self._path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        try:
+        with connect(self._path, sqlite_pragmas=("journal_mode=WAL", "foreign_keys=ON")) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def record_refresh_run(
         self, *, filings_seen: int, notes_written: int, ok: bool = True
@@ -298,6 +289,10 @@ class StructuredNotesDB:
 
     def _init_schema(self) -> None:
         """Crea le tabelle, gli indici e applica le migrazioni incrementali."""
+        if is_postgres():
+            # Su Postgres lo schema (gia' a v4) e' gestito da src/db/migrations.
+            ensure_postgres_schema()
+            return
         with self._conn() as conn:
             conn.executescript(
                 _DDL_NOTES + _DDL_BARRIERS + _DDL_BARRIER_SNAPSHOTS
@@ -426,6 +421,7 @@ class StructuredNotesDB:
                          knockin_barrier_pct, buffer_pct, participation_rate, coupon_rate,
                          is_preliminary, observation_dates, raw_text, created_at)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    RETURNING id
                     """,
                     (
                         note.filing_url,
@@ -447,7 +443,7 @@ class StructuredNotesDB:
                         now,
                     ),
                 )
-                note_id = cur.lastrowid
+                note_id = cur.fetchall()[0][0]  # RETURNING: SQLite e Postgres
 
             # Salva i barrier levels (rimuovi i vecchi e reinserisci)
             conn.execute("DELETE FROM barrier_levels WHERE note_id=?", (note_id,))
@@ -498,6 +494,8 @@ class StructuredNotesDB:
         `git add data/structured_notes.db`: senza questo checkpoint esplicito il
         commit conterrebbe il `.db` SENZA le ultime scritture (rimaste nel -wal).
         """
+        if is_postgres():
+            return  # nessun WAL locale da consolidare
         with self._conn() as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         _log.debug("WAL checkpoint completato: %s", self._path)
@@ -603,7 +601,7 @@ class StructuredNotesDB:
     # ─── Helpers privati ─────────────────────────────────────────────────────
 
     @staticmethod
-    def _row_to_note(conn: sqlite3.Connection, row: dict) -> StructuredNote:
+    def _row_to_note(conn: Any, row: dict) -> StructuredNote:
         """Converte una riga del DB in StructuredNote con barriers.
 
         Args:
@@ -752,10 +750,10 @@ class StructuredNotesDB:
                 SELECT snapshot_date, barrier_id, level_price_btc, issuer,
                        barrier_type, notional_usd
                 FROM barrier_snapshots
-                WHERE snapshot_date >= date('now', ?)
+                WHERE snapshot_date >= ?
                 ORDER BY snapshot_date ASC, barrier_id ASC
                 """,
-                (f"-{days}",),
+                (days_ago_iso(days),),
             ).fetchall()
 
         if not rows:

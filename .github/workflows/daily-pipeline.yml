@@ -1,0 +1,95 @@
+name: Daily pipeline (raccolta + forecast su Postgres)
+
+# Job giornaliero di produzione: sostituisce il LaunchAgent del Mac mini
+# (com.wagmi.forecast-daily) e lo scheduler forecast in-process dell'API.
+# Esegue scripts/cron_daily.py: snapshot GEX, prezzi, verifica CoinGlass/Farside,
+# predict + verify (+ calibrate il lunedì). Scrive SOLO sul Postgres del secret
+# DATABASE_URL; senza secret il job fallisce subito (nessun fallback SQLite:
+# il runner è effimero e i dati andrebbero persi in silenzio).
+#
+# Perché GitHub Actions e non un Job di DO App Platform: il repo è pubblico, quindi
+# i minuti Actions sono gratuiti; il pattern (cron + secret + notifica Telegram) è
+# già quello di edgar-refresh.yml e macro-snapshot.yml; e non serve toccare la
+# spec DO. Limiti noti: il cron di GitHub può ritardare (anche >30 min) e i
+# workflow schedulati si disattivano dopo 60 giorni senza attività sul repo.
+
+on:
+  schedule:
+    - cron: "15 7 * * *"   # ogni giorno 07:15 UTC (08:15 ora di Roma d'inverno)
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: "Sottoinsieme di passi, es. gex,predict (vuoto = tutti)"
+        required: false
+        default: ""
+        type: string
+      calibrate:
+        description: "Forza la calibrazione settimanale"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-write           # serializza i job che scrivono sul DB di produzione
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # mai da branch di feature né da fork: scrive sul DB di produzione
+    if: github.ref == 'refs/heads/main' && github.repository == 'strebba/btc-institutional-flow'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Require DATABASE_URL (Postgres di produzione)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [[ -z "$DATABASE_URL" ]]; then
+            echo "::error::Secret DATABASE_URL non configurato: il job scrive solo su Postgres (vedi docs/cutover-postgres.md)."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily pipeline
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          COINGLASS_API_KEY: ${{ secrets.COINGLASS_API_KEY }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          STEPS: ${{ inputs.steps }}
+          FORCE_CALIBRATE: ${{ inputs.calibrate }}
+        run: |
+          args=()
+          [[ -n "$STEPS" ]] && args+=(--steps "$STEPS")
+          [[ "$FORCE_CALIBRATE" == "true" ]] && args+=(--calibrate)
+          python scripts/cron_daily.py "${args[@]}"
+
+      - name: Notify Telegram on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONPATH: .
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "Telegram secrets non configurati — skip notifica"
+            exit 0
+          fi
+          python3 scripts/notify_telegram.py "⚠️ <b>Daily pipeline FALLITA</b>
+          Run: <a href='${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}'>${GITHUB_RUN_ID}</a>
+          Data: $(date -u +'%Y-%m-%d %H:%M UTC')
+          Predizioni/GEX del giorno potrebbero mancare."

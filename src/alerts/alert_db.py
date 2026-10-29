@@ -8,13 +8,13 @@ set di PTF-Dashboard perde lo stato). Condivide il file SQLite del progetto
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 
 from src.config import get_settings, setup_logging
+from src.db import connect, ensure_postgres_schema, is_postgres
 
 _log = setup_logging("alerts.db")
 
@@ -46,21 +46,15 @@ class AlertDB:
         self._ensure_table()
 
     @contextmanager
-    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        conn = sqlite3.connect(self._path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        try:
+    def _conn(self) -> Generator[Any, None, None]:
+        """Connessione al backend attivo (SQLite su ``self._path`` o Postgres)."""
+        with connect(self._path, sqlite_pragmas=("journal_mode=WAL", "busy_timeout=5000")) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def _ensure_table(self) -> None:
+        if is_postgres():
+            ensure_postgres_schema()
+            return
         with self._conn() as conn:
             conn.executescript(_DDL)
 

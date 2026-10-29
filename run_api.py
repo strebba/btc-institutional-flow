@@ -2,10 +2,10 @@
 
 Uso:
   python run_api.py
-  python run_api.py --host 0.0.0.0 --port 8000 --reload
+  python run_api.py --host 127.0.0.1 --port 8000 --reload
 
 Oppure direttamente con uvicorn:
-  uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+  uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="BTC Institutional Flow — API Server")
-    parser.add_argument("--host",   default="0.0.0.0",   help="Indirizzo di ascolto (default: 0.0.0.0)")
+    parser.add_argument("--host",   default="127.0.0.1", help="Indirizzo di ascolto (default: 127.0.0.1, solo loopback)")
     parser.add_argument("--port",   default=8000, type=int, help="Porta (default: 8000)")
     parser.add_argument("--reload", action="store_true",  help="Abilita hot-reload (sviluppo)")
     args = parser.parse_args()

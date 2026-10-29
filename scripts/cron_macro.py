@@ -4,10 +4,10 @@ Esiste per un motivo solo: CoinGecko espone l'open interest come **livello
 istantaneo**, non come serie. Senza uno storico accumulato da noi la variazione a
 7 giorni — che pesa 0,20 del pilastro macro — resterebbe scoperta per sempre.
 
-Lo snapshot va nel DB **versionato** (`data/structured_notes.db`), non in
-`runtime.db`: il filesystem di DO App Platform è effimero, quindi una serie
-salvata lì sparirebbe a ogni redeploy e la finestra a 7 giorni non maturerebbe
-mai. È lo stesso meccanismo che `cron_edgar.py` usa per le note SEC.
+In produzione lo snapshot va nel Postgres indicato da ``DATABASE_URL`` (il
+workflow macro-snapshot.yml la passa come secret): il filesystem di DO App
+Platform è effimero, quindi una serie salvata lì sparirebbe a ogni redeploy.
+Senza ``DATABASE_URL`` (sviluppo locale) scrive su ``data/structured_notes.db``.
 
 Scrive uno snapshot per asset (BTC ed ETH) con un solo download da CoinGecko:
 la risposta di /derivatives copre tutti gli asset.
@@ -66,7 +66,7 @@ def main() -> None:
 
     if not scritti:
         sys.exit(1)
-    db.checkpoint()   # forza il WAL nel .db prima del commit git nel workflow
+    db.checkpoint()   # solo SQLite: consolida il WAL nel .db (no-op su Postgres)
 
 
 if __name__ == "__main__":

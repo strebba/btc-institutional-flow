@@ -26,7 +26,7 @@ btc-institutional-flow/
 │   ├── edgar/          # SEC EDGAR scraper + parser note strutturate
 │   │   ├── search.py          # EFTS API full-text search su 424B2/424B3
 │   │   ├── parser.py          # Estrazione barriere/notional da HTML
-│   │   ├── structured_notes_db.py  # SQLite note, barriere, macro snapshots
+│   │   ├── structured_notes_db.py  # note, barriere, macro snapshots (SQLite o Postgres)
 │   │   ├── barrier_utils.py   # Clustering, confluenza, barrier_sign
 │   │   └── models.py          # StructuredNote, BarrierLevel dataclass
 │   │
@@ -175,6 +175,8 @@ python scripts/run_edgar.py --max 20
 ```
 
 Output: `data/structured_notes.db` con note strutturate e barriere attive.
+
+> **Database.** Senza `DATABASE_URL` tutto gira su SQLite in `data/` (sviluppo e test). In produzione (DigitalOcean) `DATABASE_URL=postgresql://…` punta a Postgres/Supabase e il job giornaliero gira su GitHub Actions (`.github/workflows/daily-pipeline.yml`). Passi di migrazione e cutover: [`docs/cutover-postgres.md`](docs/cutover-postgres.md).
 
 ### 2. Scarica prezzi e flussi ETF
 

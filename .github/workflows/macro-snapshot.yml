@@ -1,12 +1,12 @@
 name: Macro snapshot (giornaliero)
 
-# Fotografa funding rate e open interest dei perpetui BTC da CoinGecko e committa
-# il DB aggiornato su main.
+# Fotografa funding rate e open interest dei perpetui BTC/ETH da CoinGecko e li
+# scrive nel Postgres di produzione (secret DATABASE_URL).
 #
 # Serve a far maturare la finestra a 7 giorni della variazione di open interest:
-# CoinGecko dà il livello istantaneo, non la serie, e il filesystem di DO App
-# Platform è effimero — quindi lo storico deve stare nel DB versionato, esattamente
-# come le note SEC di edgar-refresh.yml.
+# CoinGecko dà il livello istantaneo, non la serie. Prima lo storico viveva nel
+# DB SQLite versionato e il workflow lo committava su main (un commit e un deploy
+# DO al giorno); ora vive in Postgres e il repo non viene più toccato.
 #
 # La chiave CoinGecko è facoltativa: l'endpoint /derivatives risponde anche senza.
 
@@ -16,15 +16,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write           # per committare il DB aggiornato
+  contents: read            # niente più commit del DB: si scrive su Postgres
 
 concurrency:
-  group: db-write           # non deve sovrapporsi a edgar-refresh: stesso file .db
+  group: db-write           # serializza i job che scrivono sul DB di produzione
   cancel-in-progress: false
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
+    # mai da branch di feature: scrive sul DB di produzione
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,6 +37,15 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Require DATABASE_URL (Postgres di produzione)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [[ -z "$DATABASE_URL" ]]; then
+            echo "::error::Secret DATABASE_URL non configurato: il job scrive solo su Postgres (vedi docs/cutover-postgres.md)."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
@@ -42,21 +53,8 @@ jobs:
         env:
           PYTHONPATH: .
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/cron_macro.py
-
-      - name: Commit DB if changed
-        run: |
-          if [[ -n "$(git status --porcelain data/structured_notes.db)" ]]; then
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add data/structured_notes.db
-            # rebase prima del push: edgar-refresh committa lo stesso file
-            git commit -m "chore(macro): snapshot giornaliero funding/OI"
-            git pull --rebase origin main
-            git push
-          else
-            echo "Nessuna modifica al DB — niente da committare."
-          fi
 
       - name: Notify Telegram on failure
         if: failure()

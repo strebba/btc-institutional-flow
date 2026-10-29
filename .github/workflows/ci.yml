@@ -57,6 +57,42 @@ jobs:
           Data: $(date -u +'%Y-%m-%d %H:%M UTC')
           Branch: ${GITHUB_REF_NAME}"
 
+  test-postgres:
+    name: Tests (Postgres)
+    runs-on: ubuntu-latest
+    # Stessa suite contro un Postgres usa-e-getta (service container, mai
+    # produzione): verifica che il backend DATABASE_URL resti compatibile.
+    # I test sqlite_only vengono saltati.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests on Postgres
+        env:
+          PYTHONPATH: .
+          BIF_TEST_BACKEND: postgres
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: pytest --tb=short -q
+
   docker-build:
     name: Docker build
     runs-on: ubuntu-latest

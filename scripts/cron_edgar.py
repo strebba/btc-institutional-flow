@@ -14,6 +14,7 @@ Variabili d'ambiente:
     EDGAR_USER_AGENT   Obbligatoria di fatto: "app/1.0 (email-reale)". Senza una
                        email valida la SEC può bannare l'IP (cfr. ToS EDGAR).
     EDGAR_LOOKBACK_DAYS  Giorni di finestra all'indietro (default 14).
+    DATABASE_URL       Postgres di produzione; se assente scrive su SQLite locale.
 
 Scheduling suggerito (crontab, una volta al giorno):
     30 6 * * *  EDGAR_USER_AGENT="ibit-gamma-tracker/1.0 (you@email)" \
@@ -73,8 +74,8 @@ def main() -> None:
 
     ids = db.upsert_notes(notes)
 
-    # Pre-calcola e persiste level_price_btc: così il DB versionato committato dal
-    # workflow contiene già i prezzi BTC, anche se il PriceFetcher runtime in
+    # Pre-calcola e persiste level_price_btc: così il DB di produzione
+    # contiene già i prezzi BTC, anche se il PriceFetcher runtime in
     # produzione fallisce. Non bloccante: un errore qui non deve far fallire il refresh.
     try:
         n_priced = refresh_barrier_btc_prices(db)
@@ -84,7 +85,7 @@ def main() -> None:
 
     db.record_refresh_run(filings_seen=len(filings), notes_written=len(ids), ok=True)
 
-    db.checkpoint()   # forza il WAL nel .db prima del commit git nel workflow
+    db.checkpoint()   # solo SQLite: consolida il WAL nel .db (no-op su Postgres)
     stats = db.summary()
 
     print(

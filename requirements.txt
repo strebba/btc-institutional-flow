@@ -28,6 +28,9 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 apscheduler>=3.10.4
 
+# Database di produzione (Postgres/Supabase via DATABASE_URL; SQLite resta il default)
+psycopg[binary]>=3.2
+
 # Testing
 pytest>=8.2
 pytest-cov>=5.0

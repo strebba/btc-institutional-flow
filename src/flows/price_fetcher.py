@@ -5,11 +5,10 @@ e gestisce il download incrementale (solo date mancanti).
 """
 from __future__ import annotations
 
-import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 
 import numpy as np
 import pandas as pd
@@ -17,6 +16,7 @@ import yfinance as yf
 
 from src.assets import get_asset
 from src.config import get_settings, setup_logging
+from src.db import connect, ensure_postgres_schema, is_postgres
 
 
 _log = setup_logging("flows.prices")
@@ -63,20 +63,15 @@ class PriceFetcher:
         self._init_schema()
 
     @contextmanager
-    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        conn = sqlite3.connect(self._path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        try:
+    def _conn(self) -> Generator[Any, None, None]:
+        """Connessione al backend attivo (SQLite su ``self._path`` o Postgres)."""
+        with connect(self._path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def _init_schema(self) -> None:
+        if is_postgres():
+            ensure_postgres_schema()
+            return
         with self._conn() as conn:
             conn.executescript(_DDL_PRICES)
 

@@ -96,6 +96,7 @@ class TestPreliminaryFlag:
             barriers=[BarrierLevel(barrier_type="knock_in", level_pct=70.0)],
         )
 
+    @pytest.mark.sqlite_only
     def test_schema_version_current(self, db):
         with db._conn() as conn:
             ver = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -344,6 +345,7 @@ class TestMacroSnapshotsMultiAsset:
         assert db.get_oi_change_pct(days=7) == pytest.approx(10.0, abs=0.01)
         assert db.get_oi_change_pct(days=7, asset="ETH") == pytest.approx(-10.0, abs=0.01)
 
+    @pytest.mark.sqlite_only
     def test_migra_lo_schema_senza_asset(self, tmp_path):
         import sqlite3
 

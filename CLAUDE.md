@@ -55,6 +55,11 @@ entrambi i repo. Su DO il backend e la dashboard Streamlit girano nello **stesso
 | `src/forecast/` | Predizioni dealer-flow, calibrazione pesi, validazione esiti |
 
 DB: SQLite in `data/` (`structured_notes.db` versionato + `runtime.db` gitignorato).
+**Backend unificato** (`src/db/`): con `DATABASE_URL=postgresql://…` tutte le classi DB
+scrivono su Postgres (produzione: Supabase; schema in `src/db/migrations/`); vuota ⇒ SQLite
+come sotto (dev/test). I test forzano SQLite; suite su Postgres locale con
+`BIF_TEST_BACKEND=postgres TEST_DATABASE_URL=postgresql://…@localhost/…`. Cutover e job
+giornaliero (`daily-pipeline.yml` → `scripts/cron_daily.py`): `docs/cutover-postgres.md`.
 `gex_snapshots` e `macro_snapshots` hanno la colonna `asset` (unicità data+asset); la
 migrazione dallo schema pre-ETH gira da sola all'avvio, è atomica e idempotente.
 `StructuredNotesDB` e `GexDB` puntano **sempre** a `structured_notes.db` (path hardcodato,
@@ -172,11 +177,11 @@ Per ETH valgono le stesse fonti con i simboli dello spec (`fetch_macro_data(asse
 `no_api_key`, `unavailable`.
 
 CoinGecko non ha storico, quindi la **variazione a 7 giorni dell'OI** arriva
-dalla tabella `macro_snapshots` nel DB versionato, alimentata da
-`scripts/cron_macro.py` + `.github/workflows/macro-snapshot.yml` (giornaliero,
-committa il DB). Lo storico non può stare in `runtime.db`: il filesystem DO è
-effimero e la finestra non maturerebbe mai. I due workflow che scrivono il DB
-condividono il gruppo di concorrenza `db-write`.
+dalla tabella `macro_snapshots`, alimentata da `scripts/cron_macro.py` +
+`.github/workflows/macro-snapshot.yml` (giornaliero, scrive su Postgres via secret
+`DATABASE_URL`; non committa più il DB). Lo storico non può stare su un file del
+container: il filesystem DO è effimero e la finestra non maturerebbe mai. I workflow
+che scrivono il DB di produzione condividono il gruppo di concorrenza `db-write`.
 
 ## API multi-asset
 
@@ -189,10 +194,11 @@ da ritarare quando ci sarà storico ETH). `cron_gex.py --asset {BTC,ETH,all}`.
 
 ## Refresh dati EDGAR (note IBIT)
 
-Il DB `data/structured_notes.db` è **versionato** (fonte di verità: filesystem DO effimero).
+In produzione le note vivono in Postgres (`DATABASE_URL`); `data/structured_notes.db` resta
+versionato come seed/fallback SQLite per sviluppo e test (non più aggiornato dai workflow).
 Refresh incrementale: `scripts/cron_edgar.py` (env `EDGAR_LOOKBACK_DAYS`, default 30); full:
 `make update-edgar`. Automazione: `.github/workflows/edgar-refresh.yml` (lunedì + backup
-mercoledì 06:30 UTC, committa il DB su `main` → deploy DO). Lo User-Agent SEC è in
+mercoledì 06:30 UTC, scrive su Postgres via secret `DATABASE_URL`; niente più commit del DB). Lo User-Agent SEC è in
 `config/settings.yaml` (email reale) — non servono variabili esterne. Override opzionale
 via env var `EDGAR_USER_AGENT`. In caso di fallimento, il workflow invia una notifica
 Telegram (richiede `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` nei Repository secrets).
