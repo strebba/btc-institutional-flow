@@ -13,7 +13,7 @@ target_spec è un dict serializzato in JSON nel DB. Schema per tipo:
 - direction: {"direction": "up|down|flat", "ref_price": float, "flat_band_pct": float}
 - level:     {"level_name": str, "level_price": float, "mode": "reach|break|respect",
               "side": "above|below", "ref_price": float}
-- prob:      {"event": str, "p": float}
+- prob:      {"event": str, "p": float, "ref_price": float}
 """
 from __future__ import annotations
 
