@@ -151,7 +151,8 @@ def build_dealer_flow_predictions(
     p_up = _prob_up_from_score(result.score)
     preds.append(Prediction(
         target_type=TARGET_PROB,
-        target_spec={"event": "btc_return_positive", "p": p_up},
+        # Stesso spot della direction: il return P(>0) si misura su quel ref.
+        target_spec={"event": "btc_return_positive", "p": p_up, "ref_price": spot_price},
         confidence=abs(p_up - 0.5) * 2.0,
         rationale=(
             f"P(BTC return > 0 a {horizon_days}g) = {p_up:.0%}, da score {result.score:.0f}."

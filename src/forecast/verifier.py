@@ -10,6 +10,7 @@ La finestra di valutazione va da created_at (escluso) a created_at + horizon_day
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
@@ -130,6 +131,38 @@ def _score_prob(pred, ref, realized_price, ret) -> Outcome:
     )
 
 
+def _cohort_key(pred: Prediction) -> tuple:
+    """Cohort giornaliera: stessa data, source, asset e orizzonte."""
+    return (pred.created_at[:10], pred.source, pred.asset, int(pred.horizon_days))
+
+
+def _align_prob_to_direction(pred: Prediction, direction: Prediction) -> Prediction:
+    """Valuta la prob sullo stesso ref e sulla stessa finestra della direction.
+
+    Le prob già persistite non hanno `ref_price` nello spec: senza questo
+    aggancio `score_prediction` usa la prima close della finestra, diversa
+    dallo spot salvato sulla direction della stessa cohort.
+    """
+    spec = dict(pred.target_spec)
+    ref = direction.target_spec.get("ref_price")
+    if ref:
+        spec["ref_price"] = ref
+    return replace(pred, target_spec=spec, created_at=direction.created_at)
+
+
+def _direction_anchors(db, due: list[Prediction]) -> dict[tuple, Prediction]:
+    """Direction della cohort, dalle predizioni due o già verificate."""
+    anchors = {_cohort_key(p): p for p in due if p.target_type == TARGET_DIRECTION}
+    if not any(p.target_type == TARGET_PROB and _cohort_key(p) not in anchors for p in due):
+        return anchors
+    for row in db.get_with_outcomes(days=400):
+        if row.get("target_type") != TARGET_DIRECTION:
+            continue
+        sib = Prediction.from_row(row)
+        anchors.setdefault(_cohort_key(sib), sib)
+    return anchors
+
+
 def score_due_predictions(
     db, price_provider: PriceProvider, asof: Optional[datetime] = None,
 ) -> list[Outcome]:
@@ -144,16 +177,22 @@ def score_due_predictions(
         Lista degli Outcome creati.
     """
     due = db.get_due(asof)
+    anchors = _direction_anchors(db, due)
     created: list[Outcome] = []
     for pred in due:
-        start = datetime.fromisoformat(pred.created_at).replace(tzinfo=timezone.utc)
-        end = pred.matures_at
+        scoring = pred
+        if pred.target_type == TARGET_PROB:
+            sib = anchors.get(_cohort_key(pred))
+            if sib is not None:
+                scoring = _align_prob_to_direction(pred, sib)
+        start = datetime.fromisoformat(scoring.created_at).replace(tzinfo=timezone.utc)
+        end = scoring.matures_at
         try:
             prices = price_provider(pred.asset, start, end)
         except Exception as exc:
             _log.warning("Prezzi non disponibili per pred %s: %s", pred.id, exc)
             continue
-        outcome = score_prediction(pred, prices)
+        outcome = score_prediction(scoring, prices)
         if outcome is None:
             _log.info("Dati insufficienti per pred %s, resta open", pred.id)
             continue

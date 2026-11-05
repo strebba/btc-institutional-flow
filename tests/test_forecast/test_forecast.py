@@ -227,3 +227,58 @@ def test_score_due_end_to_end(tmp_path):
     outcomes = score_due_predictions(db, provider)
     assert len(outcomes) == 1 and outcomes[0].hit is True
     assert db.get_open() == []  # ora scored
+
+
+def test_cohort_prob_scored_with_direction_ref_and_end_price(tmp_path):
+    """Prob e direction della stessa cohort condividono ref e prezzo di fine orizzonte.
+
+    Cohort sintetica sul 2026-10-31: lo spot salvato sulla direction (109_850) non
+    coincide con la prima close della finestra (110_420). Senza allineamento la prob
+    — priva di ref_price, come le cohort già persistite — usa quella close come ref.
+    """
+    db = PredictionDB(db_path=tmp_path / "cohort.db")
+    spot = 109_850.0
+    created = "2026-10-31T07:15:00"
+    built = build_dealer_flow_predictions(
+        _signal(62.0, SIGNAL_LONG),
+        spot_price=spot,
+        max_pain=108_000.0,
+        gamma_flip=107_000.0,
+        total_net_gex=2e8,
+        horizon_days=5,
+        created_at=created,
+    )
+    direction = next(p for p in built if p.target_type == TARGET_DIRECTION)
+    prob = next(p for p in built if p.target_type == TARGET_PROB)
+    assert prob.target_spec["ref_price"] == direction.target_spec["ref_price"] == spot
+
+    start = datetime.fromisoformat(created).replace(tzinfo=timezone.utc)
+    closes = [110_420.0, 109_900.0, 111_200.0, 108_750.0, 112_300.0]
+    prices = _prices(start, 5, closes)
+    direct_dir = score_prediction(direction, prices)
+    direct_prob = score_prediction(prob, prices)
+    assert direct_dir is not None and direct_prob is not None
+    assert direct_prob.ref_price == direct_dir.ref_price == spot
+    assert direct_prob.realized_price == direct_dir.realized_price == closes[-1]
+
+    # Forma legacy: la prob in DB non ha ref_price e un timestamp diverso nello stesso giorno.
+    legacy_prob = Prediction(
+        source=prob.source, asset=prob.asset, target_type=TARGET_PROB,
+        target_spec={"event": "btc_return_positive", "p": prob.target_spec["p"]},
+        horizon_days=prob.horizon_days, confidence=prob.confidence,
+        created_at="2026-10-31T07:15:04", score_ref=prob.score_ref,
+    )
+    assert db.insert_prediction(direction) is not None
+    assert db.insert_prediction(legacy_prob) is not None
+
+    def provider(asset, start, end):
+        return prices
+
+    outcomes = score_due_predictions(db, provider, start + timedelta(days=6))
+    by_type = {p.target_type: p for p in db.get_recent(limit=10)}
+    by_id = {o.prediction_id: o for o in outcomes}
+    d_out = by_id[by_type[TARGET_DIRECTION].id]
+    p_out = by_id[by_type[TARGET_PROB].id]
+    assert p_out.ref_price == d_out.ref_price == spot
+    assert p_out.ref_price != closes[0]
+    assert p_out.realized_price == d_out.realized_price == closes[-1]
