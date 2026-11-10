@@ -1,6 +1,7 @@
 """Rescore degli esiti già verificati sulle barre complete. Non tocca le predizioni."""
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -100,7 +101,12 @@ def test_dry_run_prints_diff_and_write_is_idempotent(tmp_path: Path, capsys):
     ]
     assert _table(db, "SELECT COUNT(*) FROM outcomes_archive") == [(0,)]
 
-    code = rescore_main(["--dry-run", "--db", str(path)])
+    # La suite Postgres ha DATABASE_URL sul database di test: il CLI si ferma
+    # senza --allow-postgres. In SQLite la variabile è vuota e basta --db.
+    argv = ["--dry-run", "--db", str(path)]
+    if os.environ.get("DATABASE_URL", "").strip():
+        argv.append("--allow-postgres")
+    code = rescore_main(argv)
     printed = capsys.readouterr().out
     assert code == 0
     assert "100" in printed and "110" in printed
@@ -157,9 +163,10 @@ def test_backfill_cli_dry_run_does_not_write(monkeypatch, tmp_path: Path, capsys
         "src.flows.price_fetcher.yf.download",
         lambda *args, **kwargs: _bars().assign(Close=[201, 202, 204, 208, 210]),
     )
-    code = backfill_main([
-        "--dry-run", "--db", str(path), "--asof", "2026-10-07", "--ticker", "BTC-USD",
-    ])
+    argv = ["--dry-run", "--db", str(path), "--asof", "2026-10-07", "--ticker", "BTC-USD"]
+    if os.environ.get("DATABASE_URL", "").strip():
+        argv.append("--allow-postgres")
+    code = backfill_main(argv)
     out = capsys.readouterr().out
     assert code == 0
     assert "2026-10-06" in out
