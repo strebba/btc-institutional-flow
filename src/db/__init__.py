@@ -86,6 +86,20 @@ def redact_url(url: str) -> str:
     return f"{parts.scheme}://{user}{host}{port}{parts.path}"
 
 
+def refuse_postgres_unless(allow: bool, tool: str) -> None:
+    """Ferma i tool di correzione locale se ``DATABASE_URL`` punta a Postgres.
+
+    Sul Mac si lanciano con ``DATABASE_URL=`` e un file SQLite. ``allow``
+    è il flag esplicito ``--allow-postgres``.
+    """
+    if get_database_url() and not allow:
+        raise SystemExit(
+            f"DATABASE_URL è impostata: {tool} non si collega a Postgres. "
+            "Sul Mac prefissa il comando con DATABASE_URL= e passa --db data/runtime.db. "
+            "Per scrivere su Postgres serve --allow-postgres."
+        )
+
+
 def require_postgres(context: str) -> str:
     """Restituisce l'URL Postgres o termina: per i job schedulati di produzione.
 

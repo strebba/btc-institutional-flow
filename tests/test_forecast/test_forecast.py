@@ -282,3 +282,40 @@ def test_cohort_prob_scored_with_direction_ref_and_end_price(tmp_path):
     assert p_out.ref_price == d_out.ref_price == spot
     assert p_out.ref_price != closes[0]
     assert p_out.realized_price == d_out.realized_price == closes[-1]
+
+
+def test_verifier_ignores_partial_horizon_end_bar():
+    """Il close di fine orizzonte deve essere la barra UTC chiusa, non lo spot infragiornaliero."""
+    created = datetime(2026, 10, 1, 7, 30, tzinfo=timezone.utc)
+    p = Prediction(
+        id=1, source="dealer_flow", asset="BTC", target_type=TARGET_DIRECTION,
+        target_spec={"direction": "up", "ref_price": 100.0, "flat_band_pct": 1.0},
+        horizon_days=5, confidence=0.6, created_at="2026-10-01T07:30:00",
+    )
+    prices = _prices(created, 5, [101, 102, 103, 104, 110])
+    prices["partial"] = [0, 0, 0, 0, 1]
+    assert score_prediction(p, prices) is None
+
+    prices["partial"] = 0
+    out = score_prediction(p, prices)
+    assert out is not None and out.hit is True
+    assert out.realized_price == pytest.approx(110)
+
+
+def test_verifier_partial_interior_bar_does_not_extend_the_range():
+    created = datetime(2026, 10, 1, 7, 30, tzinfo=timezone.utc)
+    p = Prediction(
+        id=2, source="dealer_flow", asset="BTC", target_type=TARGET_LEVEL,
+        target_spec={"level_name": "max_pain", "level_price": 150.0,
+                     "mode": "reach", "side": "above", "ref_price": 100.0},
+        horizon_days=5, confidence=0.4, created_at="2026-10-01T07:30:00",
+    )
+    prices = _prices(
+        created, 5, [100, 100, 100, 100, 101],
+        highs=[101, 101, 200, 101, 101],
+        lows=[99, 99, 99, 99, 99],
+    )
+    prices["partial"] = [0, 0, 1, 0, 0]
+    out = score_prediction(p, prices)
+    assert out is not None and out.hit is False
+    assert out.realized_price == pytest.approx(101)

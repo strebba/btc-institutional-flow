@@ -43,23 +43,15 @@ async def review_prediction(prediction_id: int, request: Request) -> JSONRespons
 @router.post("/api/predictions/verify")
 def verify_predictions() -> JSONResponse:
     try:
-        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        from datetime import datetime as _dt, timezone as _tz
         from src.flows.price_fetcher import PriceFetcher
         from src.forecast.prediction_db import PredictionDB
-        from src.forecast.verifier import score_due_predictions
+        from src.forecast.verifier import score_due_predictions, verification_price_provider
 
         db = PredictionDB()
-        fetcher = PriceFetcher()
-        from src.config import TICKER_MAP
-
-        def provider(asset, start, end):
-            return fetcher.fetch(
-                TICKER_MAP.get(asset, asset),
-                start_date=start.date(),
-                end_date=(end + _td(days=1)).date(),
-            )
-
-        outcomes = score_due_predictions(db, provider, _dt.now(_tz.utc))
+        outcomes = score_due_predictions(
+            db, verification_price_provider(PriceFetcher()), _dt.now(_tz.utc),
+        )
         hits = sum(1 for o in outcomes if o.hit)
         return ok({"verified": len(outcomes), "hit": hits, "miss": len(outcomes) - hits})
     except Exception as exc:
