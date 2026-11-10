@@ -313,3 +313,25 @@ class PredictionDB:
     def count(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+
+    def has_cohort(
+        self,
+        date: str,
+        *,
+        source: str,
+        horizon_days: Optional[int] = None,
+    ) -> bool:
+        """True se esiste già almeno una predizione della cohort di quel giorno.
+
+        La data è la colonna ``date`` (``created_at`` UTC, ``YYYY-MM-DD``), la stessa
+        che lo unique index ``idx_pred_day_unique`` usa per impedire un secondo set
+        nello stesso giorno. ``horizon_days`` restringe al job giornaliero (default 5).
+        """
+        q = "SELECT 1 FROM predictions WHERE date = ? AND source = ?"
+        params: list[Any] = [date, source]
+        if horizon_days is not None:
+            q += " AND horizon_days = ?"
+            params.append(int(horizon_days))
+        q += " LIMIT 1"
+        with self._conn() as conn:
+            return conn.execute(q, params).fetchone() is not None

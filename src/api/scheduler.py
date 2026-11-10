@@ -168,6 +168,155 @@ async def start_maintenance_scheduler():
 
 # ─── Forecast scheduler ──────────────────────────────────────────────────────
 
+# Valori espliciti. Qualsiasi altra stringa (typo) lascia il default: acceso.
+_CATCHUP_ON = {"1", "true", "yes", "on"}
+_CATCHUP_OFF = {"0", "false", "no", "off"}
+
+
+def forecast_catchup_enabled() -> bool:
+    """Catch-up all'avvio. Default acceso; ``FORECAST_CATCHUP_ENABLED`` lo spegne."""
+    raw = os.getenv("FORECAST_CATCHUP_ENABLED")
+    if raw is None or not raw.strip():
+        return True
+    value = raw.strip().lower()
+    if value in _CATCHUP_OFF:
+        return False
+    if value not in _CATCHUP_ON:
+        _log.warning(
+            "[forecast] FORECAST_CATCHUP_ENABLED=%r non riconosciuto — catch-up resta attivo",
+            raw.strip(),
+        )
+    return True
+
+
+def _as_utc(now: datetime) -> datetime:
+    if now.tzinfo is None:
+        return now.replace(tzinfo=timezone.utc)
+    return now.astimezone(timezone.utc)
+
+
+def _slot_reached(now: datetime, hour: int, minute: int) -> bool:
+    """True se l'orario UTC di oggi ha già raggiunto lo slot (come il cron giornaliero)."""
+    return (now.hour, now.minute) >= (int(hour), int(minute))
+
+
+def _forecast_slots(fc: dict | None) -> dict[str, int]:
+    """Orari dello scheduler. Stessi default di ``start_forecast_scheduler``."""
+    fc = fc if fc is not None else get_settings().get("forecast", {})
+    schedule = fc.get("schedule", {}) or {}
+    return {
+        "predict_hour": int(schedule.get("predict_hour_utc", 7)),
+        "predict_minute": int(schedule.get("predict_minute_utc", 30)),
+        "verify_hour": int(schedule.get("verify_hour_utc", 8)),
+        "verify_minute": int(schedule.get("verify_minute_utc", 0)),
+        "horizon": int(fc.get("horizon_days", 5)),
+    }
+
+
+def run_forecast_startup_catchup(
+    fc: dict | None = None,
+    *,
+    now: datetime | None = None,
+    db: Any = None,
+) -> dict[str, Any]:
+    """Se il processo parte dopo lo slot del giorno, esegue predict e/o verify una volta.
+
+    APScheduler in-memory, al boot, calcola solo il prossimo fire futuro: uno slot
+    già passato oggi non è un misfire (``misfire_grace_time`` vale solo per un
+    next_run_time già persistito). Senza questo, un avvio dopo le 07:30 UTC non
+    crea la cohort del giorno.
+
+    Idempotenza: prima di predict si controlla la cohort (data UTC + source +
+    orizzonte). Se due processi passano il controllo insieme, ``idx_pred_day_unique``
+    fa ignorare il secondo insert. Verify è quello esistente: marca solo le
+    predizioni mature ancora open e non riscrive gli esiti già presenti.
+    """
+    from src.forecast.jobs import run_daily_predict, run_daily_verify
+    from src.forecast.prediction_db import PredictionDB
+    from src.forecast.sources.dealer_flow import SOURCE as DEALER_FLOW
+
+    now_utc = _as_utc(now or datetime.now(timezone.utc))
+    date = now_utc.strftime("%Y-%m-%d")
+    slots = _forecast_slots(fc)
+    result: dict[str, Any] = {
+        "enabled": forecast_catchup_enabled(),
+        "date": date,
+        "predict": "skipped_disabled",
+        "verify": "skipped_disabled",
+        "predict_result": None,
+        "verify_result": None,
+    }
+    if not result["enabled"]:
+        _log.info(
+            "[forecast] catch-up skip: FORECAST_CATCHUP_ENABLED disabilitato (data %s)",
+            date,
+        )
+        return result
+
+    db = db or PredictionDB()
+    stamp = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    predict_at = f"{slots['predict_hour']:02d}:{slots['predict_minute']:02d}"
+    verify_at = f"{slots['verify_hour']:02d}:{slots['verify_minute']:02d}"
+
+    if not _slot_reached(now_utc, slots["predict_hour"], slots["predict_minute"]):
+        result["predict"] = "skipped_before_slot"
+        _log.info(
+            "[forecast] catch-up predict skip: prima dello slot %s UTC (now %s)",
+            predict_at, stamp,
+        )
+    elif db.has_cohort(date, source=DEALER_FLOW, horizon_days=slots["horizon"]):
+        result["predict"] = "skipped_exists"
+        _log.info(
+            "[forecast] catch-up predict skip: cohort %s già presente per %s",
+            DEALER_FLOW, date,
+        )
+    else:
+        result["predict"] = "ran"
+        _log.info(
+            "[forecast] catch-up predict: slot %s UTC passato, nessuna cohort per %s"
+            " — eseguo run_daily_predict",
+            predict_at, date,
+        )
+        try:
+            result["predict_result"] = run_daily_predict(
+                horizon=slots["horizon"], db=db, asof=now_utc,
+            )
+        except Exception:
+            result["predict"] = "error"
+            _log.exception("[forecast] catch-up predict fallito per %s", date)
+        else:
+            _log.info("[forecast] catch-up predict risultato: %s", result["predict_result"])
+
+    if not _slot_reached(now_utc, slots["verify_hour"], slots["verify_minute"]):
+        result["verify"] = "skipped_before_slot"
+        _log.info(
+            "[forecast] catch-up verify skip: prima dello slot %s UTC (now %s)",
+            verify_at, stamp,
+        )
+    else:
+        result["verify"] = "ran"
+        _log.info(
+            "[forecast] catch-up verify: slot %s UTC passato — eseguo run_daily_verify"
+            " (solo predizioni mature)",
+            verify_at,
+        )
+        try:
+            result["verify_result"] = run_daily_verify(db=db)
+        except Exception:
+            result["verify"] = "error"
+            _log.exception("[forecast] catch-up verify fallito per %s", date)
+        else:
+            _log.info("[forecast] catch-up verify risultato: %s", result["verify_result"])
+
+    return result
+
+
+async def _catch_up_forecast_jobs(fc: dict) -> None:
+    try:
+        await asyncio.to_thread(run_forecast_startup_catchup, fc)
+    except Exception:
+        _log.exception("[forecast] catch-up fallito")
+
 
 async def _job_predict() -> None:
     from src.forecast.jobs import run_daily_predict
@@ -228,7 +377,17 @@ async def start_forecast_scheduler():
         )
         sch.start()
         _forecast_scheduler = sch
-        _log.info("[forecast] scheduler avviato (predict/verify/calibrate)")
+        _log.info(
+            "[forecast] scheduler avviato — predict %02d:%02d verify %02d:%02d UTC, "
+            "catch-up=%s (FORECAST_CATCHUP_ENABLED)",
+            int(s.get("predict_hour_utc", 7)),
+            int(s.get("predict_minute_utc", 30)),
+            int(s.get("verify_hour_utc", 8)),
+            int(s.get("verify_minute_utc", 0)),
+            "on" if forecast_catchup_enabled() else "off",
+        )
+        # Il cron in-memory non recupera lo slot di oggi se il processo parte dopo.
+        asyncio.create_task(_catch_up_forecast_jobs(fc))
     except Exception:
         _log.exception("[forecast] scheduler startup failed")
 

@@ -18,12 +18,28 @@ from src.forecast.sources.dealer_flow import build_dealer_flow_predictions
 _log = setup_logging("forecast.jobs")
 
 
+def _cohort_timestamp(asof: datetime) -> str:
+    """ISO UTC senza microsecondi, stesso formato di ``Prediction.created_at``."""
+    if asof.tzinfo is None:
+        asof = asof.replace(tzinfo=timezone.utc)
+    else:
+        asof = asof.astimezone(timezone.utc)
+    return asof.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def _governance() -> dict:
     return load_weights_config().get("governance", {})
 
 
-def run_daily_predict(*, horizon: int = 5, db: Optional[PredictionDB] = None) -> dict:
-    """Genera le predizioni dealer-flow del giorno (status open). Rispetta il kill-switch."""
+def run_daily_predict(*, horizon: int = 5, db: Optional[PredictionDB] = None,
+                      asof: Optional[datetime] = None) -> dict:
+    """Genera le predizioni dealer-flow del giorno (status open). Rispetta il kill-switch.
+
+    ``asof`` fissa il timestamp UTC della cohort (la data è ``created_at[:10]``).
+    Senza, ogni predizione usa l'istante di costruzione: stesso giorno, stesso effetto
+    sull'idempotenza per-data. Il catch-up all'avvio lo passa per allineare la cohort
+    alla data UTC già controllata.
+    """
     from src.forecast.context import DataUnavailable, gather_dealer_flow_context
 
     if _governance().get("kill_switch", False):
@@ -41,12 +57,14 @@ def run_daily_predict(*, horizon: int = 5, db: Optional[PredictionDB] = None) ->
         _log.error("[predict] dati non disponibili: %s", exc)
         return {"status": "data_unavailable", "error": str(exc), "inserted": 0}
 
+    created_at = _cohort_timestamp(asof) if asof is not None else None
     snap = ctx.snapshot
     preds = build_dealer_flow_predictions(
         ctx.result, spot_price=ctx.spot,
         gamma_flip=snap.gamma_flip_price, max_pain=snap.max_pain,
         total_net_gex=snap.total_net_gex, horizon_days=horizon,
         weights_version=weights_version,
+        created_at=created_at,
     )
     inserted = sum(1 for p in preds if db.insert_prediction(p) is not None)
     _log.info("[predict] %s score=%.1f → %d/%d salvate",

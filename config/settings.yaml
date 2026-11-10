@@ -116,6 +116,8 @@ dashboard:
 # ─── FORECAST (spine predizione → esito → calibrazione) ───────────────────────────
 forecast:
   enabled: true              # false = scheduler forecast non avviato
+  # Catch-up all'avvio se il processo parte dopo lo slot del giorno (UTC).
+  # FORECAST_CATCHUP_ENABLED=false|0|no|off lo spegne; default acceso.
   horizon_days: 5            # orizzonte di default delle predizioni dealer-flow
   freshness_max_hours: 30    # oltre questo, /api/forecast/status segnala dati stale
   schedule:
