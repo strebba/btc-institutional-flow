@@ -422,6 +422,7 @@ def walk_forward(
     refit_every: int = REFIT_EVERY,
     median_lookback: int = MEDIAN_LOOKBACK,
     z_grid: Sequence[float] = (),
+    params_mode: str = "refit",
 ) -> dict[str, Any]:
     """Una decisione per ogni origine con abbastanza storia.
 
@@ -429,6 +430,11 @@ def walk_forward(
     (il verifier). ``latest`` è la decisione sull'ultima barra chiusa, senza
     esito. ``excursions`` sono le escursioni ``/σ`` delle finestre già chiuse
     prima di ``latest`` (sopra e sotto, insieme).
+
+    ``params_mode="refit"`` ristima il GARCH ogni ``refit_every`` origini, solo
+    sui rendimenti già noti (è il verifier). ``params_mode="once"`` stima una
+    volta sull'intero frame già chiuso e riusa quei parametri: è il predict
+    live, che non può permettersi centinaia di fit a ogni cohort.
     """
     df = prepare_bars(bars, asof=asof)
     empty: dict[str, Any] = {
@@ -454,6 +460,10 @@ def walk_forward(
 
     model: _VolModel | None = None
     fit_at = -10**9
+    # "once": un solo fit sui rendimenti del frame (già tagliato a asof).
+    frozen: _VolModel | None = None
+    if params_mode == "once" and len(log_ret) >= MIN_RETURNS:
+        frozen = fit_vol(log_ret)
     ratios: list[float] = []
     excursions: list[float] = []
     pending: deque[tuple[int, float, float, float]] = deque()
@@ -474,7 +484,9 @@ def walk_forward(
         r = log_ret[: origin - 1]
         if len(r) < MIN_RETURNS:
             continue
-        if model is None or origin - fit_at >= refit_every or origin == n:
+        if frozen is not None:
+            model = frozen
+        elif model is None or origin - fit_at >= refit_every or origin == n:
             model = fit_vol(r)
             fit_at = origin
         assert model is not None
@@ -615,7 +627,7 @@ def build_risk_map(
     ref = float(ref_price)
     if not math.isfinite(ref) or ref <= 0:
         raise ValueError("ref_price deve essere positivo")
-    wf = walk_forward(bars, asof=asof, horizon=horizon, z_grid=())
+    wf = walk_forward(bars, asof=asof, horizon=horizon, z_grid=(), params_mode="once")
     latest = wf["latest"] or {}
     sigma_h = latest.get("sigma_h")
     median = latest.get("median_log_range")

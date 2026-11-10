@@ -96,9 +96,15 @@ def _direction(created_at: str, *, horizon: int = 5) -> Prediction:
 
 @pytest.fixture
 def live_predict():
-    """Predict reale su DB di test; il confine di rete è mockato."""
+    """Predict reale su DB di test; il confine di rete è mockato.
+
+    La risk map (Binance + note EDGAR) è un altro confine di rete: senza il
+    mock due catch-up concorrenti restano appesi al download e allo schema
+    del DB versionato, oltre il join di 10 secondi.
+    """
     with patch("src.forecast.jobs._governance", return_value={"kill_switch": False}), \
-         patch("src.forecast.context.gather_dealer_flow_context", return_value=_context()):
+         patch("src.forecast.context.gather_dealer_flow_context", return_value=_context()), \
+         patch("src.forecast.jobs.load_risk_map_context", return_value=(None, [])):
         yield
 
 
