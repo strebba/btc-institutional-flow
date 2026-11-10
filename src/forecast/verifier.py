@@ -165,18 +165,28 @@ def _direction_anchors(db, due: list[Prediction]) -> dict[tuple, Prediction]:
 
 def score_due_predictions(
     db, price_provider: PriceProvider, asof: Optional[datetime] = None,
+    *,
+    only_ids: Optional[set[int]] = None,
 ) -> list[Outcome]:
-    """Verifica tutte le predizioni mature nel DB e persiste gli esiti.
+    """Verifica le predizioni mature nel DB e persiste gli esiti.
+
+    Le formule di ``score_prediction`` non cambiano. ``only_ids``, se passato,
+    limita la scrittura alle predizioni con quegli id: le altre coorti mature
+    restano aperte e gli esiti già presenti non vengono ricalcolati
+    (``insert_outcome`` è INSERT OR IGNORE).
 
     Args:
         db: PredictionDB.
         price_provider: callable (asset, start, end) → DataFrame prezzi.
         asof: istante di riferimento (default now UTC).
+        only_ids: sottoinsieme di id da verificare. None = tutte le mature.
 
     Returns:
         Lista degli Outcome creati.
     """
     due = db.get_due(asof)
+    if only_ids is not None:
+        due = [p for p in due if p.id in only_ids]
     anchors = _direction_anchors(db, due)
     created: list[Outcome] = []
     for pred in due:

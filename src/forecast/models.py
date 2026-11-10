@@ -41,6 +41,18 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _load_metadata(raw: Any) -> Optional[dict[str, Any]]:
+    """JSON della colonna ``metadata``. Assente o NULL sulle righe precedenti."""
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        loaded = json.loads(raw)
+        return loaded if isinstance(loaded, dict) else None
+    return None
+
+
 # ─── Prediction ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -62,6 +74,8 @@ class Prediction:
         components: contributi normalizzati delle componenti del segnale (per la calibrazione).
         weights_version: id della versione pesi attiva usata (per audit della calibrazione).
         status: STATUS_OPEN finché non verificata, poi STATUS_SCORED.
+        metadata: JSON opzionale. Le coorti ricostruite portano
+            ``{"reconstructed": true, ...}``; le righe live restano senza metadata.
         id: chiave primaria (assegnata dal DB).
     """
 
@@ -80,6 +94,7 @@ class Prediction:
     weights_version: Optional[int] = None
     model_version: str = "v1"
     status: str = STATUS_OPEN
+    metadata: Optional[dict[str, Any]] = None
     id: Optional[int] = None
 
     def __post_init__(self) -> None:
@@ -120,6 +135,9 @@ class Prediction:
             "weights_version": self.weights_version,
             "model_version": self.model_version,
             "status": self.status,
+            "metadata": (
+                json.dumps(self.metadata, ensure_ascii=False) if self.metadata else None
+            ),
         }
 
     @classmethod
@@ -141,6 +159,7 @@ class Prediction:
             weights_version=row.get("weights_version"),
             model_version=row.get("model_version") or "v1",
             status=row.get("status", STATUS_OPEN),
+            metadata=_load_metadata(row.get("metadata")),
         )
 
 

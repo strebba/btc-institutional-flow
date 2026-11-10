@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     weights_version  INTEGER,
     model_version    TEXT NOT NULL DEFAULT 'v1',
     status           TEXT NOT NULL DEFAULT 'open',
+    metadata         TEXT,                   -- JSON; NULL sulle righe live
     UNIQUE(created_at, source, target_type, horizon_days)
 );
 CREATE INDEX IF NOT EXISTS idx_pred_status ON predictions(status);
@@ -77,8 +78,30 @@ CREATE INDEX IF NOT EXISTS idx_wv_source_active ON weight_versions(source, activ
 _PRED_COLS = (
     "created_at, date, source, asset, target_type, target_spec, horizon_days, "
     "confidence, rationale, counter_analysis, human_overlay, score_ref, "
-    "components, weights_version, model_version, status"
+    "components, weights_version, model_version, status, metadata"
 )
+
+
+class CohortExistsError(RuntimeError):
+    """La coorte (date, source) è già nel DB: non viene sovrascritta."""
+
+    def __init__(self, day: str, source: str) -> None:
+        super().__init__(f"coorte già presente per {day} source={source}")
+        self.day = day
+        self.source = source
+
+
+def _insert_sql() -> str:
+    placeholders = ",".join("?" for _ in _PRED_COLS.split(","))
+    return (
+        f"INSERT OR IGNORE INTO predictions ({_PRED_COLS}) VALUES ({placeholders}) "
+        "RETURNING id"
+    )
+
+
+def _pred_values(pred: Prediction) -> tuple:
+    row = pred.to_row()
+    return tuple(row[c.strip()] for c in _PRED_COLS.split(","))
 
 
 class PredictionDB:
@@ -135,23 +158,58 @@ class PredictionDB:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_day_unique "
                 "ON predictions(date, source, target_type, horizon_days)"
             )
+            # Flag di ricostruzione: colonna nullable, le righe esistenti restano NULL.
+            pred_cols = {r["name"] for r in conn.execute("PRAGMA table_info(predictions)")}
+            if "metadata" not in pred_cols:
+                conn.execute("ALTER TABLE predictions ADD COLUMN metadata TEXT")
 
     # ─── Predictions ────────────────────────────────────────────────────────
 
     def insert_prediction(self, pred: Prediction) -> Optional[int]:
         """Inserisce una previsione. Restituisce l'id, o None se duplicata."""
-        row = pred.to_row()
-        placeholders = ",".join("?" for _ in _PRED_COLS.split(","))
         with self._conn() as conn:
-            cur = conn.execute(
-                f"INSERT OR IGNORE INTO predictions ({_PRED_COLS}) VALUES ({placeholders}) "
-                "RETURNING id",
-                tuple(row[c.strip()] for c in _PRED_COLS.split(",")),
-            )
+            cur = conn.execute(_insert_sql(), _pred_values(pred))
             # RETURNING (non lastrowid): funziona su SQLite e Postgres; nessuna riga se ignorata.
             # fetchall (non fetchone): esaurisce lo statement prima del commit su SQLite.
             inserted = cur.fetchall()
         return int(inserted[0][0]) if inserted else None
+
+    def insert_cohort(self, preds: list[Prediction]) -> list[int]:
+        """Inserisce un'intera coorte in una transazione, senza toccare le altre.
+
+        Se esiste già una riga per la stessa data e source, non scrive nulla
+        e solleva ``CohortExistsError`` (rollback).
+        """
+        if not preds:
+            return []
+        day = preds[0].to_row()["date"]
+        source = preds[0].source
+        if any(p.to_row()["date"] != day or p.source != source for p in preds):
+            raise ValueError("insert_cohort richiede una sola data e una sola source")
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT COUNT(*) FROM predictions WHERE date = ? AND source = ?",
+                (day, source),
+            ).fetchone()[0]
+            if existing:
+                raise CohortExistsError(day, source)
+            ids: list[int] = []
+            for pred in preds:
+                cur = conn.execute(_insert_sql(), _pred_values(pred))
+                inserted = cur.fetchall()
+                if not inserted:
+                    raise CohortExistsError(day, source)
+                ids.append(int(inserted[0][0]))
+            return ids
+
+    def predictions_on_date(self, day: str, source: str) -> list[Prediction]:
+        """Righe di una coorte (data + source), senza filtrare per status."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM predictions WHERE date = ? AND source = ? ORDER BY id ASC",
+                (day, source),
+            ).fetchall()
+        return [Prediction.from_row(dict(r)) for r in rows]
 
     def update_human_fields(
         self,

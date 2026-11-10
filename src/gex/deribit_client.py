@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -24,6 +25,22 @@ _log = setup_logging("gex.deribit")
 # requests from different endpoints don't collectively exceed Deribit's rate limit.
 _global_throttle_lock = threading.Lock()
 _global_last_request: float = 0.0
+
+
+def parse_index_chart(result: Any) -> list[tuple[datetime, float]]:
+    """Converte il result di get_index_chart_data in punti (timestamp, prezzo)."""
+    points: list[tuple[datetime, float]] = []
+    if not isinstance(result, list):
+        return points
+    for item in result:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        try:
+            ts = datetime.fromtimestamp(float(item[0]) / 1000.0, tz=timezone.utc)
+            points.append((ts, float(item[1])))
+        except (TypeError, ValueError, OSError):
+            continue
+    return points
 
 
 def _is_retryable_error(exc: Exception) -> bool:
@@ -192,6 +209,21 @@ class DeribitClient:
         index_name = get_asset(asset).deribit_index
         result = self._get("/get_index_price", {"index_name": index_name})
         return float(result["index_price"])
+
+    def get_index_chart(
+        self, index_name: str = "btc_usd", chart_range: str = "1m",
+    ) -> list[tuple[datetime, float]]:
+        """Storico dell'indice (public/get_index_chart_data).
+
+        Ogni punto è ``(timestamp UTC, prezzo medio)``. ``chart_range`` è uno
+        di 1h, 1d, 2d, 1m, 1y, all: la finestra è ancorata a *adesso*, non a
+        una data. Il chiamante deve scartare i punti successivi allo slot.
+        """
+        result = self._get(
+            "/get_index_chart_data",
+            {"index_name": index_name, "range": chart_range},
+        )
+        return parse_index_chart(result)
 
     def get_instruments(
         self,
