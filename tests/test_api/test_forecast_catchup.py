@@ -115,19 +115,26 @@ def test_late_start_without_cohort_creates_one(db: PredictionDB, live_predict, c
     assert first["date"] == TODAY
     assert first["predict"] == "ran"
     assert first["predict_result"]["status"] == "ok"
-    assert first["predict_result"]["inserted"] == first["predict_result"]["total"] == 3
+    # v1 (3) e l'ombra v2 (3) nello stesso slot. Lo score 72 non astiene e il
+    # max pain è entro il 4%, quindi v2 ha gli stessi tre target.
+    assert first["predict_result"]["inserted"] == first["predict_result"]["total"] == 6
+    assert first["predict_result"]["v1"] == 3
+    assert first["predict_result"]["v2"] == 3
+    assert first["predict_v2"] == "ran_with_v1"
     assert first["verify"] == "ran"
     assert first["verify_result"]["verified"] == 0
 
     cohort = _cohort(db, TODAY)
-    assert len(cohort) == 3
+    assert len(cohort) == 6
+    assert {p.source for p in cohort} == {"dealer_flow", "dealer_flow_v2"}
     assert {p.target_type for p in cohort} == {"direction", "level", "prob"}
     assert {p.created_at for p in cohort} == {f"{TODAY}T16:10:00"}
     assert all(p.status == "open" for p in cohort)
 
     assert second["predict"] == "skipped_exists"
+    assert second["predict_v2"] == "skipped_exists"
     assert second["predict_result"] is None
-    assert len(_cohort(db, TODAY)) == 3
+    assert len(_cohort(db, TODAY)) == 6
     assert f"nessuna cohort per {TODAY}" in caplog.text
     assert f"cohort dealer_flow già presente per {TODAY}" in caplog.text
 
@@ -142,11 +149,19 @@ def test_existing_cohort_skips_without_calling_predict(db: PredictionDB, caplog)
 
     predict.assert_not_called()
     assert result["predict"] == "skipped_exists"
-    assert len(db.get_recent(limit=20)) == 1
+    assert result["predict_v2"] == "ran"
     rows = db.get_recent(limit=20)
-    assert rows[0].created_at == f"{TODAY}T07:30:00"
-    assert rows[0].status == "open"
+    v1 = [p for p in rows if p.source == "dealer_flow"]
+    v2 = [p for p in rows if p.source == "dealer_flow_v2"]
+    assert len(v1) == 1
+    assert v1[0].created_at == f"{TODAY}T07:30:00"
+    assert v1[0].status == "open"
+    assert v1[0].target_spec["direction"] == "up"
+    # Senza score_ref la v2 astiene sulla direction e non inventa un livello.
+    assert v2 and {p.target_type for p in v2} == {"prob"}
+    assert all(p.created_at == f"{TODAY}T07:30:00" for p in v2)
     assert "catch-up predict skip" in caplog.text
+    assert "shadow v2" in caplog.text
 
 
 def test_concurrent_double_trigger_no_duplicate(db: PredictionDB, live_predict):
@@ -189,9 +204,10 @@ def test_concurrent_double_trigger_no_duplicate(db: PredictionDB, live_predict):
     assert all(item is not None and item["predict"] == "ran" for item in results)
     inserted = sum(item["predict_result"]["inserted"] for item in results if item)
     cohort = _cohort(db, TODAY)
-    assert inserted == 3
-    assert len(cohort) == 3
-    assert len({(p.source, p.target_type, p.horizon_days) for p in cohort}) == 3
+    assert inserted == 6
+    assert len(cohort) == 6
+    # Due source × tre target: l'indice per (date, source, target, horizon) non collide.
+    assert len({(p.source, p.target_type, p.horizon_days) for p in cohort}) == 6
 
 
 def test_before_predict_slot_does_not_create_cohort(db: PredictionDB, caplog):
@@ -216,7 +232,8 @@ def test_predict_slot_runs_verify_waits_for_its_own_slot(db: PredictionDB, live_
     assert result["predict"] == "ran"
     assert result["verify"] == "skipped_before_slot"
     verify.assert_not_called()
-    assert len(_cohort(db, TODAY)) == 3
+    assert len(_cohort(db, TODAY)) == 6
+    assert {p.source for p in _cohort(db, TODAY)} == {"dealer_flow", "dealer_flow_v2"}
 
 
 def test_yesterday_cohort_does_not_satisfy_today(db: PredictionDB, live_predict):
@@ -228,7 +245,8 @@ def test_yesterday_cohort_does_not_satisfy_today(db: PredictionDB, live_predict)
     assert result["predict"] == "ran"
     today = _cohort(db, TODAY)
     yesterday = _cohort(db, YESTERDAY)
-    assert len(today) == 3
+    assert len(today) == 6
+    assert {p.source for p in today} == {"dealer_flow", "dealer_flow_v2"}
     assert len(yesterday) == 1
     assert yesterday[0].id == yesterday_id
     assert yesterday[0].status == "open"
@@ -308,8 +326,9 @@ def test_custom_schedule_slots_are_honored(db: PredictionDB, live_predict):
         fc, now=datetime(2026, 11, 5, 9, 15, tzinfo=timezone.utc), db=db,
     )
     assert at_predict["predict"] == "ran"
+    assert at_predict["predict_v2"] == "ran_with_v1"
     assert at_predict["verify"] == "skipped_before_slot"
-    assert len(_cohort(db, "2026-11-05")) == 3
+    assert len(_cohort(db, "2026-11-05")) == 6
 
 
 @pytest.mark.parametrize("value,expected", [

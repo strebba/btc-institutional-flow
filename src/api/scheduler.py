@@ -226,14 +226,18 @@ def run_forecast_startup_catchup(
     next_run_time già persistito). Senza questo, un avvio dopo le 07:30 UTC non
     crea la cohort del giorno.
 
-    Idempotenza: prima di predict si controlla la cohort (data UTC + source +
+    Idempotenza: prima di predict si controlla la cohort v1 (data UTC + source +
     orizzonte). Se due processi passano il controllo insieme, ``idx_pred_day_unique``
-    fa ignorare il secondo insert. Verify è quello esistente: marca solo le
+    fa ignorare il secondo insert. ``run_daily_predict`` scrive anche la cohort
+    ombra ``dealer_flow_v2`` (source diversa: l'indice di v1 non si tocca). Se v1
+    c'è già e v2 no, v2 si ricostruisce dagli input salvati, senza un secondo
+    gather e senza riscrivere v1. Verify è quello esistente: marca solo le
     predizioni mature ancora open e non riscrive gli esiti già presenti.
     """
-    from src.forecast.jobs import run_daily_predict, run_daily_verify
+    from src.forecast.jobs import run_daily_predict, run_daily_verify, run_shadow_catchup
     from src.forecast.prediction_db import PredictionDB
     from src.forecast.sources.dealer_flow import SOURCE as DEALER_FLOW
+    from src.forecast.sources.dealer_flow_v2 import SOURCE as DEALER_FLOW_V2
 
     now_utc = _as_utc(now or datetime.now(timezone.utc))
     date = now_utc.strftime("%Y-%m-%d")
@@ -242,8 +246,10 @@ def run_forecast_startup_catchup(
         "enabled": forecast_catchup_enabled(),
         "date": date,
         "predict": "skipped_disabled",
+        "predict_v2": "skipped_disabled",
         "verify": "skipped_disabled",
         "predict_result": None,
+        "predict_v2_result": None,
         "verify_result": None,
     }
     if not result["enabled"]:
@@ -260,18 +266,14 @@ def run_forecast_startup_catchup(
 
     if not _slot_reached(now_utc, slots["predict_hour"], slots["predict_minute"]):
         result["predict"] = "skipped_before_slot"
+        result["predict_v2"] = "skipped_before_slot"
         _log.info(
             "[forecast] catch-up predict skip: prima dello slot %s UTC (now %s)",
             predict_at, stamp,
         )
-    elif db.has_cohort(date, source=DEALER_FLOW, horizon_days=slots["horizon"]):
-        result["predict"] = "skipped_exists"
-        _log.info(
-            "[forecast] catch-up predict skip: cohort %s già presente per %s",
-            DEALER_FLOW, date,
-        )
-    else:
+    elif not db.has_cohort(date, source=DEALER_FLOW, horizon_days=slots["horizon"]):
         result["predict"] = "ran"
+        result["predict_v2"] = "ran_with_v1"
         _log.info(
             "[forecast] catch-up predict: slot %s UTC passato, nessuna cohort per %s"
             " — eseguo run_daily_predict",
@@ -283,9 +285,39 @@ def run_forecast_startup_catchup(
             )
         except Exception:
             result["predict"] = "error"
+            result["predict_v2"] = "error"
             _log.exception("[forecast] catch-up predict fallito per %s", date)
         else:
             _log.info("[forecast] catch-up predict risultato: %s", result["predict_result"])
+    else:
+        # v1 c'è già: non si rilancia (idx_pred_day_unique) e non si rifà il gather.
+        result["predict"] = "skipped_exists"
+        _log.info(
+            "[forecast] catch-up predict skip: cohort %s già presente per %s",
+            DEALER_FLOW, date,
+        )
+        if db.has_cohort(date, source=DEALER_FLOW_V2, horizon_days=slots["horizon"]):
+            result["predict_v2"] = "skipped_exists"
+            _log.info(
+                "[forecast] catch-up shadow v2 skip: cohort %s già presente per %s",
+                DEALER_FLOW_V2, date,
+            )
+        else:
+            result["predict_v2"] = "ran"
+            _log.info(
+                "[forecast] catch-up shadow v2: cohort %s presente senza %s per %s"
+                " — copio gli input già salvati, senza un secondo gather",
+                DEALER_FLOW, DEALER_FLOW_V2, date,
+            )
+            try:
+                result["predict_v2_result"] = run_shadow_catchup(
+                    db, day=date, horizon=slots["horizon"],
+                )
+            except Exception:
+                result["predict_v2"] = "error"
+                _log.exception("[forecast] catch-up shadow v2 fallito per %s", date)
+            else:
+                _log.info("[forecast] catch-up shadow v2 risultato: %s", result["predict_v2_result"])
 
     if not _slot_reached(now_utc, slots["verify_hour"], slots["verify_minute"]):
         result["verify"] = "skipped_before_slot"

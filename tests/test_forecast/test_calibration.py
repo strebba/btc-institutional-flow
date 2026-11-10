@@ -20,7 +20,7 @@ _CFG = {
     "priors": dict(DEFAULT_WEIGHTS),
     "calibration": {"min_scored": 10, "min_scored_gex": 10, "max_step": 0.05,
                     "shrinkage": 0.3, "learning_rate": 0.5, "min_oos_improvement": 0.0},
-    "governance": {"kill_switch": False, "freeze_weights": True},
+    "governance": {"kill_switch": False, "freeze_weights": False},
 }
 
 
@@ -88,6 +88,17 @@ def test_run_calibration_gate_rejects_low_n(tmp_path):
     assert rep.gate_ok is False
     assert rep.proposed_weights is None
     assert db.get_proposed_weights("dealer_flow") == []  # nessuna proposta salvata
+
+
+def test_run_calibration_frozen_does_not_propose(tmp_path):
+    db = PredictionDB(db_path=tmp_path / "cal_frozen.db")
+    _seed_outcomes(db, 20)
+    frozen = {**_CFG, "governance": {**_CFG["governance"], "freeze_weights": True}}
+    rep = run_calibration(db, days=365, cfg=frozen)
+    assert rep.gate_ok is False
+    assert rep.proposed_weights is None
+    assert db.get_proposed_weights("dealer_flow") == []
+    assert "freeze_weights" in rep.rationale
 
 
 def test_run_calibration_proposes_but_not_active(tmp_path):

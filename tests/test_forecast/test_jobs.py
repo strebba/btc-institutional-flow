@@ -40,7 +40,8 @@ class TestRunDailyPredict:
              patch("src.forecast.jobs.PredictionDB") as mock_db, \
              patch("src.forecast.jobs.load_weights_config", return_value={}), \
              patch("src.forecast.context.gather_dealer_flow_context", return_value=mock_ctx), \
-             patch("src.forecast.jobs.build_dealer_flow_predictions") as mock_build:
+             patch("src.forecast.jobs.build_dealer_flow_predictions") as mock_build, \
+             patch("src.forecast.jobs._shadow_predictions", return_value=[]):
 
             mock_pred = MagicMock()
             mock_build.return_value = [mock_pred]
