@@ -25,7 +25,11 @@ calibration:
 
 governance:
   kill_switch: false      # true = pausa generazione predizioni
-  freeze_weights: false   # false = calibrazione attiva (Stage 2); pesi v2 attivi dal 2026-07-22
+  # true = niente proposte e niente attivazione (API inclusa). Default della
+  # valutazione shadow v2, pre-registrata il 2026-11-10: i pesi attivi restano
+  # quelli già in weight_versions. Rimetterlo a false è una decisione a parte,
+  # non fa parte del verdetto v2. Vedi docs/forecast-v2-preregistration.md.
+  freeze_weights: true
   model_version: "v1"     # versione corrente del SignalModel (8 componenti con granger_lead)
   unfreeze_criteria:      # criteri qualitativi per flip manuale a false (2 cicli consecutivi soddisfatti)
     min_direction_hit_rate: 0.45

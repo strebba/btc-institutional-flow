@@ -14,7 +14,9 @@ Passi, nell'ordine (ognuno isolato: un errore non ferma i successivi):
                 persistiti, l'API li legge live)
   5. predict    predizioni dealer-flow del giorno       → predictions
   6. verify     esiti delle predizioni mature           → outcomes
-  7. calibrate  solo il lunedi' (o --calibrate): propone pesi, mai li attiva
+  7. calibrate  solo il lunedi' (o --calibrate): propone pesi, mai li attiva.
+                Con governance.freeze_weights=true (default dal 2026-11-10) non
+                propone nemmeno: calcola le metriche e si ferma.
                                                         → weight_versions
 
 Gli snapshot macro (funding/OI CoinGecko) e il refresh EDGAR restano nei loro

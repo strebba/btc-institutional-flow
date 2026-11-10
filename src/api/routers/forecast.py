@@ -139,7 +139,13 @@ def forecast_status() -> JSONResponse:
 @router.post("/api/weights/{version_id}/activate")
 async def activate_weights(version_id: int, request: Request) -> JSONResponse:
     try:
+        from src.forecast.calibration import weights_are_frozen
         from src.forecast.prediction_db import PredictionDB
+        if weights_are_frozen():
+            raise http_error(
+                "freeze_weights attivo: attivazione disabilitata per la valutazione v2",
+                409,
+            )
         body = await request.json() if await request.body() else {}
         source = body.get("source", "dealer_flow")
         db = PredictionDB()

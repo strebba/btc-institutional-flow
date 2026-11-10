@@ -5,6 +5,8 @@ Brier, IC delle componenti) e **propone** un nuovo set di pesi entro guardrail r
 shrinkage verso i prior, vincolo Σ=1, cap del passo per ciclo, gate sul campione minimo
 (più alto per le componenti GEX, validate in avanti). **Non attiva mai nulla**: la proposta
 resta `proposed` finché Stefano non la attiva (workflow Tuning).
+Con ``governance.freeze_weights`` (default true dal 2026-11-10) non propone
+e l'endpoint di attivazione risponde 409: i pesi restano quelli già attivi.
 """
 from __future__ import annotations
 
@@ -29,6 +31,16 @@ _WEIGHTS_YAML = Path(__file__).resolve().parents[2] / "config" / "weights.yaml"
 
 
 # ─── Config ──────────────────────────────────────────────────────────────────
+
+def weights_are_frozen(cfg: Optional[dict] = None) -> bool:
+    """True se le proposte e l'attivazione dei pesi sono spente.
+
+    Default True quando la chiave manca: un file di config incompleto non
+    riaccende il tuning. Lo shadow v2 si valuta a pesi fissi.
+    """
+    cfg = load_weights_config() if cfg is None else cfg
+    return bool(cfg.get("governance", {}).get("freeze_weights", True))
+
 
 def load_weights_config() -> dict:
     """Carica config/weights.yaml (prior + guardrail). Fallback ai default se assente."""
@@ -215,6 +227,13 @@ def run_calibration(db, source: str = DEALER_FLOW, *, days: int = 180,
     active = active_pair[1] if active_pair else dict(priors)
 
     notes: list[str] = []
+    if weights_are_frozen(cfg):
+        notes.append(
+            "freeze_weights attivo: metriche calcolate, nessuna proposta e nessuna attivazione. "
+            "I pesi restano quelli già attivi per tutta la valutazione v2."
+        )
+        return CalibrationReport(source, metrics, active, None, False, "; ".join(notes), notes)
+
     gate_ok = metrics["total_scored"] >= min_scored
     proposed: Optional[dict[str, float]] = None
 
