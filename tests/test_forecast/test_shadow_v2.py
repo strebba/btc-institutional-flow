@@ -84,6 +84,37 @@ def test_v2_sign_abstain_and_drops_far_max_pain():
     assert level.target_spec["level_name"] == "max_pain"
 
 
+def test_vol_band_ignores_partial_daily_bar(tmp_path):
+    """La banda v2 non usa la sessione UTC ancora aperta (prices.partial=1)."""
+    from datetime import date
+
+    import pandas as pd
+
+    from src.flows.price_fetcher import PriceFetcher
+    from src.forecast.shadow_eval import load_prices
+    from src.forecast.sources.dealer_flow_v2 import trailing_log_returns
+
+    fetcher = PriceFetcher(db_path=tmp_path / "prices.db")
+    idx = pd.date_range("2026-10-01", periods=12, freq="D")
+    closes = [100.0 * (1.01 ** i) for i in range(11)] + [50_000.0]
+    frame = pd.DataFrame(
+        {
+            "Open": closes, "High": closes, "Low": closes, "Close": closes,
+            "Volume": [1.0] * 12, "partial": [0] * 11 + [1],
+        },
+        index=idx,
+    )
+    fetcher._store_df("BTC-USD", frame)
+    before = date(2026, 10, 13)
+    rets = trailing_log_returns(fetcher, before)
+    assert rets
+    assert max(abs(r) for r in rets) < 0.05
+    loaded = load_prices(fetcher, before)
+    assert loaded is not None
+    assert date(2026, 10, 12) not in [ts.date() for ts in loaded.index]
+    assert loaded["close"].iloc[-1] == pytest.approx(100.0 * (1.01 ** 10))
+
+
 def test_flat_band_uses_only_prior_returns_and_falls_back():
     assert flat_band_pct_from_returns([0.01] * 5, 5) == 4.0
     # 20 osservazioni all'1% di deviazione: σ_5d ≈ 0.01*sqrt(5), metà ≈ 1.12%.

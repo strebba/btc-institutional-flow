@@ -507,8 +507,8 @@ def load_prices(fetcher, before: date):
     frame = fetcher._load_from_db("BTC-USD", date(2010, 1, 1), before - timedelta(days=1))
     if frame is None or frame.empty:
         return None
-    if "partial" in frame.columns:
-        import numpy as np
-        flag = np.nan_to_num(frame["partial"].to_numpy(dtype=float), nan=0.0)
-        frame = frame.loc[flag == 0]
+    from src.flows.price_fetcher import complete_bars
+    frame = complete_bars(frame)
+    if frame.empty:
+        return None
     return frame

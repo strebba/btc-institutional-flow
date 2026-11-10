@@ -81,9 +81,10 @@ def trailing_log_returns(fetcher, before: date) -> list[float]:
     frame = fetcher._load_from_db("BTC-USD", start, end)
     if frame is None or frame.empty or "close" not in frame.columns:
         return []
-    if "partial" in frame.columns:
-        flag = np.nan_to_num(frame["partial"].to_numpy(dtype=float), nan=0.0)
-        frame = frame.loc[flag == 0]
+    # Stesso filtro del verifier: partial=1 è la sessione UTC non chiusa
+    # (schema prices.partial di #25). Senza la colonna il frame è già completo.
+    from src.flows.price_fetcher import complete_bars
+    frame = complete_bars(frame)
     if frame.empty:
         return []
     if "daily_return" in frame.columns and int(frame["daily_return"].notna().sum()) >= VOL_MIN_OBS:
