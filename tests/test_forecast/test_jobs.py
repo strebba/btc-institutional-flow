@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from src.forecast.jobs import run_daily_predict, run_daily_verify, run_weekly_calibrate
+from src.forecast.jobs import attach_risk_map, run_daily_predict, run_daily_verify, run_weekly_calibrate
 
 
 class TestRunDailyPredict:
@@ -41,7 +42,8 @@ class TestRunDailyPredict:
              patch("src.forecast.jobs.load_weights_config", return_value={}), \
              patch("src.forecast.context.gather_dealer_flow_context", return_value=mock_ctx), \
              patch("src.forecast.jobs.build_dealer_flow_predictions") as mock_build, \
-             patch("src.forecast.jobs._shadow_predictions", return_value=[]):
+             patch("src.forecast.jobs._shadow_predictions", return_value=[]), \
+             patch("src.forecast.jobs.load_risk_map_context", return_value=(None, [])):
 
             mock_pred = MagicMock()
             mock_build.return_value = [mock_pred]
@@ -52,6 +54,28 @@ class TestRunDailyPredict:
             assert result["status"] == "ok"
             assert result["inserted"] == 1
             assert result["signal"] == "LONG"
+
+
+class TestAttachRiskMap:
+    def test_keeps_existing_metadata_keys(self):
+        pred = MagicMock()
+        pred.metadata = {"reconstructed": True, "degraded_inputs": ["gex"]}
+        snap = MagicMock()
+        snap.put_wall = 80_000.0
+        snap.call_wall = None
+        snap.gamma_flip_price = None
+        snap.max_pain = None
+        snap.total_net_gex = -1.0
+        attach_risk_map(
+            [pred], snapshot=snap, spot=90_000.0,
+            asof=datetime(2026, 11, 10, 7, 30, tzinfo=timezone.utc),
+            bars=None, barriers=[],
+        )
+        assert pred.metadata["reconstructed"] is True
+        assert pred.metadata["degraded_inputs"] == ["gex"]
+        assert pred.metadata["levels_pit"]["put_wall"] == 80_000.0
+        assert pred.metadata["levels_pit"]["gex_sign"] == -1
+        assert "risk_map" not in pred.metadata
 
 
 class TestRunDailyVerify:

@@ -695,26 +695,34 @@ class StructuredNotesDB:
 
     # ─── Barrier snapshots (historical tracking) ───────────────────────────────
 
-    def snapshot_active_barriers(self) -> int:
-        """Salva un'istantanea delle barriere attive correnti in ``barrier_snapshots``.
+    def snapshot_active_barriers(self, *, on_date: date | None = None) -> int:
+        """Salva un'istantanea delle barriere attive in ``barrier_snapshots``.
 
-        Chiamato giornalmente dal cron per costruire lo storico barriere
-        necessario al backtest accurato del pilastro Barrier.
+        Idempotente sullo stesso giorno UTC: una seconda chiamata non aggiunge
+        righe (UNIQUE barrier_id + snapshot_date) e restituisce 0. La data è
+        UTC, non ``date.today()`` del fuso della macchina.
+
+        Su Postgres un INSERT fallito abortisce l'intera transazione. Ogni
+        barriera sta in un savepoint, così una riga malformata non cancella
+        le altre. Il conteggio è il numero di righe davvero inserite
+        (``rowcount == 1``), non il numero di tentativi.
 
         Returns:
-            int: numero di barriere salvate nello snapshot.
+            int: righe nuove. 0 se non ci sono barriere attive o se il giorno
+            è già stato fotografato.
         """
         active = self.get_active_barriers()
         if not active:
             return 0
 
-        today = date.today().isoformat()
+        day = (on_date or datetime.now(timezone.utc).date()).isoformat()
         now = self._now()
         inserted = 0
         with self._conn() as conn:
             for b in active:
                 try:
-                    conn.execute(
+                    conn.execute("SAVEPOINT bif_barrier_snap")
+                    cur = conn.execute(
                         """
                         INSERT OR IGNORE INTO barrier_snapshots
                             (barrier_id, level_price_btc, level_price_ibit, status,
@@ -725,13 +733,21 @@ class StructuredNotesDB:
                             b.get("id"), b.get("level_price_btc"),
                             b.get("level_price_ibit"), b.get("status", "active"),
                             b.get("notional_usd"), b.get("issuer"),
-                            b.get("barrier_type"), today, now,
+                            b.get("barrier_type"), day, now,
                         ),
                     )
-                    inserted += 1
+                    wrote = cur.rowcount == 1
+                    conn.execute("RELEASE SAVEPOINT bif_barrier_snap")
+                    if wrote:
+                        inserted += 1
                 except Exception as e:
                     _log.warning("Snapshot barriera fallito per barriera %s: %s", b.get("id"), e)
-        _log.info("Snapshot barriere: %d barriere salvate per %s", inserted, today)
+                    try:
+                        conn.execute("ROLLBACK TO SAVEPOINT bif_barrier_snap")
+                        conn.execute("RELEASE SAVEPOINT bif_barrier_snap")
+                    except Exception:
+                        _log.warning("Rollback savepoint barriera non riuscito")
+        _log.info("Snapshot barriere: %d righe nuove per %s", inserted, day)
         return inserted
 
     def get_barrier_history(self, days: int = 365) -> pd.DataFrame:

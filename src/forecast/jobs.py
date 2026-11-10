@@ -7,7 +7,7 @@ async le esegue in un thread separato.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from src.config import setup_logging
 from src.forecast.calibration import CalibrationReport, load_weights_config, run_calibration
@@ -76,12 +76,75 @@ def run_daily_predict(*, horizon: int = 5, db: Optional[PredictionDB] = None,
         weights_version=weights_version, created_at=created_at,
     )
     preds = list(v1) + list(v2)
+    # La mappa di rischio non entra nello score e non modifica v1/v2: è solo
+    # metadata sulle righe nuove. Un fallimento (rete, fit) non blocca la coorte.
+    asof_dt = datetime.fromisoformat(created_at).replace(tzinfo=timezone.utc)
+    try:
+        bars, barriers = load_risk_map_context()
+        attach_risk_map(
+            preds, snapshot=snap, spot=ctx.spot, asof=asof_dt,
+            bars=bars, barriers=barriers,
+        )
+    except Exception as exc:
+        _log.warning("[predict] risk map non allegata: %s", exc)
     inserted = sum(1 for p in preds if db.insert_prediction(p) is not None)
     _log.info("[predict] %s score=%.1f → %d/%d salvate (v1=%d v2=%d)",
               ctx.result.signal, ctx.result.score, inserted, len(preds), len(v1), len(v2))
     return {"status": "ok", "signal": ctx.result.signal, "score": ctx.result.score,
             "inserted": inserted, "total": len(preds),
             "v1": len(v1), "v2": len(v2), "weights_version": weights_version}
+
+
+def load_risk_map_context() -> tuple[Any, list]:
+    """OHLC Binance giornaliero e barriere attive. Non alza: liste vuote se manca un pezzo.
+
+    Non scrive sul DB dei prezzi e non tocca le predizioni già salvate.
+    """
+    bars = None
+    try:
+        from src.forecast.risk_map import fetch_binance_daily
+        bars = fetch_binance_daily()
+    except Exception as exc:
+        _log.warning("[predict] OHLC Binance non disponibile: %s", exc)
+    barriers: list = []
+    try:
+        from src.edgar.structured_notes_db import StructuredNotesDB
+        barriers = StructuredNotesDB().get_active_barriers()
+    except Exception as exc:
+        _log.warning("[predict] barriere non lette: %s", exc)
+    return bars, barriers
+
+
+def attach_risk_map(preds, *, snapshot, spot, asof: datetime, bars, barriers) -> None:
+    """Accoda ``risk_map`` e ``levels_pit`` al metadata, senza sostituire le chiavi già presenti."""
+    from src.forecast.risk_map import (
+        barrier_levels,
+        build_risk_map,
+        gex_levels,
+        levels_pit,
+    )
+
+    if asof.tzinfo is None:
+        asof = asof.replace(tzinfo=timezone.utc)
+    else:
+        asof = asof.astimezone(timezone.utc)
+    ts = asof.strftime("%Y-%m-%dT%H:%M:%SZ")
+    pit = levels_pit(snapshot, barriers, ref_price=float(spot), timestamp=ts)
+    risk = None
+    if bars is not None and len(bars) > 0:
+        try:
+            levels = gex_levels(snapshot) + barrier_levels(barriers)
+            risk = build_risk_map(
+                bars, ref_price=float(spot), levels=levels, asof=asof,
+            )
+        except Exception as exc:
+            _log.warning("[predict] calcolo risk map fallito: %s", exc)
+    for pred in preds:
+        base = pred.metadata if isinstance(getattr(pred, "metadata", None), dict) else {}
+        merged = {**base, "levels_pit": pit}
+        if risk is not None:
+            merged["risk_map"] = risk
+        pred.metadata = merged
 
 
 def _shadow_predictions(db, *, score, spot, components, gamma_flip, max_pain,

@@ -65,6 +65,11 @@ def main() -> None:
         # tranquillo e una pipeline ferma sono indistinguibili nell'health check.
         _log.info("Nessun filing nella finestra: niente da aggiornare.")
         db.record_refresh_run(filings_seen=0, notes_written=0, ok=True)
+        try:
+            n_snap = db.snapshot_active_barriers()
+            _log.info("Snapshot barriere del giorno UTC: %d righe nuove", n_snap)
+        except Exception as exc:
+            _log.warning("Snapshot barriere fallito (proseguo): %s", exc)
         db.checkpoint()
         print(f"[OK] 0 filing da {start} — nessun aggiornamento")
         return
@@ -82,6 +87,12 @@ def main() -> None:
         _log.info("Aggiornati prezzi BTC per %d barriere", n_priced)
     except Exception as exc:
         _log.warning("Calcolo prezzi BTC barriere fallito (proseguo): %s", exc)
+
+    try:
+        n_snap = db.snapshot_active_barriers()
+        _log.info("Snapshot barriere del giorno UTC: %d righe nuove", n_snap)
+    except Exception as exc:
+        _log.warning("Snapshot barriere fallito (proseguo): %s", exc)
 
     db.record_refresh_run(filings_seen=len(filings), notes_written=len(ids), ok=True)
 

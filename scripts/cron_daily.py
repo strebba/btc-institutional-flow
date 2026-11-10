@@ -9,12 +9,14 @@ SQLite perderebbe i dati senza errori visibili).
 Passi, nell'ordine (ognuno isolato: un errore non ferma i successivi):
   1. gex        snapshot GEX Deribit BTC ed ETH          → gex_snapshots
   2. prices     prezzi spot + ETF (yfinance) per asset   → prices
-  3. coinglass  verifica raggiungibilita' CoinGlass (sola lettura, serve la chiave)
-  4. flows      verifica scraping Farside (sola lettura: i flussi ETF non sono
+  3. barriers   snapshot point-in-time delle barriere    → barrier_snapshots
+                (non critico: un errore non fa fallire il job)
+  4. coinglass  verifica raggiungibilita' CoinGlass (sola lettura, serve la chiave)
+  5. flows      verifica scraping Farside (sola lettura: i flussi ETF non sono
                 persistiti, l'API li legge live)
-  5. predict    predizioni dealer-flow del giorno       → predictions
-  6. verify     esiti delle predizioni mature           → outcomes
-  7. calibrate  solo il lunedi' (o --calibrate): propone pesi, mai li attiva.
+  6. predict    predizioni dealer-flow del giorno       → predictions
+  7. verify     esiti delle predizioni mature           → outcomes
+  8. calibrate  solo il lunedi' (o --calibrate): propone pesi, mai li attiva.
                 Con governance.freeze_weights=true (default dal 2026-11-10) non
                 propone nemmeno: calcola le metriche e si ferma.
                                                         → weight_versions
@@ -51,7 +53,7 @@ _log = setup_logging("cron_daily")
 
 #: Passi che scrivono su DB: se falliscono il job esce con 1.
 CRITICAL = {"gex", "prices", "predict", "verify", "calibrate"}
-ALL_STEPS = ["gex", "prices", "coinglass", "flows", "predict", "verify", "calibrate"]
+ALL_STEPS = ["gex", "prices", "barriers", "coinglass", "flows", "predict", "verify", "calibrate"]
 
 
 def step_gex() -> str:
@@ -78,6 +80,14 @@ def step_prices() -> str:
             raise RuntimeError(f"nessun prezzo per {asset}")
         righe[asset] = len(df)
     return f"prezzi aggiornati {righe}"
+
+
+def step_barriers() -> str:
+    """Fotografa le barriere attive. Non riscrive i giorni già salvati."""
+    from src.edgar.structured_notes_db import StructuredNotesDB
+
+    n = StructuredNotesDB().snapshot_active_barriers()
+    return f"barrier_snapshots +{n} (giorno UTC)"
 
 
 def step_coinglass() -> str:
@@ -123,6 +133,7 @@ def step_calibrate() -> str:
 STEP_FUNCS: dict[str, Callable[[], str]] = {
     "gex": step_gex,
     "prices": step_prices,
+    "barriers": step_barriers,
     "coinglass": step_coinglass,
     "flows": step_flows,
     "predict": step_predict,
