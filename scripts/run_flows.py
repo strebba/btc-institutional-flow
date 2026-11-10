@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pandas as pd
 from rich.console import Console
 from rich.table import Table
 
@@ -21,6 +22,30 @@ from src.config import setup_logging
 
 console = Console()
 _log    = setup_logging("run_flows")
+
+
+def _last_observed_close(prices: pd.DataFrame, column: str, label: str) -> float | None:
+    """Ultimo close realmente osservato, oppure None.
+
+    Non riempie buchi e non stima un prezzo: se la colonna manca (fetch vuoto,
+    giorno senza borsa, storico assente) o è tutta NaN, logga un warning.
+    """
+    if column not in prices.columns:
+        _log.warning(
+            "Colonna %s assente: nessun %s dopo il fetch "
+            "(weekend, festivo, mercato chiuso, fetch vuoto o storico non in cache). "
+            "Nessun prezzo inventato; il passo prosegue senza quel close.",
+            column, label,
+        )
+        return None
+    observed = prices[column].dropna()
+    if observed.empty:
+        _log.warning(
+            "Colonna %s presente ma senza close osservati. Nessun prezzo inventato.",
+            column,
+        )
+        return None
+    return float(observed.iloc[-1])
 
 
 def main() -> None:
@@ -79,8 +104,21 @@ def main() -> None:
         sys.exit(1)
 
     console.print(f"  Prezzi: {len(prices)} giorni")
-    console.print(f"  BTC ultimo close: [yellow]${prices['btc_close'].dropna().iloc[-1]:,.0f}[/yellow]")
-    console.print(f"  IBIT ultimo close: [yellow]${prices['ibit_close'].dropna().iloc[-1]:.2f}[/yellow]")
+    btc_close = _last_observed_close(prices, "btc_close", "close BTC")
+    if btc_close is None:
+        console.print(
+            "  [yellow]BTC ultimo close non disponibile (nessun prezzo inventato).[/yellow]"
+        )
+    else:
+        console.print(f"  BTC ultimo close: [yellow]${btc_close:,.0f}[/yellow]")
+    ibit_close = _last_observed_close(prices, "ibit_close", "close IBIT")
+    if ibit_close is None:
+        console.print(
+            "  [yellow]IBIT ultimo close non disponibile "
+            "(colonna ibit_close assente o vuota; nessun prezzo inventato).[/yellow]"
+        )
+    else:
+        console.print(f"  IBIT ultimo close: [yellow]${ibit_close:.2f}[/yellow]")
 
     ratio = fetcher.get_ibit_btc_ratio()
     if ratio:

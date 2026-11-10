@@ -114,3 +114,86 @@ class TestGetAllPricesAsset:
         assert {"eth_close", "eth_return", "etha_close", "etha_eth_ratio", "eth_vol_7d"} <= set(df.columns)
         assert df["eth_close"].iloc[0] == pytest.approx(61_000 * 0.04)
         assert not any(c.startswith("btc") for c in df.columns)
+
+
+def _ohlcv(dates: list[str], closes: list[float]) -> pd.DataFrame:
+    idx = pd.to_datetime(dates)
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes,
+            "Low": closes,
+            "Close": closes,
+            "Volume": [1_000_000.0] * len(closes),
+        },
+        index=idx,
+    )
+
+
+class TestMissingIbitClose:
+    """Lunedì 2026-11-09, job del mattino: IBIT non ha ancora una barra nuova.
+
+    BTC tratta nel weekend, quindi la cache spot è aggiornata fino a domenica.
+    IBIT si ferma al close di venerdì 6 novembre; il download incrementale
+    sabato→lunedì (mercato USA chiuso) torna vuoto. Quel vuoto non deve
+    cancellare ``ibit_close`` né scrivere un close inventato.
+    """
+
+    def test_empty_incremental_fetch_keeps_cached_ibit_close(self, fetcher, monkeypatch):
+        fetcher._store_df("IBIT", _ohlcv(["2026-11-05", "2026-11-06"], [53.5, 54.25]))
+        fetcher._store_df(
+            "BTC-USD",
+            _ohlcv(
+                ["2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"],
+                [100_000, 101_000, 102_000, 103_000],
+            ),
+        )
+        calls: list[tuple] = []
+
+        def empty_download(ticker, **kwargs):
+            calls.append((ticker, kwargs.get("start"), kwargs.get("end")))
+            return pd.DataFrame()
+
+        monkeypatch.setattr("src.flows.price_fetcher.yf.download", empty_download)
+
+        monday = date(2026, 11, 9)
+        prices = fetcher.get_all_prices(start_date=date(2026, 11, 1), end_date=monday)
+
+        ibit_calls = [c for c in calls if c[0] == "IBIT"]
+        assert ibit_calls == [("IBIT", "2026-11-07", "2026-11-10")]
+        assert "ibit_close" in prices.columns
+        observed = prices["ibit_close"].dropna()
+        assert observed.iloc[-1] == pytest.approx(54.25)
+        assert observed.index.max().date() == date(2026, 11, 6)
+        # Il close IBIT del weekend non viene forward-fillato sul calendario BTC.
+        assert pd.isna(prices.loc[pd.Timestamp("2026-11-08"), "ibit_close"])
+        assert prices.loc[pd.Timestamp("2026-11-08"), "btc_close"] == pytest.approx(103_000)
+        stored = fetcher._load_from_db("IBIT", date(2026, 11, 1), monday)
+        assert [ts.date() for ts in stored.index] == [date(2026, 11, 5), date(2026, 11, 6)]
+
+    def test_download_error_still_returns_cached_close(self, fetcher, monkeypatch):
+        fetcher._store_df("IBIT", _ohlcv(["2026-11-06"], [54.25]))
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("yfinance down")
+
+        monkeypatch.setattr("src.flows.price_fetcher.yf.download", boom)
+        loaded = fetcher.fetch(
+            "IBIT", start_date=date(2026, 11, 1), end_date=date(2026, 11, 9)
+        )
+        assert list(loaded.index.date) == [date(2026, 11, 6)]
+        assert loaded["close"].iloc[-1] == pytest.approx(54.25)
+
+    def test_no_history_and_empty_fetch_does_not_fabricate_close(self, fetcher, monkeypatch):
+        fetcher._store_df("BTC-USD", _ohlcv(["2026-11-08"], [103_000]))
+        monkeypatch.setattr(
+            "src.flows.price_fetcher.yf.download",
+            lambda *_a, **_k: pd.DataFrame(),
+        )
+        prices = fetcher.get_all_prices(
+            start_date=date(2026, 11, 1), end_date=date(2026, 11, 9)
+        )
+        assert "btc_close" in prices.columns
+        assert "ibit_close" not in prices.columns
+        assert "ibit_btc_ratio" not in prices.columns
+        assert fetcher._load_from_db("IBIT", date(2026, 11, 1), date(2026, 11, 9)).empty

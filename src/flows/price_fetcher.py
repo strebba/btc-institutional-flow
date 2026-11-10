@@ -154,7 +154,10 @@ class PriceFetcher:
     ) -> pd.DataFrame:
         """Scarica i prezzi per un ticker, usando la cache locale.
 
-        Se `force_refresh=False`, scarica solo i giorni mancanti dal DB.
+        Se `force_refresh=False`, scarica solo i giorni mancanti dal DB, ma
+        restituisce sempre l'intera finestra richiesta (storico in cache più
+        le barre nuove). Un fetch vuoto — weekend, festivo, mercato non ancora
+        aperto, errore di rete — non scarta i close già salvati e non ne inventa.
 
         Args:
             ticker: es. "BTC-USD" o "IBIT".
@@ -163,37 +166,54 @@ class PriceFetcher:
             force_refresh: ignora cache e riscarica tutto.
 
         Returns:
-            pd.DataFrame: prezzi con DatetimeIndex.
+            pd.DataFrame: prezzi con DatetimeIndex sulla finestra richiesta.
         """
-        end   = end_date   or date.today()
-        start = start_date or end - timedelta(days=self._cfg.get("lookback_days", 365))
+        end = end_date or date.today()
+        requested_start = start_date or end - timedelta(days=self._cfg.get("lookback_days", 365))
+        download_start = requested_start
 
         if not force_refresh:
             last = self._last_date_in_db(ticker)
             if last and last >= end - timedelta(days=1):
                 _log.debug("%s: cache aggiornata fino al %s", ticker, last)
-                return self._load_from_db(ticker, start, end)
-            # Scarica solo dalla data successiva all'ultima in cache
+                return self._load_from_db(ticker, requested_start, end)
+            # Scarica solo dalla data successiva all'ultima in cache.
+            # La lettura resta sulla finestra richiesta: se l'incrementale è
+            # vuoto (IBIT il lunedì mattina, dopo il weekend) lo storico c'è ancora.
             if last:
-                start = last + timedelta(days=1)
-                _log.info("%s: download incrementale da %s", ticker, start)
+                incremental = last + timedelta(days=1)
+                if incremental > download_start:
+                    download_start = incremental
+                    _log.info("%s: download incrementale da %s", ticker, download_start)
 
-        _log.info("%s: download %s → %s", ticker, start, end)
+        if download_start > end:
+            return self._load_from_db(ticker, requested_start, end)
+
+        _log.info("%s: download %s → %s", ticker, download_start, end)
         try:
             df = yf.download(
                 ticker,
-                start=start.isoformat(),
+                start=download_start.isoformat(),
                 end=(end + timedelta(days=1)).isoformat(),
                 progress=False,
                 auto_adjust=True,
             )
         except Exception as e:
-            _log.error("%s: download fallito — %s", ticker, e)
-            return self._load_from_db(ticker, start, end)
+            _log.error(
+                "%s: download fallito — %s. Nessun prezzo inventato; uso la cache %s → %s.",
+                ticker, e, requested_start, end,
+            )
+            return self._load_from_db(ticker, requested_start, end)
 
-        if df.empty:
-            _log.warning("%s: nessun dato scaricato", ticker)
-            return self._load_from_db(ticker, start, end)
+        if df is None or df.empty:
+            cached = self._load_from_db(ticker, requested_start, end)
+            _log.warning(
+                "%s: nessun dato scaricato per %s → %s "
+                "(weekend, festivo, pre-apertura o fetch vuoto). "
+                "Nessun prezzo inventato; cache %s → %s: %d righe.",
+                ticker, download_start, end, requested_start, end, len(cached),
+            )
+            return cached
 
         # Appiattisci colonne multi-index (es. ("Close", "IBIT") → "Close")
         if isinstance(df.columns, pd.MultiIndex):
@@ -202,7 +222,7 @@ class PriceFetcher:
         inserted = self._store_df(ticker, df)
         _log.info("%s: %d nuove righe salvate", ticker, inserted)
 
-        return self._load_from_db(ticker, start, end)
+        return self._load_from_db(ticker, requested_start, end)
 
     def _load_from_db(
         self, ticker: str, start: date, end: date
