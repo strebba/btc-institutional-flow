@@ -7,4 +7,5 @@ Pipeline source-agnostic: Prediction → Outcome → Calibration.
 - `sources`       — adapter che producono Prediction da un dominio (dealer_flow, ema, portfolio).
 - `verifier`      — assegna gli esiti alle predizioni mature usando prezzi reali.
 - `calibration`   — (fase 2) propone nuovi pesi dai risultati storici.
+- `reconstruct`   — ricostruzione point-in-time di una coorte mancata (CLI, non schedulata).
 """

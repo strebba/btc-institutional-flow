@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from requests import HTTPError, Timeout
 
-from src.gex.deribit_client import CircuitBreaker, DeribitClient, _is_retryable_error
+from src.gex.deribit_client import (
+    CircuitBreaker,
+    DeribitClient,
+    _is_retryable_error,
+    parse_index_chart,
+)
 
 
 class TestIsRetryableError:
@@ -30,6 +35,31 @@ class TestIsRetryableError:
 
     def test_value_error_is_not_retryable(self):
         assert _is_retryable_error(ValueError("not a network error")) is False
+
+
+class TestIndexChart:
+    def test_parse_keeps_points_and_skips_garbage(self):
+        points = parse_index_chart([
+            [1_700_000_000_000, 42000.5],
+            ["nope"],
+            [1_700_003_600_000, 42100],
+        ])
+        assert len(points) == 2
+        assert points[0][1] == 42000.5
+        assert points[0][0].tzinfo is not None
+        assert points[1][0] > points[0][0]
+
+    def test_get_index_chart_calls_public_endpoint(self):
+        client = DeribitClient()
+        with patch.object(
+            client, "_get", return_value=[[1_700_000_000_000, 42000.5]],
+        ) as mocked:
+            points = client.get_index_chart("btc_usd", "1m")
+        mocked.assert_called_once_with(
+            "/get_index_chart_data",
+            {"index_name": "btc_usd", "range": "1m"},
+        )
+        assert points[0][1] == 42000.5
 
 
 class TestCircuitBreaker:

@@ -331,6 +331,32 @@ class FarsideScraper:
         _log.info("Farside: %d righe di flussi parsate", len(results))
         return results
 
+    def fetch_observed(self) -> list[EtfFlowData]:
+        """Flussi ETF osservati: CoinGlass, poi la tabella Farside.
+
+        Non usa le stime successive di ``fetch`` (SoSoValue, N-PORT interpolato,
+        tracking error yfinance): non sono print IBIT datati e non si possono
+        tagliare a uno slot passato.
+        """
+        try:
+            from src.flows.coinglass_client import CoinGlassClient
+            flows = CoinGlassClient(self._cfg).fetch_etf_flows(asset=self.asset)
+            if flows:
+                _log.info("CoinGlass: %d record flussi ETF (observed)", len(flows))
+                return flows
+        except Exception as e:
+            _log.warning("CoinGlass non disponibile (%s) — fallback Farside observed", e)
+
+        try:
+            html = self._fetch_html(self.farside_url)
+            flows = self._parse_table(html)
+            if flows:
+                return flows
+            _log.warning("Farside: tabella vuota")
+        except Exception as e:
+            _log.warning("Farside non raggiungibile (%s)", e)
+        return []
+
     def fetch(self) -> list[EtfFlowData]:
         """Scarica i flussi con waterfall: CoinGlass → Farside → cache disco → SoSoValue → EDGAR N-PORT → yfinance.
 
