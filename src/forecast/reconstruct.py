@@ -884,20 +884,11 @@ def load_market_history(slot: datetime, paths: LocalPaths) -> MarketHistory:
 
 
 def _default_price_provider():
-    """Stesso provider del verify giornaliero. Usato solo con ``--score``."""
-    from src.config import TICKER_MAP
+    """Stesso provider del verify giornaliero (barre UTC chiuse). Usato solo con ``--score``."""
     from src.flows.price_fetcher import PriceFetcher
+    from src.forecast.verifier import verification_price_provider
 
-    fetcher = PriceFetcher()
-
-    def provider(asset, start, end):
-        return fetcher.fetch(
-            TICKER_MAP.get(asset, asset),
-            start_date=start.date(),
-            end_date=(end + timedelta(days=1)).date(),
-        )
-
-    return provider
+    return verification_price_provider(PriceFetcher())
 
 
 def _model_version() -> str:

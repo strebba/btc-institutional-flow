@@ -63,7 +63,7 @@ def truncate_pg_tables(url: str) -> None:
     conn = pg_connect(url)
     try:
         conn.executescript(
-            "TRUNCATE predictions, outcomes, weight_versions, alert_state, prices, "
+            "TRUNCATE outcomes_archive, predictions, outcomes, weight_versions, alert_state, prices, "
             "gex_snapshots, notes, barrier_levels, barrier_snapshots, refresh_runs, "
             "macro_snapshots RESTART IDENTITY CASCADE"
         )

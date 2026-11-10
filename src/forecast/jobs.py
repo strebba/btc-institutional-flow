@@ -6,10 +6,10 @@ async le esegue in un thread separato.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
-from src.config import TICKER_MAP, setup_logging
+from src.config import setup_logging
 from src.forecast.calibration import CalibrationReport, load_weights_config, run_calibration
 from src.forecast.prediction_db import PredictionDB
 from src.forecast.sources.dealer_flow import SOURCE as DEALER_FLOW
@@ -74,22 +74,21 @@ def run_daily_predict(*, horizon: int = 5, db: Optional[PredictionDB] = None,
 
 
 def run_daily_verify(*, db: Optional[PredictionDB] = None) -> dict:
-    """Verifica le predizioni mature usando i prezzi reali."""
+    """Verifica le predizioni mature sul close e sul range delle barre UTC chiuse.
+
+    Il giorno di fine orizzonte entra nel punteggio solo quando la sua barra
+    giornaliera è completa (``partial=0``). Se la sessione è ancora aperta la
+    predizione resta open fino al verify successivo.
+    """
     from src.flows.price_fetcher import PriceFetcher
-    from src.forecast.verifier import score_due_predictions
+    from src.forecast.verifier import score_due_predictions, verification_price_provider
 
     db = db or PredictionDB()
     fetcher = PriceFetcher()
-
-    def provider(asset, start, end):
-        return fetcher.fetch(
-            TICKER_MAP.get(asset, asset),
-            start_date=start.date(),
-            end_date=(end + timedelta(days=1)).date(),
-        )
-
     due = db.get_due()
-    outcomes = score_due_predictions(db, provider, datetime.now(timezone.utc))
+    outcomes = score_due_predictions(
+        db, verification_price_provider(fetcher), datetime.now(timezone.utc),
+    )
     hits = sum(1 for o in outcomes if o.hit)
     _log.info("[verify] mature=%d verificate=%d hit=%d", len(due), len(outcomes), hits)
     return {"status": "ok", "due": len(due), "verified": len(outcomes),

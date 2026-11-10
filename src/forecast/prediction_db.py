@@ -63,6 +63,23 @@ CREATE TABLE IF NOT EXISTS outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_outcome_pred ON outcomes(prediction_id);
 
+-- Copia degli esiti prima di un rescore. Non sostituisce `outcomes`.
+CREATE TABLE IF NOT EXISTS outcomes_archive (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    prediction_id    INTEGER NOT NULL,
+    hit              INTEGER NOT NULL,
+    realized_return  REAL,
+    realized_price   REAL,
+    ref_price        REAL,
+    signed_error     REAL,
+    brier            REAL,
+    detail           TEXT,
+    scored_at        TEXT NOT NULL,
+    archived_at      TEXT NOT NULL,
+    reason           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_outcomes_archive_pred ON outcomes_archive(prediction_id);
+
 CREATE TABLE IF NOT EXISTS weight_versions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
@@ -308,6 +325,67 @@ class PredictionDB:
                     (STATUS_SCORED, row["prediction_id"]),
                 )
         return inserted
+
+    def scored_rows(self) -> list[dict]:
+        """Predizioni già verificate, con la riga di ``outcomes`` (niente filtro sui giorni)."""
+        q = (
+            "SELECT p.*, o.hit, o.realized_return, o.realized_price, o.ref_price, "
+            "       o.signed_error, o.brier, o.detail AS outcome_detail, o.scored_at "
+            "FROM predictions p JOIN outcomes o ON o.prediction_id = p.id "
+            "ORDER BY p.created_at ASC, p.id ASC"
+        )
+        with self._conn() as conn:
+            rows = conn.execute(q).fetchall()
+        return [dict(r) for r in rows]
+
+    def apply_outcome_rescore(
+        self,
+        updates: list[tuple[dict, Outcome]],
+        *,
+        reason: str,
+    ) -> int:
+        """Archivia l'esito corrente e lo aggiorna. Non tocca ``predictions``.
+
+        ``updates`` è una lista di (riga corrente di outcomes, nuovo Outcome).
+        Una sola transazione: o si archiviano tutti, o nessuno.
+        """
+        if not updates:
+            return 0
+        archived_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        with self._conn() as conn:
+            for old, outcome in updates:
+                # scored_rows espone p.id; una riga outcomes grezza ha prediction_id.
+                pid = int(old["prediction_id"] if "prediction_id" in old.keys() else old["id"])
+                conn.execute(
+                    """
+                    INSERT INTO outcomes_archive (
+                        prediction_id, hit, realized_return, realized_price, ref_price,
+                        signed_error, brier, detail, scored_at, archived_at, reason
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        pid, int(old["hit"]),
+                        old.get("realized_return"), old.get("realized_price"),
+                        old.get("ref_price"), old.get("signed_error"),
+                        old.get("brier"), old.get("outcome_detail") or old.get("detail") or "",
+                        old.get("scored_at") or "", archived_at, reason,
+                    ),
+                )
+                row = outcome.to_row()
+                conn.execute(
+                    """
+                    UPDATE outcomes SET
+                        hit=?, realized_return=?, realized_price=?, ref_price=?,
+                        signed_error=?, brier=?, detail=?, scored_at=?
+                    WHERE prediction_id=?
+                    """,
+                    (
+                        row["hit"], row["realized_return"], row["realized_price"],
+                        row["ref_price"], row["signed_error"], row["brier"],
+                        row["detail"], row["scored_at"], row["prediction_id"],
+                    ),
+                )
+        return len(updates)
 
     # ─── Weight versions (self-learning) ──────────────────────────────────────
 
