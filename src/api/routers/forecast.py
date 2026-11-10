@@ -1,7 +1,9 @@
 """Forecast spine endpoints: predictions, verification, calibration, governance."""
 from __future__ import annotations
 
+import json
 import traceback
+from typing import Any, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -11,12 +13,51 @@ from src.api.helpers import ok, http_error
 router = APIRouter(tags=["forecast"])
 
 
+def _metadata_dict(raw: Any) -> Optional[dict]:
+    """JSON di ``predictions.metadata``. La stringa originale resta nel campo ``metadata``."""
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            loaded = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return loaded if isinstance(loaded, dict) else None
+    return None
+
+
+def enrich_prediction_row(row: dict) -> dict:
+    """Aggiunge ``risk_map`` e ``levels_pit``. Non toglie score, pesi, né il metadata grezzo."""
+    meta = _metadata_dict(row.get("metadata"))
+    out = dict(row)
+    out["risk_map"] = (meta or {}).get("risk_map")
+    out["levels_pit"] = (meta or {}).get("levels_pit")
+    return out
+
+
+def latest_risk_payload(predictions) -> dict:
+    """Ultima coorte che ha una risk map nel metadata. None se nessuna riga ce l'ha."""
+    for pred in predictions:
+        meta = pred.metadata if isinstance(getattr(pred, "metadata", None), dict) else None
+        if meta and meta.get("risk_map"):
+            return {
+                "date": (pred.created_at or "")[:10],
+                "source": pred.source,
+                "created_at": pred.created_at,
+                "risk_map": meta.get("risk_map"),
+                "levels_pit": meta.get("levels_pit"),
+            }
+    return {"date": None, "source": None, "created_at": None, "risk_map": None, "levels_pit": None}
+
+
 @router.get("/api/predictions")
 def get_predictions(limit: int = 50, days: int = 180) -> JSONResponse:
     try:
         from src.forecast.prediction_db import PredictionDB
         rows = PredictionDB().get_with_outcomes(days=days)
-        rows = rows[-limit:]
+        rows = [enrich_prediction_row(r) for r in rows[-limit:]]
         return ok({"count": len(rows), "predictions": rows})
     except Exception as exc:
         traceback.print_exc()
@@ -109,8 +150,9 @@ def forecast_status() -> JSONResponse:
         from src.forecast.prediction_db import PredictionDB
 
         db = PredictionDB()
-        recent = db.get_recent(limit=1)
+        recent = db.get_recent(limit=30)
         last = recent[0].created_at if recent else None
+        stored_risk = latest_risk_payload(recent)
 
         fresh = None
         if last:
@@ -130,10 +172,30 @@ def forecast_status() -> JSONResponse:
             "kill_switch": bool(gov.get("kill_switch", False)),
             "freeze_weights": bool(gov.get("freeze_weights", True)),
             "scheduler_running": _forecast_scheduler is not None,
+            "risk_map": stored_risk["risk_map"],
+            "levels_pit": stored_risk["levels_pit"],
+            "risk_map_date": stored_risk["date"],
         })
     except Exception as exc:
         traceback.print_exc()
         raise http_error(f"forecast status error: {exc}")
+
+
+@router.get("/api/forecast/risk-map")
+def get_risk_map() -> JSONResponse:
+    """Ultima mappa di rischio salvata nel metadata di una coorte. Non ricalcola.
+
+    Campi additivi: ``expected_range_5d_usd`` / ``expected_range_5d_pct``
+    (range atteso 5 giorni) e ``levels[].touch_prob_5d`` (probabilità di tocco).
+    Gli score delle predizioni restano su ``/api/predictions``.
+    """
+    try:
+        from src.forecast.prediction_db import PredictionDB
+        recent = PredictionDB().get_recent(limit=40)
+        return ok(latest_risk_payload(recent))
+    except Exception as exc:
+        traceback.print_exc()
+        raise http_error(f"risk map error: {exc}")
 
 
 @router.post("/api/weights/{version_id}/activate")

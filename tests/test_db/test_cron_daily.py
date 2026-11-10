@@ -18,6 +18,11 @@ MONDAY = datetime(2026, 10, 26, 7, 15, tzinfo=timezone.utc)
 THURSDAY = datetime(2026, 10, 29, 7, 15, tzinfo=timezone.utc)
 
 
+def test_barrier_snapshot_runs_every_day():
+    assert "barriers" in cron.select_steps(None, False, THURSDAY)
+    assert "barriers" not in cron.CRITICAL
+
+
 def test_calibrate_only_on_monday():
     assert "calibrate" in cron.select_steps(None, False, MONDAY)
     assert "calibrate" not in cron.select_steps(None, False, THURSDAY)

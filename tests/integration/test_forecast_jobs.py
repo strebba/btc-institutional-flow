@@ -9,10 +9,12 @@ una suite interamente mockata.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from src.analytics.factor_scorers import SignalInputs, SignalResult
@@ -20,6 +22,22 @@ from src.forecast.context import DealerFlowContext
 from src.forecast.jobs import run_daily_predict
 from src.forecast.prediction_db import PredictionDB
 from src.gex.models import GexSnapshot
+
+
+def _bars() -> pd.DataFrame:
+    rng = np.random.default_rng(7)
+    n = 160
+    end = date(2024, 6, 30)
+    close = 90_000.0 * np.exp(np.cumsum(rng.normal(0.0, 0.02, n)))
+    span = np.abs(rng.normal(0.012, 0.003, n))
+    dates = [end - timedelta(days=(n - 1 - i)) for i in range(n)]
+    return pd.DataFrame({
+        "date": dates,
+        "open": close,
+        "high": close * np.exp(span),
+        "low": close * np.exp(-span),
+        "close": close,
+    })
 
 pytestmark = pytest.mark.integration
 
@@ -52,17 +70,29 @@ class TestRunDailyPredictOrchestration:
         db = PredictionDB(db_path=tmp_path / "predictions.db")
 
         with patch("src.forecast.jobs._governance", return_value={"kill_switch": False}), \
-             patch("src.forecast.context.gather_dealer_flow_context", return_value=_real_context()):
+             patch("src.forecast.context.gather_dealer_flow_context", return_value=_real_context()), \
+             patch("src.forecast.jobs.load_risk_map_context", return_value=(_bars(), [])):
             result = run_daily_predict(db=db)
 
         assert result["status"] == "ok"
         assert result["signal"] == "LONG"
         assert result["inserted"] == result["total"] > 0
 
-        rows = db.get_recent(limit=10)
+        rows = db.get_recent(limit=20)
         assert len(rows) == result["inserted"]
         assert all(r.asset == "BTC" for r in rows)
         assert all(r.created_at for r in rows)
+        # v1 e l'ombra v2 portano la stessa mappa; lo score non viene tolto.
+        maps = [r.metadata["risk_map"]["sigma_5d_log"] for r in rows]
+        assert len(set(maps)) == 1 and maps[0] > 0
+        assert all(r.score_ref == 72.0 for r in rows)
+        names = {lvl["name"] for lvl in rows[0].metadata["risk_map"]["levels"]}
+        assert {"put_wall", "call_wall", "gamma_flip", "max_pain"} <= names
+        pit = rows[0].metadata["levels_pit"]
+        assert pit["put_wall"] == 80_000.0
+        assert pit["total_gex"] == 500e6
+        assert pit["gex_sign"] == 1
+        assert "score" not in rows[0].metadata["risk_map"]
 
     def test_inserimento_duplicato_non_raddoppia(self, tmp_path: Path):
         """Stesso contesto lanciato due volte nello stesso giorno: insert_prediction
@@ -70,7 +100,8 @@ class TestRunDailyPredictOrchestration:
         db = PredictionDB(db_path=tmp_path / "predictions.db")
 
         with patch("src.forecast.jobs._governance", return_value={"kill_switch": False}), \
-             patch("src.forecast.context.gather_dealer_flow_context", return_value=_real_context()):
+             patch("src.forecast.context.gather_dealer_flow_context", return_value=_real_context()), \
+             patch("src.forecast.jobs.load_risk_map_context", return_value=(_bars(), [])):
             first = run_daily_predict(db=db)
             second = run_daily_predict(db=db)
 

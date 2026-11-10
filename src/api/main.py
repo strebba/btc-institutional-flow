@@ -9,9 +9,10 @@ Endpoint:
   GET /api/notes[/by-url] - Drill-down note strutturate
   GET /api/macro         - Indicatori macro: funding rate, OI, long/short, liquidazioni
   POST /api/telegram/webhook - Webhook Telegram
-  /api/predictions/*     - Forecast spine
+  /api/predictions/*     - Forecast spine (include risk_map e levels_pit, se presenti)
   /api/calibration       - Calibration report
-  /api/forecast/status   - Forecast operational status
+  /api/forecast/status   - Forecast operational status (+ ultima risk map)
+  /api/forecast/risk-map - Range atteso 5g e probabilità di tocco per livello
   /api/weights/{id}/activate - Human-gated weight activation
 
 Schedulers APScheduler in-process: alert Telegram, snapshot barriere, forecast predict/verify/calibrate.
