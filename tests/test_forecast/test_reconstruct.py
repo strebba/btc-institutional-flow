@@ -278,6 +278,7 @@ def test_select_gex_same_day_before_slot_only():
     assert chosen is None
 
 
+@pytest.mark.sqlite_only
 def test_read_only_sqlite_does_not_create_a_file_and_drops_future_gex(tmp_path):
     missing = tmp_path / "absent.db"
     assert read_sqlite(missing, "SELECT 1") == []
@@ -306,6 +307,7 @@ def test_read_only_sqlite_does_not_create_a_file_and_drops_future_gex(tmp_path):
     assert parsed == []
 
 
+@pytest.mark.sqlite_only
 def test_metadata_column_is_added_to_an_existing_sqlite_and_old_rows_stay_null(tmp_path):
     path = tmp_path / "old.db"
     conn = sqlite3.connect(path)
@@ -359,7 +361,40 @@ def test_metadata_column_is_added_to_an_existing_sqlite_and_old_rows_stay_null(t
     assert db.predictions_on_date("2026-01-01", SOURCE)[0].metadata is None
 
 
-def test_write_does_not_touch_other_cohorts_and_dry_run_writes_nothing(tmp_path, capsys):
+def test_metadata_roundtrip_on_the_active_backend(tmp_path):
+    """Il flag JSON sopravvive a insert/select sia su SQLite sia su Postgres.
+
+    Con ``BIF_TEST_BACKEND=postgres`` ``PredictionDB`` ignora il path e scrive
+    sul Postgres di test: è il controllo che la migrazione ``0002`` abbia
+    aggiunto ``predictions.metadata``.
+    """
+    db = PredictionDB(tmp_path / "active.db")
+    plain = Prediction(
+        source=SOURCE, asset="BTC", target_type=TARGET_DIRECTION,
+        target_spec={"direction": "up", "ref_price": 1.0, "flat_band_pct": 1.0},
+        horizon_days=5, confidence=0.2, created_at="2026-01-02T07:30:00",
+    )
+    flagged = Prediction(
+        source=SOURCE, asset="BTC", target_type=TARGET_DIRECTION,
+        target_spec={"direction": "down", "ref_price": 2.0, "flat_band_pct": 1.0},
+        horizon_days=5, confidence=0.3, created_at="2026-11-03T07:30:00",
+        metadata={"reconstructed": True, "degraded_inputs": ["gex"]},
+    )
+    assert db.insert_prediction(plain) is not None
+    assert db.insert_prediction(flagged) is not None
+    assert db.predictions_on_date("2026-01-02", SOURCE)[0].metadata is None
+    stored = db.predictions_on_date("2026-11-03", SOURCE)[0]
+    assert stored.metadata["reconstructed"] is True
+    assert stored.metadata["degraded_inputs"] == ["gex"]
+
+
+def test_write_does_not_touch_other_cohorts_and_dry_run_writes_nothing(
+    tmp_path, capsys, monkeypatch,
+):
+    # Il CLI rifiuta qualsiasi DATABASE_URL (anche il Postgres usa-e-getta della
+    # suite). I file sotto tmp_path sono SQLite: la env va svuotata prima di
+    # aprire PredictionDB, altrimenti il path viene ignorato.
+    monkeypatch.setenv("DATABASE_URL", "")
     path = tmp_path / "preds.db"
     db = PredictionDB(path)
     other = Prediction(
