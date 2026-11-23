@@ -31,11 +31,23 @@ dove:
 
 Nessuna autenticazione richiesta. Rate limit: ~15 req/s.
 
+L'intera chain arriva in **due richieste**, unite per `instrument_name`:
+
 ```
 GET https://www.deribit.com/api/v2/public/get_instruments?currency=BTC&kind=option&expired=false
-GET https://www.deribit.com/api/v2/public/ticker?instrument_name=BTC-28MAR25-80000-C
+GET https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option
 GET https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd
 ```
+
+Fino a novembre 2026 si chiamava `/ticker` una volta per strumento (~1000 richieste
+per BTC): con API e cron attivi insieme dallo stesso IP Deribit rispondeva 429 a metà
+chain, il GEX usciva su metà dell'OI e `/api/gex` andava in timeout.
+
+Il book summary non contiene greche: delta, gamma e vega sono **Black-Scholes**
+(`src/gex/greeks.py`) sugli stessi input di Deribit — forward della scadenza
+(`underlying_price`), `mark_iv`, r = q = 0. Su un campione live coincidono con il
+ticker alla quarta cifra; la gamma esce anzi a piena precisione, mentre il ticker la
+arrotonda a 5 decimali (su BTC le OTM diventavano 0 e sparivano dal GEX).
 
 **Dati estratti per opzione:**
 ```python
@@ -43,8 +55,13 @@ GET https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd
     "instrument_name": "BTC-28MAR25-80000-C",
     "strike": 80000.0,
     "option_type": "call",          # "call" | "put"
-    "gamma": 0.0000043,             # greeks.gamma
+    "expiration_timestamp": 1743148800000,
+    "gamma": 0.0000043,             # Black-Scholes
+    "delta": 0.31,                  # Black-Scholes
+    "vega": 95.2,                   # Black-Scholes, per punto di vol (convenzione Deribit)
     "open_interest": 1250.0,        # OI in contratti BTC
+    "mark_iv": 52.4,                # in %
+    "underlying_price": 84210.0,    # forward della scadenza
     "mark_price": 0.023,            # in BTC
 }
 ```
@@ -57,17 +74,18 @@ total_net_gex = sum(gex_by_strike)  # USD
 ```
 
 ### Gamma Flip Price
-Strike dove il GEX cumulativo (calcolato dallo strike più basso al più alto) cambia segno. Al di sotto del flip il mercato è in negative gamma, sopra in positive gamma.
+Spot ipotetico S* in cui il **GEX totale si annulla**, con le gamma ricalcolate a S*
+(`GexCalculator._gamma_profile_flip`). Sopra il flip il mercato è in positive gamma,
+sotto in negative gamma: il lato è quindi sempre coerente col segno del GEX netto.
 
-```python
-cumulative = 0.0
-for g in sorted(gex_by_strike, key=lambda x: x.strike):
-    prev = cumulative
-    cumulative += g.net_gex
-    if prev < 0 < cumulative or prev > 0 > cumulative:
-        flip_price = g.strike
-        break
-```
+- Griglia di spot ±25% dallo spot corrente, passo 0,25%; per ogni S il forward di
+  ogni scadenza si muove in proporzione e la gamma è Black-Scholes da `mark_iv`.
+- Se ci sono più zeri si prende il più vicino allo spot; se nel range non ce n'è
+  nessuno il flip è `None` (meglio nessun livello che uno a +40%).
+- Fallback, con warning, solo per chain senza IV o scadenza: zero del GEX
+  **cumulativo per strike**. Era il metodo fino a novembre 2026 e cade per
+  costruzione vicino all'ATM qualunque sia il regime: lo storico di `gex_snapshots`
+  ha quindi una discontinuità del flip alla data del cambio.
 
 ### Put Wall
 Strike con il valore GEX più negativo. I MM hanno venduto molte put a quel livello → devono comprare BTC aggressivamente se il prezzo scende fino lì → **supporto meccanico**.
