@@ -30,7 +30,7 @@ tutto il codice, i commit, i test e le discussioni.
 | **GexSnapshot** | Fotografia completa del GEX a un timestamp: total net GEX, gamma flip, put/call wall, max pain, profilo per strike |
 | **GexByStrike** | GEX aggregato per un singolo strike price (call GEX, put GEX, net GEX, OI) |
 | **GammaRegime** | Classificazione: `positive_gamma` (dealer stabilizzano) / `negative_gamma` (dealer amplificano) / `neutral` |
-| **GammaFlip** | Prezzo al quale il GEX cumulativo cambia segno — sopra = gamma positiva, sotto = negativa |
+| **GammaFlip** | Spot ipotetico in cui il GEX totale (gamma ricalcolate a quello spot) si annulla, il più vicino allo spot entro ±25% — sopra = gamma positiva, sotto = negativa. `None` se nel range non c'è |
 | **PutWall** | Strike con massimo GEX negativo — supporto meccanico |
 | **CallWall** | Strike con massimo GEX positivo — resistenza meccanica |
 | **MaxPain** | Strike che minimizza il payoff totale delle opzioni a scadenza |

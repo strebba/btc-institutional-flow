@@ -142,3 +142,76 @@ class TestGexToDict:
         d    = calc.gex_to_dict(snap)
         for key in ["spot_price", "total_net_gex_m", "put_wall", "call_wall", "max_pain"]:
             assert key in d
+
+
+# ── Gamma flip da profilo GEX(S) ──────────────────────────────────────────────
+
+_NOW_MS = 1_800_000_000_000.0
+_DAY_MS = 86_400_000.0
+
+
+def _bs_option(strike: float, option_type: str, oi: float, days: float = 30.0,
+               iv_pct: float = 50.0, gamma: float = 0.0) -> dict:
+    """Opzione con IV e scadenza: ri-prezzabile dal profilo. gamma Deribit = 0 (arrotondata)."""
+    return {
+        "instrument_name": f"BTC-T-{strike:.0f}-{option_type[0].upper()}",
+        "strike": strike,
+        "option_type": option_type,
+        "gamma": gamma,
+        "open_interest": oi,
+        "mark_iv": iv_pct,
+        "expiration_timestamp": _NOW_MS + days * _DAY_MS,
+        "underlying_price": 0.0,
+    }
+
+
+class TestGammaProfileFlip:
+    def test_rounded_zero_gamma_not_dropped(self, calc):
+        # Deribit arrotonda la gamma a 5 decimali → 0.0 per OTM: con IV e scadenza
+        # l'opzione deve comunque entrare nel GEX e nei totali OI.
+        chain = [_bs_option(100_000, "call", oi=10_000, gamma=0.0)]
+        snap = calc.calculate_gex(chain, spot_price=83_000, now_ms=_NOW_MS)
+        assert snap.total_net_gex > 0
+        assert snap.total_call_oi == 10_000
+
+    def test_flip_below_spot_when_gex_positive(self, calc):
+        # Put pesanti sotto, call pesanti all'ATM: GEX(spot) > 0, flip sotto lo spot.
+        chain = [
+            _bs_option(70_000, "put", oi=40_000),
+            _bs_option(84_000, "call", oi=20_000),
+            _bs_option(90_000, "call", oi=10_000),
+        ]
+        snap = calc.calculate_gex(chain, spot_price=84_000, now_ms=_NOW_MS)
+        assert snap.total_net_gex > 0
+        assert snap.gamma_flip_price is not None
+        assert snap.gamma_flip_price < 84_000
+
+    def test_flip_consistent_with_sign(self, calc):
+        # GEX(spot) < 0 → il flip deve stare sopra lo spot.
+        chain = [
+            _bs_option(80_000, "put", oi=30_000),
+            _bs_option(95_000, "call", oi=20_000),
+        ]
+        snap = calc.calculate_gex(chain, spot_price=80_000, now_ms=_NOW_MS)
+        assert snap.total_net_gex < 0
+        assert snap.gamma_flip_price is not None
+        assert snap.gamma_flip_price > 80_000
+
+    def test_no_flip_in_range_returns_none(self, calc):
+        chain = [_bs_option(s, "call", oi=1_000) for s in (70_000, 80_000, 90_000)]
+        snap = calc.calculate_gex(chain, spot_price=80_000, now_ms=_NOW_MS)
+        assert snap.gamma_flip_price is None
+
+    def test_flip_closest_to_spot(self, calc):
+        flip, n = calc._gamma_profile_flip(
+            [
+                _bs_option(60_000, "call", oi=5_000, days=7),
+                _bs_option(75_000, "put", oi=8_000, days=7),
+                _bs_option(85_000, "call", oi=8_000, days=7),
+            ],
+            spot_price=80_000,
+            now_ms=_NOW_MS,
+        )
+        assert n == 3
+        assert flip is not None
+        assert 75_000 < flip < 85_000

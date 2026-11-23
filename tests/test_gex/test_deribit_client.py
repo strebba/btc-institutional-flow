@@ -173,6 +173,7 @@ class TestFetchAllOptions:
                 pass  # Python <3.8 ThreadPoolExecutor doesn't support max_workers=0
 
     def test_handles_errors_gracefully(self):
+        """Book summary irraggiungibile → lista vuota, niente eccezione."""
         client = DeribitClient()
         mock_instr_resp = MagicMock()
         mock_instr_resp.json.return_value = {
@@ -185,9 +186,76 @@ class TestFetchAllOptions:
                 return mock_instr_resp
             raise Timeout("timeout")
 
-        with patch.object(client._session, "get", side_effect=mock_get):
+        with patch.object(client._session, "get", side_effect=mock_get), \
+                patch("tenacity.nap.time.sleep"):
             result = client.fetch_all_options()
             assert result == []
+
+    def test_two_requests_merge_and_bs_greeks(self):
+        """Tutta la chain in 2 richieste (mai /ticker), join per nome, greche BS."""
+        import time as _time
+
+        from src.gex.greeks import black_scholes_greeks, time_to_expiry_years
+
+        exp_ms = _time.time() * 1000 + 30 * 86_400_000
+        instruments = [
+            {"instrument_name": "BTC-X-80000-C", "strike": 80000.0,
+             "option_type": "call", "expiration_timestamp": exp_ms},
+            {"instrument_name": "BTC-X-70000-P", "strike": 70000.0,
+             "option_type": "put", "expiration_timestamp": exp_ms},
+            # appena listato: non ancora nel book summary → scartato
+            {"instrument_name": "BTC-X-90000-C", "strike": 90000.0,
+             "option_type": "call", "expiration_timestamp": exp_ms},
+        ]
+        books = [
+            {"instrument_name": "BTC-X-80000-C", "open_interest": 120.5, "mark_iv": 50.0,
+             "underlying_price": 75000.0, "mark_price": 0.02,
+             "bid_price": 0.019, "ask_price": None},
+            {"instrument_name": "BTC-X-70000-P", "open_interest": 33.0, "mark_iv": 55.0,
+             "underlying_price": 75000.0, "mark_price": 0.03,
+             "bid_price": 0.029, "ask_price": 0.031},
+        ]
+        client = DeribitClient()
+        urls: list[str] = []
+
+        def mock_get(url, params=None, **kwargs):
+            urls.append(url)
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            payload = instruments if "get_instruments" in url else books
+            resp.json.return_value = {"result": payload}
+            return resp
+
+        with patch.object(client._session, "get", side_effect=mock_get):
+            result = client.fetch_all_options("BTC")
+
+        assert len(urls) == 2
+        assert not any("ticker" in u for u in urls)
+        assert [o["instrument_name"] for o in result] == ["BTC-X-80000-C", "BTC-X-70000-P"]
+
+        call = result[0]
+        expected = black_scholes_greeks(
+            spot=75000.0, strike=80000.0,
+            t_years=time_to_expiry_years(exp_ms, _time.time() * 1000),
+            sigma=0.50, option_type="call",
+        )
+        assert call["open_interest"] == 120.5
+        assert call["gamma"] == pytest.approx(expected.gamma, rel=1e-4)
+        assert call["delta"] == pytest.approx(expected.delta, rel=1e-4)
+        assert call["vega"] == pytest.approx(expected.vega / 100.0, rel=1e-4)  # per punto di vol
+        assert call["best_ask"] == 0.0   # None nel book → 0
+        assert result[1]["delta"] < 0    # put
+
+    def test_greeks_zero_when_iv_missing(self):
+        client = DeribitClient()
+        opt = client._merge_option(
+            {"instrument_name": "BTC-X", "strike": 80000.0, "option_type": "call",
+             "expiration_timestamp": 1_900_000_000_000},
+            {"open_interest": 5.0, "mark_iv": 0, "underlying_price": 75000.0},
+            now_ms=1_800_000_000_000,
+        )
+        assert opt["gamma"] == 0.0 and opt["delta"] == 0.0 and opt["vega"] == 0.0
+        assert opt["open_interest"] == 5.0
 
 
 class TestHTTPErrorHandling:

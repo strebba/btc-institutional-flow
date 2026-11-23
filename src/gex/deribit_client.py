@@ -2,15 +2,15 @@
 
 Endpoints usati (tutti GET, no auth):
   GET /public/get_instruments?currency=BTC&kind=option&expired=false
-  GET /public/ticker?instrument_name={name}
+  GET /public/get_book_summary_by_currency?currency=BTC&kind=option
   GET /public/get_index_price?index_name=btc_usd
+  GET /public/ticker?instrument_name={name}   (solo get_ticker, non nella chain)
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +18,7 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 from src.config import get_settings, setup_logging
+from src.gex.greeks import black_scholes_greeks, time_to_expiry_years
 
 _log = setup_logging("gex.deribit")
 
@@ -266,87 +267,102 @@ class DeribitClient:
         result = self._get("/ticker", {"instrument_name": instrument_name})
         return result or {}
 
+    def get_book_summary(self, currency: str = "BTC", kind: str = "option") -> list[dict]:
+        """Riepilogo di mercato di TUTTI gli strumenti di una valuta, in una chiamata.
+
+        Per ogni strumento: open_interest, mark_price, mark_iv, underlying_price,
+        bid_price/ask_price. Niente greche (le ricostruisce fetch_all_options).
+        """
+        result = self._get(
+            "/get_book_summary_by_currency", {"currency": currency, "kind": kind},
+        )
+        return result or []
+
     # ──────────────────────────────────────────────────────────────────────────
     # Batch fetching
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _fetch_one_option(self, instr: dict) -> dict | None:
-        """Scarica ticker + greche per un singolo strumento.
+    @staticmethod
+    def _merge_option(instr: dict, book: dict, now_ms: float) -> dict:
+        """Unisce strumento (strike/tipo/scadenza) e book summary (OI/IV/prezzi).
 
-        Usato in parallelo da fetch_all_options. Il throttle thread-safe
-        garantisce che le richieste vengano avviate al rate configurato
-        mentre le HTTP calls si sovrappongono concorrentemente.
-
-        Args:
-            instr: dict strumento da get_instruments().
-
-        Returns:
-            dict con i dati dell'opzione, oppure None se errore.
+        Delta, gamma e vega sono Black-Scholes sullo stesso input che usa Deribit
+        (forward della scadenza = ``underlying_price``, ``mark_iv``, r=q=0):
+        verificato il 23/11/2026 su un campione live, delta e vega coincidono
+        con il ticker alla quarta cifra. La gamma esce anzi a piena precisione,
+        mentre il ticker la arrotonda a 5 decimali. ``vega`` segue la convenzione
+        Deribit: per punto di volatilità. Greche a 0 se non calcolabili
+        (IV assente, scadenza entro un'ora).
         """
-        name = instr.get("instrument_name", "")
-        if not name:
-            return None
-        try:
-            ticker = self.get_ticker(name)
-            greeks = ticker.get("greeks", {})
-            return {
-                "instrument_name": name,
-                "strike": float(instr.get("strike", 0)),
-                "option_type": instr.get("option_type", ""),
-                "expiration_timestamp": instr.get("expiration_timestamp", 0),
-                "gamma": float(greeks.get("gamma", 0) or 0),
-                "delta": float(greeks.get("delta", 0) or 0),
-                "vega": float(greeks.get("vega", 0) or 0),
-                "open_interest": float(ticker.get("open_interest", 0) or 0),
-                "mark_price": float(ticker.get("mark_price", 0) or 0),
-                "mark_iv": float(ticker.get("mark_iv", 0) or 0),
-                "underlying_price": float(ticker.get("underlying_price", 0) or 0),
-                "best_bid": float(ticker.get("best_bid_price", 0) or 0),
-                "best_ask": float(ticker.get("best_ask_price", 0) or 0),
-            }
-        except Exception as e:
-            _log.warning("Errore fetch opzione %s: %s", name, e)
-            return None
+        strike = float(instr.get("strike", 0) or 0)
+        option_type = instr.get("option_type", "") or ""
+        expiration = instr.get("expiration_timestamp", 0) or 0
+        mark_iv = float(book.get("mark_iv", 0) or 0)
+        underlying = float(book.get("underlying_price", 0) or 0)
+
+        greeks = black_scholes_greeks(
+            spot=underlying,
+            strike=strike,
+            t_years=time_to_expiry_years(expiration, now_ms),
+            sigma=mark_iv / 100.0,                 # Deribit quota la IV in %
+            option_type=option_type,
+        )
+        return {
+            "instrument_name": instr.get("instrument_name", ""),
+            "strike": strike,
+            "option_type": option_type,
+            "expiration_timestamp": expiration,
+            "gamma": greeks.gamma if greeks else 0.0,
+            "delta": greeks.delta if greeks else 0.0,
+            "vega": greeks.vega / 100.0 if greeks else 0.0,
+            "open_interest": float(book.get("open_interest", 0) or 0),
+            "mark_price": float(book.get("mark_price", 0) or 0),
+            "mark_iv": mark_iv,
+            "underlying_price": underlying,
+            "best_bid": float(book.get("bid_price", 0) or 0),
+            "best_ask": float(book.get("ask_price", 0) or 0),
+        }
 
     def fetch_all_options(self, currency: str = "BTC") -> list[dict]:
-        """Scarica i dati di tutte le opzioni attive con greche e OI.
+        """Scarica tutte le opzioni attive con greche e OI, in DUE richieste.
 
-        Usa ThreadPoolExecutor per avviare le richieste in parallelo mantenendo
-        il rate limit via _throttle thread-safe. Con 500 opzioni a 15 rps
-        il tempo di fetch scende da ~100s (sequenziale) a ~35s.
+        ``get_instruments`` (strike, tipo, scadenza) + ``get_book_summary_by_currency``
+        (OI, IV, prezzi) uniti per nome. Prima si chiamava ``/ticker`` una volta
+        per strumento: ~1000 richieste per BTC, ~800 per ETH. Bastava che due
+        processi (API e cron) girassero insieme dallo stesso IP perché Deribit
+        rispondesse 429 a metà della chain: il GEX usciva calcolato su metà
+        dell'OI e ``/api/gex`` andava in timeout (novembre 2026).
 
         Args:
             currency: "BTC" o "ETH".
 
         Returns:
-            list[dict]: lista di dati per ogni opzione con campi:
-                instrument_name, strike, option_type, expiration_timestamp,
-                gamma, open_interest, mark_price, mark_iv, delta, underlying_price.
+            list[dict]: un dict per opzione con instrument_name, strike,
+                option_type, expiration_timestamp, gamma, delta, vega,
+                open_interest, mark_price, mark_iv, underlying_price,
+                best_bid, best_ask. Lista vuota se una delle due chiamate fallisce.
         """
-        instruments = self.get_instruments(currency=currency)
-        _log.info("Strumenti %s attivi: %d — avvio fetch concorrente", currency, len(instruments))
+        try:
+            instruments = self.get_instruments(currency=currency)
+            books = self.get_book_summary(currency=currency)
+        except Exception as e:
+            _log.warning("Fetch chain %s fallito: %s", currency, e)
+            return []
+
+        book_by_name = {b.get("instrument_name"): b for b in books}
+        now_ms = time.time() * 1000.0
 
         results: list[dict] = []
-        errors = 0
-        # max_workers > rate_limit_rps: i thread extra restano in attesa del throttle
-        max_workers = min(len(instruments), 20)
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(self._fetch_one_option, instr): instr for instr in instruments
-            }
-            for i, future in enumerate(as_completed(futures), 1):
-                result = future.result()
-                if result is not None:
-                    results.append(result)
-                else:
-                    errors += 1
-                if i % 50 == 0:
-                    _log.info("Progresso: %d/%d opzioni processate", i, len(instruments))
+        missing = 0
+        for instr in instruments:
+            book = book_by_name.get(instr.get("instrument_name"))
+            if book is None:
+                missing += 1   # listato da pochi secondi, non ancora nel book
+                continue
+            results.append(self._merge_option(instr, book, now_ms))
 
         _log.info(
-            "Fetch completato: %d opzioni valide, %d errori",
-            len(results),
-            errors,
+            "Fetch completato %s: %d opzioni valide, %d senza book summary",
+            currency, len(results), missing,
         )
         return results
